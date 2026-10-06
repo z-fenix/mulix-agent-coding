@@ -1,7 +1,10 @@
 # Mulix（mulix-agent-coding）设计规格
 
-- 日期：2026-10-05
-- 状态：草案 v1（待用户审查）
+- 日期：2026-10-05（2026-10-06 迁移为 mulix change `001-p1-core-loop-and-cache-foundation` 的 design 文档）
+- 状态：已批准 v1（原「草案 v1（待用户审查）」，2026-10-05 经评审批准；见同日 P1 实现计划头部「已批准」标注）
+- 迁移出处：原 `docs/superpowers/specs/2026-10-05-mulix-agent-coding-design.md`（docs/superpowers 已随迁移删除，全文可在 git 历史 c4f88be 追溯）。除本元数据块外，正文与原文逐字一致。
+- 与 spec.md 的分工：需求（WHAT/WHY，原 §1.1/§1.2/§1.3）已提取至 `docs/specs/001-p1-core-loop-and-cache-foundation/spec.md`，以其为需求权威；本文承载工程契约（HOW：架构、协议、缓存治理、权限、会话、配置与测试策略）。两者冲突时：用户需求以 spec.md 为准，工程细节以本文为准并回改 spec。
+- 范围：本文覆盖项目 v1 整体契约；change `001-p1-core-loop-and-cache-foundation` 的 build 阶段执行其 P1 范围（§11 路线图）。
 - 路径：基于 Claude Agent SDK 生态的 Go 实现 coding agent
 - 工作代号：**Mulix**；仓库目录 `D:\workplace\project\mulix-agent-coding`；Go module 名 `mulix`；二进制名 `mulix`
 
