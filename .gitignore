@@ -1,0 +1,15 @@
+# Build output
+bin/
+dist/
+*.exe
+*.test
+*.out
+
+# Coverage
+coverage.txt
+coverage.html
+*.prof
+
+# Editors
+.idea/
+.vscode/
