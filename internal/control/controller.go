@@ -34,6 +34,9 @@ var ErrNoPendingApproval = errors.New("control: no pending approval")
 
 // Sink 是前端事件出口（design §6：单一出口；镜像先行由 Controller 保证）。
 // Publish 同步调用——慢消费者对控制流形成背压（P1 刻意为之，保证顺序）。
+// **重入红线**：Publish 实现内不得调用会触发 publish 的 Controller 方法
+// （Submit/Resume/Approve 等）——publish 的 pubMu 不可重入，同步 Sink 回调
+// 再入将死锁。
 type Sink interface {
 	Publish(ev any)
 }
@@ -80,6 +83,7 @@ type Controller struct {
 
 	turnDones map[int64]chan struct{} // 回合收口通道（泵唯一关闭方）
 	resolved  map[string]gateRuling   // 已裁决权限请求（引擎 tool_use_id → 裁决；重发信封直接应答，人只裁决一次）
+	pubMu     sync.Mutex              // 发布串行化（镜像 Append 互斥；见 publish 注）
 
 	pumpDone chan struct{} // 泵退出信号（Close 等待）
 	initSeen chan struct{} // 首个 init 消费完成（NewSession 等待）
@@ -150,15 +154,62 @@ func (c *Controller) start(ctx context.Context, boot engine.BootConfig) error {
 	c.mu.Lock()
 	c.host = host
 	c.mu.Unlock()
+	// 镜像 engine_session_id 快照必须在泵启动前捕获：onInit（首个 init）
+	// 会无条件把引擎上报值回填 meta——之后读到的恒为新值，镜像不一致将
+	// 永远不可见（评审 fix-round：原实现在 initSeen 后读取，分支成死代码）。
+	mirrorEngineID, metaErr := "", error(nil)
+	if boot.ResumeEngineSessionID != "" {
+		meta, err := c.opts.Store.ReadMeta()
+		if err != nil {
+			metaErr = err
+		} else {
+			mirrorEngineID, _ = meta["engine_session_id"].(string)
+		}
+	}
 	go c.pump(host)
 
 	select {
 	case <-c.initSeen: // 首个 init 已消费（TurnStarted 的 engine id 可靠）
+		if boot.ResumeEngineSessionID != "" {
+			c.logResumeChain(boot.ResumeEngineSessionID, mirrorEngineID, metaErr)
+		}
 		return nil
 	case <-c.pumpDone: // 引擎在 init 前就退出——快速失败，不等 ctx 超时
 		return errors.New("control: engine exited before init")
 	case <-ctx.Done():
 		return fmt.Errorf("control: waiting init: %w", ctx.Err())
+	}
+}
+
+// logResumeChain 落 resume 链事件（design §10）：续链留痕 + 两类不一致告警
+// （请求 id ≠ 引擎上报；镜像快照 ≠ 引擎上报——如崩溃后错续别的会话）。
+// 不一致时以引擎为上下文权威：EngineSessionID 取 init 上报值；meta 亦已被
+// onInit 回填为上报值（审计靠告警事件 + 镜像中历史 TurnStarted 的
+// EngineSessionID 字段）。mirrorEngineID/metaErr 由 start() 在泵启动前捕获。
+func (c *Controller) logResumeChain(requested, mirrorEngineID string, metaErr error) {
+	reported := c.EngineSessionID()
+	if reported == "" {
+		reported = "(unknown)"
+	}
+	c.publish(event.NoticeEvent{Seq: c.nextSeq(), Level: "info", IsMeta: true,
+		Content: fmt.Sprintf("resume: 从引擎会话 %s 续链（镜像已接续记录）", reported)})
+	if requested != reported {
+		c.publish(event.NoticeEvent{Seq: c.nextSeq(), Level: "warning",
+			Content: fmt.Sprintf("resume: 请求续链 %s，引擎上报 %s（以引擎为上下文权威）",
+				requested, reported)})
+	}
+	if metaErr != nil {
+		c.publish(event.NoticeEvent{Seq: c.nextSeq(), Level: "warning",
+			Content: "resume: 读取镜像 meta 失败: " + metaErr.Error()})
+	}
+	if mirrorEngineID != "" && mirrorEngineID != reported {
+		// 空镜像 id（从未记录过引擎会话）静默跳过本分支——fail-open 但无害：
+		// 有未闭合回合的镜像几乎必然已记录 init id，且请求 id 告警仍在。
+		// 「meta 已更新」措辞的前提是 onInit 回填成功——回填失败时镜像另有
+		// 独立告警留痕，本条文案的偏差可接受（P1）。
+		c.publish(event.NoticeEvent{Seq: c.nextSeq(), Level: "warning",
+			Content: fmt.Sprintf("resume: 镜像记录引擎会话 %s，引擎上报 %s（以引擎为准，meta 已更新）",
+				mirrorEngineID, reported)})
 	}
 }
 
@@ -412,8 +463,13 @@ func (c *Controller) dispatch(host engine.Host, ev engine.Event) {
 		c.onResult(ev)
 	case engine.KindTrace:
 		if ev.Trace != nil {
+			content := ev.Trace.Message
+			if ev.Trace.Code != "" {
+				// code 进镜像（engine_drift 等治理事件的可检索留痕）
+				content = fmt.Sprintf("[%s] %s", ev.Trace.Code, ev.Trace.Message)
+			}
 			c.publish(event.NoticeEvent{Seq: c.nextSeq(), Level: "info",
-				Content: ev.Trace.Message, IsMeta: true})
+				Content: content, IsMeta: true})
 		}
 	case engine.KindPermissionDenied:
 		if ev.Denied != nil {
@@ -632,8 +688,15 @@ func (c *Controller) onExit(ev engine.Event) {
 }
 
 // publish 双路分发：镜像先行（红线：Append 成功才发布），失败降级为 Notice
-// （镜像坏尾时泵不得崩溃、前端仍知悉）。
+// （镜像坏尾时泵不得崩溃、前端仍知悉）。pubMu 串行化发布路径（评审 Task 23
+// carry）：Submit（TurnStarted/send_failed）与泵（回合间事件）会并发到达
+// ——sessionx/jsonl 写侧无锁，这里保证 Append 互斥且与 Sink 顺序一致。
+// 注意：Seq 在进入本函数前已分配（调用点 c.nextSeq()），跨 goroutine 的
+// 镜像 seq 因此可能非严格单调（如 seq6 先于 seq5 落盘）——审计读取按行序，
+// 无消费方依赖 seq 排序。
 func (c *Controller) publish(ev any) {
+	c.pubMu.Lock()
+	defer c.pubMu.Unlock()
 	if err := c.opts.Store.Append(ev); err != nil {
 		c.opts.Sink.Publish(event.NoticeEvent{Seq: c.nextSeq(), Level: "warning",
 			Content: "镜像写入失败: " + err.Error()})

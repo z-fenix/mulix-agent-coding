@@ -199,13 +199,37 @@ func (s *Store) Close() error {
 	return err
 }
 
+// writeJSONFile 原子写（Task 24 交接）：temp 文件 + fsync + rename 替换——
+// 崩溃半写只留 .tmp 残骸，正名文件永远完整（cache.json/meta.json 是恢复与
+// 审计的依据，不能容忍半写）。Windows 陷阱（Task 20 教训）：rename 前必须
+// Close 写句柄；失败路径清理 temp。
 func writeJSONFile(path string, v any) error {
 	payload, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return fmt.Errorf("sessionx: marshal %s: %w", filepath.Base(path), err)
 	}
-	if err := os.WriteFile(path, payload, 0o644); err != nil {
-		return fmt.Errorf("sessionx: write %s: %w", filepath.Base(path), err)
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return fmt.Errorf("sessionx: open temp %s: %w", filepath.Base(tmp), err)
+	}
+	if _, err := f.Write(payload); err != nil {
+		f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("sessionx: write temp %s: %w", filepath.Base(tmp), err)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("sessionx: sync temp %s: %w", filepath.Base(tmp), err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("sessionx: close temp %s: %w", filepath.Base(tmp), err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("sessionx: rename %s: %w", filepath.Base(path), err)
 	}
 	return nil
 }

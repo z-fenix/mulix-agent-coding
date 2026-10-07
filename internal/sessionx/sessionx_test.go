@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"mulix/internal/event"
@@ -314,5 +315,34 @@ func TestReadCacheRoundTripAndAbsent(t *testing.T) {
 	}
 	if got["hit_rate"] != 0.42 || got["turns"] != float64(3) {
 		t.Fatalf("cache round-trip mismatch: %v", got)
+	}
+}
+
+// TestWriteCacheAtomicReplace pins（Task 24 交接的原子性）: WriteCache 走
+// temp+rename——覆盖旧值成功（rename 替换）、无 .tmp 残留（崩溃半写不落正名）。
+func TestWriteCacheAtomicReplace(t *testing.T) {
+	s, dir := newTestStore(t)
+	defer s.Close()
+	if err := s.WriteCache(map[string]any{"turns": 1}); err != nil {
+		t.Fatalf("write cache v1: %v", err)
+	}
+	if err := s.WriteCache(map[string]any{"turns": 2, "cost": 0.5}); err != nil {
+		t.Fatalf("write cache v2 (replace): %v", err)
+	}
+	proj, err := s.ReadCache()
+	if err != nil {
+		t.Fatalf("read cache: %v", err)
+	}
+	if proj["turns"] != float64(2) || proj["cost"] != 0.5 {
+		t.Fatalf("cache = %v, want v2 (rename 替换生效)", proj)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("readdir: %v", err)
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			t.Fatalf("temp residue: %s", e.Name())
+		}
 	}
 }
