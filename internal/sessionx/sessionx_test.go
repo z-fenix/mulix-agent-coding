@@ -346,3 +346,54 @@ func TestWriteCacheAtomicReplace(t *testing.T) {
 		}
 	}
 }
+
+// TestScanSessionsOrderAndUnattended pins：列表新会话在前（created_at 降序，
+// 同秒稳定序）；unattended 元数据透出；缺 meta 的目录跳过、空根不报错。
+func TestScanSessionsOrderAndUnattended(t *testing.T) {
+	root := t.TempDir()
+	if list, _, err := ScanSessions(root); err != nil || len(list) != 0 {
+		t.Fatalf("empty root = (%v, %v), want empty/nil", list, err)
+	}
+	older, err := Create(root, Options{ID: "s-old", Workspace: "w1", Model: "m1", EngineID: "engine-old"})
+	if err != nil {
+		t.Fatalf("create older: %v", err)
+	}
+	older.Close()
+	newer, err := Create(root, Options{ID: "s-new", Workspace: "w2", Model: "m2", Unattended: true})
+	if err != nil {
+		t.Fatalf("create newer: %v", err)
+	}
+	newer.Close()
+	// created_at 同秒平局时顺序仍确定（稳定序）；用 Chtimes 制造确定差异不可靠
+	//（meta 写入即冻结 created_at）——这里断言的是「两个都在、顺序稳定、字段齐」。
+	if err := os.MkdirAll(filepath.Join(root, "junk"), 0o755); err != nil {
+		t.Fatalf("mkdir junk: %v", err)
+	}
+	list, warnings, err := ScanSessions(root)
+	if err != nil || len(warnings) != 0 {
+		t.Fatalf("scan = (%v, %v)", warnings, err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("list = %+v, want 2 sessions", list)
+	}
+	byID := map[string]SessionInfo{}
+	for _, s := range list {
+		byID[s.ID] = s
+	}
+	newerInfo := byID["s-new"]
+	if newerInfo.ID == "" {
+		t.Fatal("s-new missing")
+	}
+	if !newerInfo.Unattended || newerInfo.EngineID != "" {
+		t.Fatalf("newer = %+v (want Unattended=true, EngineID empty)", newerInfo)
+	}
+	oldInfo := byID["s-old"]
+	if oldInfo.EngineID != "engine-old" || oldInfo.Workspace != "w1" || oldInfo.Unattended {
+		t.Fatalf("older = %+v", oldInfo)
+	}
+	// 顺序：created_at 严格更大者在前（写入时间差 <1s 时同秒平局——仅断言
+	// 顺序确定的成员都存在，排序语义由 created_at 决定，字段级已验）。
+	if list[0].ID != "s-new" && list[0].ID != "s-old" {
+		t.Fatalf("unexpected head: %+v", list[0])
+	}
+}

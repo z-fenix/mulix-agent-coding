@@ -1,8 +1,10 @@
 package control
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +14,7 @@ import (
 	"mulix/internal/engine"
 	"mulix/internal/event"
 	"mulix/internal/guard"
+	"mulix/internal/registry"
 	"mulix/internal/sessionx"
 )
 
@@ -19,7 +22,7 @@ import (
 
 // newTestControllerCapturingBoot 构造无人值守控制器并捕获传入 HostFactory 的
 // BootConfig（Resume 参数传递的断言用；其余同 newTestController）。
-func newTestControllerCapturingBoot(t *testing.T, host engine.Host, sink Sink, bootOut *engine.BootConfig) *Controller {
+func newTestControllerCapturingBoot(t *testing.T, host engine.Host, sink Sink, bootOut *engine.BootConfig, opts ...func(*Options)) *Controller {
 	t.Helper()
 	root := t.TempDir()
 	store, err := sessionx.Create(root, sessionx.Options{
@@ -45,14 +48,18 @@ func newTestControllerCapturingBoot(t *testing.T, host engine.Host, sink Sink, b
 	if err != nil {
 		t.Fatalf("new gate: %v", err)
 	}
-	c, err := NewController(Options{
+	cOpts := Options{
 		HostFactory: func(boot engine.BootConfig) (engine.Host, error) {
 			*bootOut = boot
 			return host, nil
 		},
 		Sink: sink, Store: store, Meter: meter, Gate: gate,
 		Config: mustDefaultConfig(), Workspace: "w",
-	})
+	}
+	for _, f := range opts {
+		f(&cOpts)
+	}
+	c, err := NewController(cOpts)
 	if err != nil {
 		t.Fatalf("new controller: %v", err)
 	}
@@ -296,4 +303,153 @@ func TestPublishStressMirrorIntact(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestComposeBootRegistryAndPromptTool pins（T27 接线）：注入 registry 时
+// mcp-config 含 mulix stdio 条目且 --permission-prompt-tool 钉为
+// mcp__mulix__permission（权限回路最后一环）；未注入（nil）保持空面——既有
+// 测试/无人值守测试兼容。
+func TestComposeBootRegistryAndPromptTool(t *testing.T) {
+	var boot engine.BootConfig
+	c := newTestControllerCapturingBoot(t, engine.NewFakeHost(fixture(t, "happy-turn.jsonl")), &recordingSink{}, &boot,
+		func(o *Options) {
+			o.Registry = registry.NewServer(registry.Options{Name: "mulix", Version: "test", SelfCommand: []string{"mulix.exe", "mcp", "serve"}})
+		})
+	t.Cleanup(func() { c.Meter().Close() })
+	if err := c.NewSession(context.Background()); err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	if boot.PermissionPromptTool != "mcp__mulix__permission" {
+		t.Fatalf("prompt tool = %q, want mcp__mulix__permission", boot.PermissionPromptTool)
+	}
+	var cfg struct {
+		MCPServers map[string]struct {
+			Command string   `json:"command"`
+			Args    []string `json:"args"`
+		} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal([]byte(boot.MCPConfigJSON), &cfg); err != nil {
+		t.Fatalf("mcp config: %v", err)
+	}
+	if len(cfg.MCPServers) != 1 {
+		t.Fatalf("mcp servers = %+v, want only mulix", cfg.MCPServers)
+	}
+	if got := cfg.MCPServers["mulix"].Command; got != "mulix.exe" {
+		t.Fatalf("mulix command = %q", got)
+	}
+	if args := cfg.MCPServers["mulix"].Args; len(args) != 2 || args[0] != "mcp" || args[1] != "serve" {
+		t.Fatalf("mulix args = %v", args)
+	}
+}
+
+// TestComposeBootEmptyRegistryKeepsPromptToolUnset pins：nil registry → 不设
+// prompt tool（fail-closed：mcp-config 无 mulix 服务器时指向不存在的工具会
+// 让引擎拒绝启动）。
+func TestComposeBootEmptyRegistryKeepsPromptToolUnset(t *testing.T) {
+	var boot engine.BootConfig
+	c := newTestControllerCapturingBoot(t, engine.NewFakeHost(fixture(t, "happy-turn.jsonl")), &recordingSink{}, &boot)
+	t.Cleanup(func() { c.Meter().Close() })
+	if err := c.NewSession(context.Background()); err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	if boot.PermissionPromptTool != "" {
+		t.Fatalf("prompt tool = %q, want empty without registry", boot.PermissionPromptTool)
+	}
+	if strings.Contains(boot.MCPConfigJSON, "mulix") {
+		t.Fatalf("mcp config = %q, want no mulix entry without registry", boot.MCPConfigJSON)
+	}
+}
+
+// TestComposeBootAllowDriftPassthrough pins：Options.AllowEngineDrift →
+// Boot.AllowEngineDrift（cli --allow-engine-drift 的通道；Host 层消费并留痕）。
+func TestComposeBootAllowDriftPassthrough(t *testing.T) {
+	var boot engine.BootConfig
+	c := newTestControllerCapturingBoot(t, engine.NewFakeHost(fixture(t, "happy-turn.jsonl")), &recordingSink{}, &boot,
+		func(o *Options) { o.AllowEngineDrift = true })
+	t.Cleanup(func() { c.Meter().Close() })
+	if err := c.NewSession(context.Background()); err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	if !boot.AllowEngineDrift {
+		t.Fatal("AllowEngineDrift must pass through to Boot")
+	}
+}
+
+// TestCloseAfterFailedStart pins（T27 e2e 暴露）：start 未走到挂泵（如
+// HostFactory 失败）时 Close 必须立即返回，不得在 pumpDone 上无限 select。
+func TestCloseAfterFailedStart(t *testing.T) {
+	var out bytes.Buffer
+	var boot engine.BootConfig
+	c := newTestControllerCapturingBoot(t, nil, &recordingSink{}, &boot,
+		func(o *Options) {
+			o.HostFactory = func(engine.BootConfig) (engine.Host, error) {
+				return nil, errors.New("host factory boom")
+			}
+		})
+	_ = out
+	if err := c.NewSession(context.Background()); err == nil {
+		t.Fatal("start must fail")
+	}
+	done := make(chan struct{})
+	go func() { _ = c.Close(context.Background()); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close hung after failed start")
+	}
+}
+
+// TestResumeReconcilesOrphanTurn pins（T27 评审 Important-3）：resume 合成
+// 收口孤儿回合（subtype=resume_reconciled）——RecoveryRequired 恢复 1:1，
+// 恢复门不再永久拒绝该工作区的新会话。
+func TestResumeReconcilesOrphanTurn(t *testing.T) {
+	var boot engine.BootConfig
+	c := newTestControllerCapturingBoot(t, engine.NewFakeHost(fixture(t, "happy-turn.jsonl")), &recordingSink{}, &boot)
+	store := c.opts.Store
+	if err := store.Append(event.TurnStartedEvent{Seq: 1, SessionID: "s-lc"}); err != nil {
+		t.Fatalf("seed orphan: %v", err)
+	}
+	if required, _, err := RecoveryRequired(store); err != nil || !required {
+		t.Fatalf("pre-resume recovery = (%v, %v), want required", required, err)
+	}
+	if err := c.Resume(context.Background(), "e-resume"); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if required, _, err := RecoveryRequired(store); err != nil || required {
+		t.Fatalf("post-resume recovery = (%v, %v), want clear", required, err)
+	}
+}
+
+// TestStartFailureClosesHost pins（T27 评审 Important-1）：host.Start 失败时
+// control 必须调用 host.Close（真实宿主的 spawn 后失败路径不清理 mcp-config
+// 临时文件——泄漏源）。
+func TestStartFailureClosesHost(t *testing.T) {
+	base := engine.NewFakeHost(engine.FakeScript{})
+	host := &closingHostStub{Host: base}
+	var boot engine.BootConfig
+	c := newTestControllerCapturingBoot(t, host, &recordingSink{}, &boot,
+		func(o *Options) {
+			o.HostFactory = func(engine.BootConfig) (engine.Host, error) { return host, nil }
+		})
+	if err := c.NewSession(context.Background()); err == nil {
+		t.Fatal("start must fail")
+	}
+	if !host.closed {
+		t.Fatal("host.Close must be called after failed Start")
+	}
+}
+
+// closingStartHost 是可令 Start 失败并记录 Close 的桩。
+type closingHostStub struct {
+	engine.Host
+	closed bool
+}
+
+func (f *closingHostStub) Start(context.Context, engine.BootConfig) error {
+	return errors.New("spawn boom")
+}
+
+func (f *closingHostStub) Close(context.Context) error {
+	f.closed = true
+	return nil
 }

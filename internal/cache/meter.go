@@ -62,6 +62,9 @@ type MeterOptions struct {
 	SessionID     string
 	Pricing       Pricing
 	ColdAfterIdle time.Duration // 默认 4m（design §8.2：5min TTL − 1min 余量）
+	// TurnOffset 是回合号起始偏移（续链 resume 时 = NextTurnNumber(...)，
+	// 同 sessionID 记账文件续号不撞车——T26 评审 Important-1 修复机制）。
+	TurnOffset int64
 	// Now 时钟注入（测试用）；nil = time.Now。
 	Now func() time.Time
 }
@@ -109,6 +112,7 @@ func NewMeter(opts MeterOptions) (*Meter, error) {
 		coldAfterIdle: cold,
 		now:           now,
 		writer:        w,
+		turn:          opts.TurnOffset,
 	}, nil
 }
 
@@ -231,6 +235,23 @@ func splitLines(raw []byte) [][]byte {
 		out = append(out, raw[start:])
 	}
 	return out
+}
+
+// NextTurnNumber 返回该会话记账文件的下一可用回合号 = 对账后最大回合号
+// （空/缺文件 = 0）。resume 重开 Meter 时作为 TurnOffset——同 sessionID
+// 记账文件续号，不产生重复回合号（对账 later-wins 语义只留给异常合并）。
+func NextTurnNumber(root, sessionID string) (int64, error) {
+	recs, err := ReadUsage(filepath.Join(root, "usage", sessionID+".jsonl"))
+	if err != nil || recs == nil {
+		return 0, err
+	}
+	var max int64
+	for _, r := range ReconcileUsage(recs) {
+		if r.Turn > max {
+			max = r.Turn
+		}
+	}
+	return max, nil
 }
 
 // ReconcileUsage 跨进程对账（Task 26）：重复回合号按文件序取后者（最近

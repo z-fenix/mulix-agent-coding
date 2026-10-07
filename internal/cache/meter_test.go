@@ -351,3 +351,59 @@ func TestReadUsageReport(t *testing.T) {
 		t.Fatalf("missing session = (%+v, %v), want zero/nil", empty, err)
 	}
 }
+
+// TestResumeTurnOffset pins（T26 评审 Important-1 的修复机制）：resume 重开
+// Meter 时以 NextTurnNumber 为偏移——同 sessionID 的记账文件续号（turn 3,4…），
+// 不产生重复回合号；全量对账 Turns = 两次运行之和。
+func TestResumeTurnOffset(t *testing.T) {
+	root := t.TempDir()
+	sid := "s-resume"
+	m1, err := NewMeter(MeterOptions{Root: root, SessionID: sid, Pricing: testPricing()})
+	if err != nil {
+		t.Fatalf("meter1: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := m1.Observe(TurnUsage{InputTokens: 10, CacheReadTokens: 30, OutputTokens: 5}); err != nil {
+			t.Fatalf("observe1: %v", err)
+		}
+	}
+	if err := m1.Close(); err != nil {
+		t.Fatalf("close1: %v", err)
+	}
+	next, err := NextTurnNumber(root, sid)
+	if err != nil {
+		t.Fatalf("next turn: %v", err)
+	}
+	if next != 2 {
+		t.Fatalf("NextTurnNumber = %d, want 2", next)
+	}
+	// 空/缺文件 → 0
+	if empty, err := NextTurnNumber(root, "s-none"); err != nil || empty != 0 {
+		t.Fatalf("NextTurnNumber(missing) = (%d, %v), want (0, nil)", empty, err)
+	}
+	// resume：偏移续号
+	m2, err := NewMeter(MeterOptions{Root: root, SessionID: sid, Pricing: testPricing(), TurnOffset: next})
+	if err != nil {
+		t.Fatalf("meter2: %v", err)
+	}
+	rec, err := m2.Observe(TurnUsage{InputTokens: 10, CacheReadTokens: 30, OutputTokens: 5})
+	if err != nil {
+		t.Fatalf("observe2: %v", err)
+	}
+	if rec.Turn != 3 {
+		t.Fatalf("resumed turn = %d, want 3", rec.Turn)
+	}
+	if _, err := m2.Observe(TurnUsage{InputTokens: 10, CacheReadTokens: 30, OutputTokens: 5}); err != nil {
+		t.Fatalf("observe2b: %v", err)
+	}
+	if err := m2.Close(); err != nil {
+		t.Fatalf("close2: %v", err)
+	}
+	rep, err := ReadUsageReport(root, sid)
+	if err != nil {
+		t.Fatalf("report: %v", err)
+	}
+	if rep.Turns != 4 {
+		t.Fatalf("reconciled turns = %d, want 4 (no duplicates)", rep.Turns)
+	}
+}

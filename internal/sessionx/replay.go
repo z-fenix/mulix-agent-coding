@@ -6,17 +6,19 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"mulix/internal/jsonl"
 )
 
 // SessionInfo 是 ScanSessions 返回的会话摘要（meta.json 投影）。
 type SessionInfo struct {
-	ID        string
-	EngineID  string
-	Model     string
-	Workspace string
-	CreatedAt string
+	ID         string
+	EngineID   string
+	Model      string
+	Workspace  string
+	Unattended bool
+	CreatedAt  string
 }
 
 // Replay 全量读回镜像事件（恢复路径，design §10）：
@@ -110,6 +112,9 @@ func ScanSessions(root string) ([]SessionInfo, []string, error) {
 	var warnings []string
 	entries, err := os.ReadDir(root)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil, nil // 根目录不存在 = 尚无会话（缺省布局的首次运行）
+		}
 		return nil, warnings, fmt.Errorf("sessionx: scan %s: %w", root, err)
 	}
 	var sessions []SessionInfo
@@ -132,14 +137,25 @@ func ScanSessions(root string) ([]SessionInfo, []string, error) {
 			continue
 		}
 		sessions = append(sessions, SessionInfo{
-			ID:        metaString(meta, "id", e.Name()),
-			EngineID:  metaString(meta, "engine_session_id", ""),
-			Model:     metaString(meta, "model", ""),
-			Workspace: metaString(meta, "workspace", ""),
-			CreatedAt: metaString(meta, "created_at", ""),
+			ID:         metaString(meta, "id", e.Name()),
+			EngineID:   metaString(meta, "engine_session_id", ""),
+			Model:      metaString(meta, "model", ""),
+			Workspace:  metaString(meta, "workspace", ""),
+			Unattended: metaBool(meta, "unattended"),
+			CreatedAt:  metaString(meta, "created_at", ""),
 		})
 	}
+	// 新会话在前（列表/恢复引导都是「最近优先」）；created_at RFC3339 字典
+	// 序 = 时间序，同秒按目录名稳定序（meta 生成即目录名）。
+	sort.SliceStable(sessions, func(i, j int) bool {
+		return sessions[i].CreatedAt > sessions[j].CreatedAt
+	})
 	return sessions, warnings, nil
+}
+
+func metaBool(meta map[string]any, key string) bool {
+	v, _ := meta[key].(bool)
+	return v
 }
 
 func metaString(meta map[string]any, key, fallback string) string {

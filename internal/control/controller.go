@@ -61,6 +61,13 @@ type Options struct {
 	// Hooks 是钩子分发器（可空=不分发）。注册回调须在 NewSession 前
 	//（P1 串行；运行期重配置是 P2 关注点——guard.Hooks 同注）。
 	Hooks *guard.Hooks
+	// Registry 是内置 MCP 工具注册面（cli 注入 *registry.Server；nil = 空面，
+	// 既有测试兼容）。非空时 Boot 的 --mcp-config 携带 mulix stdio 条目，且
+	// composeBoot 同步钉 --permission-prompt-tool（权限回路最后一环）。
+	Registry cache.Registry
+	// AllowEngineDrift 是 engine.lock 版本漂移的显式放行（FR-016；cli 的
+	// --allow-engine-drift / 用户配置。放行时引擎留痕 engine_drift trace）。
+	AllowEngineDrift bool
 }
 
 // Controller 是一次引擎会话的编排器（单会话；多会话=多实例）。
@@ -121,7 +128,18 @@ func (c *Controller) NewSession(ctx context.Context) error {
 
 // Resume 以既有引擎 session id 续链（engine.lock 校验与恢复链事件入镜像是
 // Task 24 的交付；本任务提供最小续链：resume 参数进 Boot）。
+// 孤儿回合收口（T27 评审 Important-3）：上次运行中断留下的 TurnStarted 无
+// TurnDone（1:1 不变量破坏）——resume 即视为放弃该回合，镜像合成收口
+// （subtype=resume_reconciled，不发布：泵未启动，仅恢复不变量）；否则恢复门
+// （RecoveryRequired）在本次会话收口后将永远拒绝该工作区的新会话。
 func (c *Controller) Resume(ctx context.Context, engineSessionID string) error {
+	if required, openTurn, err := RecoveryRequired(c.opts.Store); err == nil && required {
+		if appendErr := c.opts.Store.Append(event.TurnDoneEvent{
+			Seq: c.nextSeq(), Turn: openTurn, Subtype: "resume_reconciled",
+		}); appendErr != nil {
+			return fmt.Errorf("control: resume orphan close-out: %w", appendErr)
+		}
+	}
 	boot := engine.BootConfig{}
 	boot.ResumeEngineSessionID = engineSessionID
 	return c.start(ctx, boot)
@@ -148,6 +166,10 @@ func (c *Controller) start(ctx context.Context, boot engine.BootConfig) error {
 		return fmt.Errorf("control: host factory: %w", err)
 	}
 	if err := host.Start(ctx, artifact); err != nil {
+		// Start 失败也要收掉宿主：真实宿主 Start 的 spawn 后失败路径杀进程
+		// 树但不清理 --mcp-config 临时文件（cleanupTemp 只在 Close 跑）——
+		// 不 Close 则每次被拒的启动泄漏一个临时文件（T27 评审 Important-1）。
+		_ = host.Close(ctx)
 		return fmt.Errorf("control: engine start: %w", err)
 	}
 
@@ -213,10 +235,16 @@ func (c *Controller) logResumeChain(requested, mirrorEngineID string, metaErr er
 	}
 }
 
-// composeBoot 组装引擎拉起参数（P1 固定集；registry 缺省 = 空清单——
-// T23 注册 mulix 权限工具后由 cli 注入真实 registry）。
+// composeBoot 组装引擎拉起参数（P1 固定集）。registry 由 cli 注入
+// （Options.Registry；nil = 空面）。注入面含 mulix 服务器时同步钉
+// --permission-prompt-tool=mcp__mulix__permission——mcp-config 里没有该
+// 服务器时绝不能指向它（引擎会拒绝启动；fail-closed）。
 func (c *Controller) composeBoot(base engine.BootConfig) (engine.BootConfig, error) {
-	artifact, err := cache.Compose(c.opts.Config, c.opts.Workspace, emptyRegistry{})
+	reg := c.opts.Registry
+	if reg == nil {
+		reg = emptyRegistry{}
+	}
+	artifact, err := cache.Compose(c.opts.Config, c.opts.Workspace, reg)
 	if err != nil {
 		return engine.BootConfig{}, err
 	}
@@ -228,6 +256,13 @@ func (c *Controller) composeBoot(base engine.BootConfig) (engine.BootConfig, err
 	base.SettingSources = []string{"user"} // 实测红线：必须显式含 user
 	base.Workspace = c.opts.Workspace
 	base.Model = c.opts.Config.DefaultModel
+	base.AllowEngineDrift = c.opts.AllowEngineDrift
+	for _, s := range reg.MCPServers() {
+		if s.Name == permissionServerName {
+			base.PermissionPromptTool = "mcp__" + permissionServerName + "__" + permissionToolName
+			break
+		}
+	}
 	return base, nil
 }
 
@@ -396,10 +431,14 @@ func (c *Controller) Close(ctx context.Context) error {
 	c.closed = true
 	host := c.host
 	c.mu.Unlock()
-	if host != nil {
-		if err := host.Close(ctx); err != nil {
-			return err
-		}
+	if host == nil {
+		// start 未走到挂泵（构造后 NewSession/Resume 失败即此态）——无泵可
+		// 等，pumpDone 永不关闭；直接返回（T27 e2e 暴露：Close 在此曾无限
+		// select 阻塞）。
+		return nil
+	}
+	if err := host.Close(ctx); err != nil {
+		return err
 	}
 	select {
 	case <-c.pumpDone:
