@@ -85,7 +85,7 @@ type ApprovalResolvedEvent struct {
 
 // UsageEvent 是 Meter 记账的对外发布（缓存三层可观测性）。
 // 口径（Task 13 钉死实现）：WriteTokens = cache_creation（缓存写入），与 OutputTokens
-// 相互独立；HitRate = ReadTokens/(ReadTokens+UncachedInputTokens)。
+// 相互独立；HitRate = ReadTokens/(UncachedInputTokens+WriteTokens+ReadTokens)（§8.2）。
 type UsageEvent struct {
 	Seq                 int64   `json:"seq"`
 	Turn                int64   `json:"turn"`
