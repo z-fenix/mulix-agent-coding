@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -230,7 +231,13 @@ func (h *ClaudeHost) Start(ctx context.Context, cfg BootConfig) error {
 		}
 	}
 	if ctx.Err() != nil || timeout <= 0 {
-		h.signalStart(fmt.Errorf("engine: start cancelled: %w", ctx.Err()))
+		// deadline 与 Err() 之间过期的窗口（终复审 N1）：Err 为 nil 时用
+		// 泛化消息，避免 %w 渲染 %!w(<nil>)。
+		startFail := fmt.Errorf("engine: start cancelled: %w", ctx.Err())
+		if ctx.Err() == nil {
+			startFail = errors.New("engine: handshake deadline already expired")
+		}
+		h.signalStart(startFail)
 		h.killTree()
 		return h.startErr
 	}
