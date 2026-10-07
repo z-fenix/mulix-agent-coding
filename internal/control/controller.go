@@ -7,8 +7,10 @@ package control
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -48,6 +50,14 @@ type Options struct {
 	Config      config.Config   // 生效配置（模型/预设/命中率地板）
 	Workspace   string          // 工作区（Boot 快照 C1）
 	Unattended  bool            // 无人值守（镜像/事件标注）
+
+	// Approvals 是人工裁决桥（可空=无人值守：Ask 一律 fail-closed 拒绝）。
+	// attended 接线：bridge := NewUserApprovalBridge() → Gate 以 bridge 为
+	// Approver 构造 → 此处传入同一 bridge。
+	Approvals *UserApprovalBridge
+	// Hooks 是钩子分发器（可空=不分发）。注册回调须在 NewSession 前
+	//（P1 串行；运行期重配置是 P2 关注点——guard.Hooks 同注）。
+	Hooks *guard.Hooks
 }
 
 // Controller 是一次引擎会话的编排器（单会话；多会话=多实例）。
@@ -68,8 +78,8 @@ type Controller struct {
 	lastReport cache.Report
 	sessionID  string // mulix 会话 id（构造期读一次 meta，避免快照路径磁盘 I/O）
 
-	turnDones       map[int64]chan struct{}               // 回合收口通道（泵唯一关闭方）
-	pendingApproves map[string]chan guard.ApprovalVerdict // tool_use_id → 裁决通道（T23 路由登记）
+	turnDones map[int64]chan struct{} // 回合收口通道（泵唯一关闭方）
+	resolved  map[string]gateRuling   // 已裁决权限请求（引擎 tool_use_id → 裁决；重发信封直接应答，人只裁决一次）
 
 	pumpDone chan struct{} // 泵退出信号（Close 等待）
 	initSeen chan struct{} // 首个 init 消费完成（NewSession 等待）
@@ -88,13 +98,13 @@ func NewController(opts Options) (*Controller, error) {
 		sessionID, _ = meta["id"].(string)
 	}
 	return &Controller{
-		opts:            opts,
-		sessionID:       sessionID,
-		turnDones:       map[int64]chan struct{}{},
-		pendingApproves: map[string]chan guard.ApprovalVerdict{},
-		pumpDone:        make(chan struct{}),
-		initSeen:        make(chan struct{}),
-		now:             time.Now,
+		opts:      opts,
+		sessionID: sessionID,
+		turnDones: map[int64]chan struct{}{},
+		resolved:  map[string]gateRuling{},
+		pumpDone:  make(chan struct{}),
+		initSeen:  make(chan struct{}),
+		now:       time.Now,
 	}, nil
 }
 
@@ -231,7 +241,8 @@ func (c *Controller) submit(ctx context.Context, msg engine.UserMessage) error {
 }
 
 // Cancel 取消当前回合（控制协议 interrupt；引擎已发起的副作用按引擎语义
-// 处理，镜像如实记录——design §6）。
+// 处理，镜像如实记录——design §6）。等待人工裁决的待审请求一并 fail-closed
+// 拒绝（解阻塞泵，镜像 resolved 留痕）。
 func (c *Controller) Cancel(ctx context.Context) error {
 	c.mu.Lock()
 	host := c.host
@@ -239,20 +250,53 @@ func (c *Controller) Cancel(ctx context.Context) error {
 	if host == nil {
 		return ErrNoSession
 	}
+	if c.opts.Approvals != nil {
+		c.opts.Approvals.CancelAll("cancelled:interrupt")
+	}
 	return host.Interrupt(ctx)
 }
 
-// Approve 对待审请求交付人工裁决（T23 的 can_use_tool 路由登记 pending；
-// 本方法在 T22 即为 API 面——无 pending 时 ErrNoPendingApproval）。
+// gateRuling 是一次权限裁决的快照（重发信封直接应答，人只裁决一次）。
+type gateRuling struct {
+	decision   string // allow | deny
+	source     string // policy | session | user | timeout
+	resolvedBy string
+}
+
+// Approve 对待审请求交付人工裁决（拒绝时 resolvedBy 即拒绝理由，随
+// approval_resolved 镜像留痕并回给引擎）。无审批桥（无人值守）或无此待审
+// 请求 → ErrNoPendingApproval。
 func (c *Controller) Approve(toolUseID string, allow bool, resolvedBy string) error {
-	c.mu.Lock()
-	ch, ok := c.pendingApproves[toolUseID]
-	c.mu.Unlock()
+	if c.opts.Approvals == nil {
+		return ErrNoPendingApproval
+	}
+	if !c.opts.Approvals.Resolve(toolUseID, guard.ApprovalVerdict{Allow: allow, ResolvedBy: resolvedBy}) {
+		return ErrNoPendingApproval
+	}
+	return nil
+}
+
+// ApproveSession 在裁决允许的同时授予会话级授权（工具+规范化范围；
+// approval_resolved{source=session} 即镜像留痕）。典型交互：审批卡片上的
+// 「本会话允许当前范围」。
+func (c *Controller) ApproveSession(toolUseID, resolvedBy string) error {
+	if c.opts.Approvals == nil {
+		return ErrNoPendingApproval
+	}
+	req, ok := c.opts.Approvals.PendingRequest(toolUseID)
 	if !ok {
 		return ErrNoPendingApproval
 	}
-	ch <- guard.ApprovalVerdict{Allow: allow, ResolvedBy: resolvedBy}
+	if !c.opts.Approvals.Resolve(toolUseID, guard.ApprovalVerdict{Allow: true, ResolvedBy: resolvedBy}) {
+		return ErrNoPendingApproval
+	}
+	c.opts.Gate.GrantSession(req.Tool, req.Scope)
 	return nil
+}
+
+// HasPendingApproval 报告某待审请求是否仍在等待裁决（TUI 卡片状态）。
+func (c *Controller) HasPendingApproval(toolUseID string) bool {
+	return c.opts.Approvals != nil && c.opts.Approvals.HasPending(toolUseID)
 }
 
 // Mirror 返回权威镜像（TUI/测试读取事件流与投影；写入仍归 control）。
@@ -378,9 +422,13 @@ func (c *Controller) dispatch(host engine.Host, ev engine.Event) {
 		}
 	case engine.KindExit:
 		c.onExit(ev)
+	case engine.KindControlRequest:
+		c.onControlRequest(host, ev)
+	case engine.KindHookResponse:
+		c.onHook(ev)
 	default:
-		// KindNoise/KindHookStarted/KindHookResponse/KindControlRequest：
-		// T23 接钩子与控制请求路由；其余 informational 容忍忽略。
+		// KindNoise/KindHookStarted：informational 容忍忽略（钩子仅在
+		// hook_response 分发——complete record，见 onHook 注）。
 	}
 }
 
@@ -605,6 +653,174 @@ func (c *Controller) currentTurn() int64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.turn
+}
+
+// ---- 控制请求路由（Task 23 / 权限回路） ----
+
+// permissionServerName / permissionToolName 是 P1 权限回路的 MCP 路由常量
+// （Task 3 Ruling：--permission-prompt-tool 指向 mulix 服务器的 permission
+// 工具；其他 MCP 服务器/方法 P1 不代理，一律 error 应答防引擎悬挂）。
+const (
+	permissionServerName = "mulix"
+	permissionToolName   = "permission"
+)
+
+// canUseToolCall 是 can_use_tool 的 MCP tools/call 解析（Task 3 Ruling：
+// arguments = {tool_name, input, tool_use_id}；应答 content JSON =
+// {behavior: allow|deny, …}）。
+type canUseToolCall struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id"`
+	Method  string          `json:"method"`
+	Params  struct {
+		Name      string `json:"name"`
+		Arguments struct {
+			ToolName  string          `json:"tool_name"`
+			Input     json.RawMessage `json:"input"`
+			ToolUseID string          `json:"tool_use_id"`
+		} `json:"arguments"`
+	} `json:"params"`
+}
+
+// onControlRequest 处理一条控制信封：路由裁决并把应答按原信封 request_id
+// 回给引擎（协议 §5：重发携带新 request_id，宿主逐信封应答）。
+func (c *Controller) onControlRequest(host engine.Host, ev engine.Event) {
+	cr := ev.Control
+	if cr == nil {
+		return
+	}
+	resp := c.handleControlRequest(cr)
+	if err := host.RespondControl(context.Background(), cr.RequestID, resp); err != nil {
+		c.publish(event.NoticeEvent{Seq: c.nextSeq(), Level: "warning",
+			Content: "控制应答失败: " + err.Error()})
+	}
+}
+
+// handleControlRequest 归一路由：权限回路 → MCP result（success）；不认识
+// 的 subtype/服务器/方法 → error 应答（fail-closed：引擎不悬挂）。
+func (c *Controller) handleControlRequest(cr *engine.ControlRequest) engine.ControlResponse {
+	errResp := func(msg string) engine.ControlResponse {
+		raw, _ := json.Marshal(map[string]string{"error": msg})
+		return engine.ControlResponse{SubType: "error", RequestID: cr.RequestID, Response: raw}
+	}
+	switch {
+	case cr.Request.SubType != "mcp_message":
+		return errResp("unsupported control subtype: " + cr.Request.SubType)
+	case cr.Request.ServerName != permissionServerName:
+		return errResp("unsupported mcp server: " + cr.Request.ServerName)
+	}
+	var call canUseToolCall
+	if err := json.Unmarshal(cr.Request.Message, &call); err != nil {
+		return errResp("malformed mcp message: " + err.Error())
+	}
+	if call.Method != "tools/call" || call.Params.Name != permissionToolName {
+		return errResp("unsupported mcp request: " + call.Method + " " + call.Params.Name)
+	}
+	args := call.Params.Arguments
+	if args.ToolName == "" || args.ToolUseID == "" {
+		return errResp("can_use_tool requires tool_name and tool_use_id")
+	}
+	if len(args.Input) == 0 {
+		args.Input = json.RawMessage(`{}`)
+	}
+	return c.evaluateCanUseTool(cr.RequestID, args.ToolUseID, args.ToolName, args.Input, call.ID)
+}
+
+// evaluateCanUseTool 是权限回路核心：镜像 approval_request（权限回路审计
+// 起点）→ Gate 裁决（审批桥别名关联引擎 tool_use_id）→ 缓存裁决 → 镜像
+// approval_resolved → MCP result。同 tool_use_id 的重发信封直接取缓存
+// 裁决（人只裁决一次；裁决词汇映射：Gate deny/timeout → 镜像 timeout）。
+func (c *Controller) evaluateCanUseTool(requestID, toolUseID, tool string, input, mcpID json.RawMessage) engine.ControlResponse {
+	c.mu.Lock()
+	ruling, cached := c.resolved[toolUseID]
+	c.mu.Unlock()
+	if !cached {
+		c.publish(event.ApprovalRequestEvent{Seq: c.nextSeq(), Turn: c.currentTurn(),
+			ToolUseID: toolUseID, Tool: tool, Input: input})
+		// 别名配对不变量：本函数是 Gate.Evaluate 的唯一生产调用点，且每次
+		// Evaluate 前必须 SetAlias（同 goroutine）——桥的别名配对正确性系于
+		// 此；未来新增 Evaluate 调用点（registry 等）必须沿用同一配对。
+		if c.opts.Approvals != nil {
+			c.opts.Approvals.SetAlias(toolUseID)
+		}
+		decision, err := c.opts.Gate.Evaluate(context.Background(), tool, input)
+		if err != nil { // 防御：Gate 约定 err 恒空，仍 fail-closed 兜底
+			decision = guard.GateDecision{Decision: guard.DecisionDeny,
+				Source: guard.SourceTimeout, ResolvedBy: "gate: " + err.Error()}
+		}
+		ruling = gateRuling{decision: string(decision.Decision),
+			source: string(decision.Source), resolvedBy: decision.ResolvedBy}
+		c.mu.Lock()
+		c.resolved[toolUseID] = ruling
+		c.mu.Unlock()
+	}
+	evDecision, evSource := ruling.decision, ruling.source
+	if evDecision == string(guard.DecisionDeny) && evSource == string(guard.SourceTimeout) {
+		evDecision, evSource = "timeout", "timeout" // 词表：非人为 fail-closed
+	}
+	c.publish(event.ApprovalResolvedEvent{Seq: c.nextSeq(), ToolUseID: toolUseID,
+		Decision: evDecision, Source: evSource, ResolvedBy: ruling.resolvedBy})
+	return c.mcpBehaviorResponse(requestID, mcpID, ruling, input)
+}
+
+// mcpBehaviorResponse 组 MCP tools/call 应答：content[0].text = behavior JSON
+// （allow 回显 updatedInput；deny 附 message——§3 形状；P1 不改写输入）。
+func (c *Controller) mcpBehaviorResponse(requestID string, mcpID json.RawMessage, r gateRuling, input json.RawMessage) engine.ControlResponse {
+	var behavior map[string]any
+	if r.decision == string(guard.DecisionAllow) {
+		behavior = map[string]any{"behavior": "allow", "updatedInput": input}
+	} else {
+		msg := "denied by " + r.source
+		if rb := strings.TrimPrefix(r.resolvedBy, "timeout: "); rb != "" && rb != r.source {
+			msg += ": " + rb
+		}
+		behavior = map[string]any{"behavior": "deny", "message": msg}
+	}
+	behaviorJSON, _ := json.Marshal(behavior)
+	envelope := map[string]any{
+		"jsonrpc": "2.0",
+		"result": map[string]any{
+			"content": []map[string]any{{"type": "text", "text": string(behaviorJSON)}},
+		},
+	}
+	if len(mcpID) > 0 {
+		envelope["id"] = mcpID
+	}
+	raw, _ := json.Marshal(envelope)
+	return engine.ControlResponse{SubType: "success", RequestID: requestID, Response: raw}
+}
+
+// ---- 钩子分发（Task 21 交接的映射钉） ----
+
+// mapHookEvent 是 engine hook_event → guard.HookEvent 的显式四向映射
+// （guard 不依赖 engine——映射只能钉在 control）。未知事件返回 false（与
+// guard.Dispatch 的未知事件 no-op 语义一致）。
+func mapHookEvent(s string) (guard.HookEvent, bool) {
+	switch guard.HookEvent(s) {
+	case guard.HookSessionStart, guard.HookPreToolUse, guard.HookPostToolUse, guard.HookStop:
+		return guard.HookEvent(s), true
+	}
+	return "", false
+}
+
+// onHook 把引擎 hook_response 分发进 guard.Hooks。P1 仅在 hook_response
+// 分发（complete record：Output/Outcome 齐备）；hook_started 无增量信息，
+// 其独立分发是 P2 关注点。Stdout/Stderr/ExitCode 的合并规则（Task 21 交接
+// 由 control 决定）：P1 直接透传 HookInfo.Output（引擎已合并摘要），
+// 不做二次拼接——审计消费者需要原始 stdout 时再改（P2）。
+func (c *Controller) onHook(ev engine.Event) {
+	hi := ev.Hook
+	if hi == nil || c.opts.Hooks == nil {
+		return
+	}
+	he, ok := mapHookEvent(hi.HookEvent)
+	if !ok {
+		return
+	}
+	c.opts.Hooks.Dispatch(context.Background(), guard.HookPayload{
+		Event: he, HookID: hi.HookID, HookName: hi.HookName,
+		Output: hi.Output, Outcome: hi.Outcome,
+	})
 }
 
 // EngineSessionID 返回引擎 session id（init 前为空）。

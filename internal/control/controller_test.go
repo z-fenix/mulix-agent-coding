@@ -105,6 +105,104 @@ func mustDefaultConfig() config.Config {
 	return *cfg
 }
 
+// policyRuleIn 是测试里构造策略规则的轻量描述（guard.ParseRule + 效果）。
+type policyRuleIn struct {
+	raw    string
+	effect guard.Decision
+}
+
+// newTestControllerWithPolicyRules 构造无人值守控制器（可带 allow/deny 规则；
+// default 预设下未命中规则的工具 = Ask → fail-closed 拒绝）。
+func newTestControllerWithPolicyRules(t *testing.T, host engine.Host, sink Sink, rules ...policyRuleIn) *Controller {
+	t.Helper()
+	root := t.TempDir()
+	store, err := sessionx.Create(root, sessionx.Options{
+		ID: "s-test", Workspace: "w", Model: "m", PinnedModel: "m",
+	})
+	if err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+	meter, err := cache.NewMeter(cache.MeterOptions{
+		Root: root, SessionID: "s-test",
+		Pricing: cache.Pricing{InputPerMTok: 3, OutputPerMTok: 15},
+	})
+	if err != nil {
+		t.Fatalf("new meter: %v", err)
+	}
+	t.Cleanup(func() { meter.Close() })
+	var grs []guard.Rule
+	for _, r := range rules {
+		gr, err := guard.ParseRule(r.raw)
+		if err != nil {
+			t.Fatalf("parse rule %q: %v", r.raw, err)
+		}
+		gr.Effect = r.effect
+		grs = append(grs, gr)
+	}
+	policy, err := guard.NewPolicy(guard.PresetDefault, grs)
+	if err != nil {
+		t.Fatalf("new policy: %v", err)
+	}
+	gate, err := guard.NewGate(guard.GateOptions{Policy: policy})
+	if err != nil {
+		t.Fatalf("new gate: %v", err)
+	}
+	c, err := NewController(Options{
+		HostFactory: func(engine.BootConfig) (engine.Host, error) { return host, nil },
+		Sink:        sink, Store: store, Meter: meter, Gate: gate,
+		Config: mustDefaultConfig(), Workspace: "w",
+	})
+	if err != nil {
+		t.Fatalf("new controller: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close(context.Background()) })
+	return c
+}
+
+// newTestControllerAttended 构造 attended 控制器：审批桥接 Approve()，
+// Gate 窗口=timeout。
+func newTestControllerAttended(t *testing.T, host engine.Host, sink Sink, timeout time.Duration) *Controller {
+	t.Helper()
+	root := t.TempDir()
+	store, err := sessionx.Create(root, sessionx.Options{
+		ID: "s-test", Workspace: "w", Model: "m", PinnedModel: "m",
+	})
+	if err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+	meter, err := cache.NewMeter(cache.MeterOptions{
+		Root: root, SessionID: "s-test",
+		Pricing: cache.Pricing{InputPerMTok: 3, OutputPerMTok: 15},
+	})
+	if err != nil {
+		t.Fatalf("new meter: %v", err)
+	}
+	t.Cleanup(func() { meter.Close() })
+	policy, err := guard.NewPolicy(guard.PresetDefault, nil)
+	if err != nil {
+		t.Fatalf("new policy: %v", err)
+	}
+	bridge := NewUserApprovalBridge()
+	gate, err := guard.NewGate(guard.GateOptions{
+		Policy: policy, Approver: bridge, Timeout: timeout,
+	})
+	if err != nil {
+		t.Fatalf("new gate: %v", err)
+	}
+	c, err := NewController(Options{
+		HostFactory: func(engine.BootConfig) (engine.Host, error) { return host, nil },
+		Sink:        sink, Store: store, Meter: meter, Gate: gate,
+		Config: mustDefaultConfig(), Workspace: "w", Approvals: bridge,
+	})
+	if err != nil {
+		t.Fatalf("new controller: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close(context.Background()) })
+	return c
+}
+
 func fixture(t *testing.T, name string) engine.FakeScript {
 	t.Helper()
 	script, err := engine.FixtureScript(filepath.Join("..", "..", "fixtures", "engine", name))
