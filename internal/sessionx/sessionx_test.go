@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"mulix/internal/event"
+	"mulix/internal/jsonl"
 )
 
 func newTestStore(t *testing.T) (*Store, string) {
@@ -92,6 +93,61 @@ func TestAppendPersistsImmediately(t *testing.T) {
 	if !ok || got.Text != "hello" || got.Seq != 1 {
 		t.Fatalf("event mismatch: %#v", events[0])
 	}
+}
+
+// TestAppendApprovalEventsFsync pins per-kind fsync（Task 9 交接 → Task 20）：
+// 审批类事件 Append 返回后必须已确认落盘——以独立只读句柄在写句柄仍打开时
+// 读到完整字节（崩溃模拟；fsync 后 OS 缓存已刷，不依赖 Close）。
+// Sync 本身是 OS 语义，由 jsonl 层健康路径测试覆盖调用面。
+// Windows 注意：写句柄必须在 TempDir 清理前 Close（同 Task 13 教训）。
+func TestAppendApprovalEventsFsync(t *testing.T) {
+	root := t.TempDir()
+	s, err := Create(root, Options{ID: "s-fsync", Workspace: "w", EngineID: "e", Model: "m"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	dir := s.Dir()
+	events := []any{
+		event.ApprovalRequestEvent{Seq: 1, Turn: 1, ToolUseID: "c1", Tool: "Bash", Timeout: 120},
+		event.ApprovalResolvedEvent{Seq: 2, ToolUseID: "c1", Decision: "allow", Source: "user"},
+		event.AssistantTextEvent{Seq: 3, Turn: 1, Text: "after"},
+	}
+	for i, ev := range events {
+		if err := s.Append(ev); err != nil {
+			t.Fatalf("append %d (%T): %v", i, ev, err)
+		}
+	}
+	// 独立只读句柄读落盘字节（写句柄仍打开 = 崩溃模拟）
+	r, err := jsonl.OpenReader(filepath.Join(dir, "events.jsonl"))
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	lines, readErr := r.ReadAll()
+	r.Close()
+	if readErr != nil {
+		t.Fatalf("read all: %v", readErr)
+	}
+	if len(lines) != 3 {
+		t.Fatalf("got %d durable lines, want 3", len(lines))
+	}
+	var records []struct {
+		Kind string          `json:"kind"`
+		Ev   json.RawMessage `json:"ev"`
+	}
+	for i, line := range lines {
+		var rec struct {
+			Kind string          `json:"kind"`
+			Ev   json.RawMessage `json:"ev"`
+		}
+		if err := json.Unmarshal(line, &rec); err != nil {
+			t.Fatalf("unmarshal %d: %v", i, err)
+		}
+		records = append(records, rec)
+	}
+	if records[0].Kind != string(event.ApprovalRequest) || records[1].Kind != string(event.ApprovalResolved) {
+		t.Fatalf("kinds = %s, %s", records[0].Kind, records[1].Kind)
+	}
+	s.Close() // TempDir 清理前释放写句柄（Windows）
 }
 
 func TestAppendMultipleKindsRoundTrip(t *testing.T) {

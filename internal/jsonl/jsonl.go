@@ -87,6 +87,17 @@ func (w *Writer) Append(b []byte) error {
 	return nil
 }
 
+// Sync 强制落盘（per-kind fsync 的显式入口：审批等安全关键事件由调用方
+// 按 kind 选择性调用；全量 fsync 用 Options.Fsync）。sync 失败 = 持久化
+// 完整性未知，调用方必须按写失败处理（fail-closed），不得照常广播。
+func (w *Writer) Sync() error {
+	if err := w.f.Sync(); err != nil {
+		w.damagedTail = true
+		return fmt.Errorf("jsonl: sync: %w", err)
+	}
+	return nil
+}
+
 // Repair 截断损坏尾部（保留此前全部完整行），使写入可继续。
 // 以**实际文件状态**为准：不信任缓存的 damagedTail 标志（打开后文件可能被
 // 带外改动——如恢复流程再次撞上损坏），每次都重新探测末字节。

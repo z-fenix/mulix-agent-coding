@@ -54,6 +54,34 @@ func TestAppendAndReadBack(t *testing.T) {
 	}
 }
 
+// TestWriterSyncExplicit pins 显式 Sync 入口（per-kind fsync 供调用方使用）：
+// Append（无 fsync 选项）后显式 Sync——落盘确认 + 内容完好；连续 Sync 幂等。
+func TestWriterSyncExplicit(t *testing.T) {
+	path := mustTemp(t)
+	w, err := OpenWriter(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer w.Close()
+	if err := w.Append([]byte(`{"kind":"approval"}`)); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if err := w.Sync(); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if err := w.Sync(); err != nil {
+		t.Fatalf("idempotent sync: %v", err)
+	}
+	// 落盘后内容完好（只读句柄验证，不经 Close）
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(b) != "{\"kind\":\"approval\"}\n" {
+		t.Fatalf("content = %q", b)
+	}
+}
+
 func TestAppendFsyncOptional(t *testing.T) {
 	path := mustTemp(t)
 	w, err := OpenWriter(path)

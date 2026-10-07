@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"mulix/internal/event"
 	"mulix/internal/jsonl"
 )
 
@@ -79,6 +80,9 @@ func OpenStore(dir string) (*Store, error) {
 }
 
 // Append 先持久化一个事件到镜像（kind 标注 + JSON 行）。返回后调用方才可广播。
+// per-kind fsync（Task 9 交接 → Task 20 落地）：审批类事件
+// （approval_request/approval_resolved）是安全关键路径——落盘确认先于广播，
+// 使「审批已执行」在崩溃后仍可由镜像作证；sync 失败按写失败处理（fail-closed）。
 func (s *Store) Append(ev any) error {
 	kind, err := eventKindOf(ev)
 	if err != nil {
@@ -95,7 +99,14 @@ func (s *Store) Append(ev any) error {
 	if err != nil {
 		return fmt.Errorf("sessionx: marshal record: %w", err)
 	}
-	return s.writer.Append(record)
+	if err := s.writer.Append(record); err != nil {
+		return err
+	}
+	// kind 常量取自 internal/event（与编码器同源——字面量漂移会在测试层暴露）。
+	if kind == event.ApprovalRequest || kind == event.ApprovalResolved {
+		return s.writer.Sync()
+	}
+	return nil
 }
 
 // ReadAllEvents 读取镜像中的全部事件（解 kind 标注还原为类型化事件）。
