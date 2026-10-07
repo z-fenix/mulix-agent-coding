@@ -96,6 +96,18 @@ func registeredTools() []registeredTool {
 	return entries
 }
 
+// Registered 返回当前注册的工具名快照（名字序）——诊断/测试/doctor 用。
+func Registered() []string {
+	regMu.RLock()
+	defer regMu.RUnlock()
+	names := make([]string, 0, len(registry))
+	for name := range registry {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
+}
+
 // Server 是进程内 MCP 服务器框架（官方 go-sdk 承载）：启动时从全局注册表
 // 冻结工具面。cache.Registry 对齐——SelfCommand 配置后，BootComposer 的
 // --mcp-config 生成 mulix stdio 自 spawn 条目（design §7.2：引擎经 stdio

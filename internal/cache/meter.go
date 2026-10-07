@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"mulix/internal/jsonl"
@@ -230,4 +231,60 @@ func splitLines(raw []byte) [][]byte {
 		out = append(out, raw[start:])
 	}
 	return out
+}
+
+// ReconcileUsage 跨进程对账（Task 26）：重复回合号按文件序取后者（最近
+// 观察为准——JSONL 只追加，重写/合并工具可能产生同回合多行），输出按回合号
+// 升序。无重复时原样保留（顺序归一）。
+func ReconcileUsage(recs []Record) []Record {
+	byTurn := map[int64]Record{}
+	turns := make([]int64, 0, len(recs))
+	for _, r := range recs { // 文件序遍历：后行覆盖同行号
+		if _, seen := byTurn[r.Turn]; !seen {
+			turns = append(turns, r.Turn)
+		}
+		byTurn[r.Turn] = r
+	}
+	slices.Sort(turns)
+	out := make([]Record, 0, len(turns))
+	for _, t := range turns {
+		out = append(out, byTurn[t])
+	}
+	return out
+}
+
+// AggregateRecords 聚合记账记录为会话汇总（口径与 Meter.Report 一致：token
+// 各项/cost/saving 直加；session_hit 加权 Σread/(Σuncached+Σwrite+Σread)，
+// 非逐回合均值；cold_turns 计数）。逐行 Cost/Saving 是 Observe 时刻按当时
+// 定价冻结的值——历史记录保留旧定价（审计语义正确：事后调价不重写历史）。
+func AggregateRecords(recs []Record) Report {
+	var rep Report
+	for _, r := range recs {
+		rep.Turns++
+		rep.Uncached += r.Uncached
+		rep.Write += r.Write
+		rep.Read += r.Read
+		rep.Output += r.Output
+		rep.Cost += r.Cost
+		rep.Saving += r.Saving
+		if r.ExpectedCold {
+			rep.ColdTurns++
+		}
+	}
+	if denom := rep.Uncached + rep.Write + rep.Read; denom > 0 {
+		rep.SessionHit = float64(rep.Read) / float64(denom)
+	}
+	return rep
+}
+
+// ReadUsageReport 离线全量汇总（跨进程权威口径）：ReadUsage → Reconcile →
+// Aggregate。文件缺失/空 = 零值 Report（会话尚无记账是合法状态）。
+// mulix_usage 工具与 doctor 聚合统一走此入口——内存 Meter.Report 是进程内
+// 口径，Resume 后不回放历史，跨进程数据以本函数为准。
+func ReadUsageReport(root, sessionID string) (Report, error) {
+	recs, err := ReadUsage(filepath.Join(root, "usage", sessionID+".jsonl"))
+	if err != nil {
+		return Report{}, err
+	}
+	return AggregateRecords(ReconcileUsage(recs)), nil
 }

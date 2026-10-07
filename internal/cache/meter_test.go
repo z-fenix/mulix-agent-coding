@@ -277,3 +277,77 @@ func abs(f float64) float64 {
 	}
 	return f
 }
+
+// TestReconcileUsageFileOrderWins pins（T8.2 对账）：重复回合号按文件序取
+// 后者（最近观察为准）；无重复原样保留；顺序按回合号升序输出。
+func TestReconcileUsageFileOrderWins(t *testing.T) {
+	recs := []Record{
+		{Turn: 1, Uncached: 10, Write: 0, Read: 90},
+		{Turn: 2, Uncached: 50, Write: 0, Read: 50},
+		{Turn: 1, Uncached: 20, Write: 0, Read: 80}, // 重复：文件序后者为准
+	}
+	out := ReconcileUsage(recs)
+	if len(out) != 2 {
+		t.Fatalf("reconciled = %d records, want 2", len(out))
+	}
+	// 回合 1 取后写的 {20,80}
+	if out[0].Turn != 1 || out[0].Uncached != 20 || out[0].Read != 80 {
+		t.Fatalf("turn1 = %+v, want file-order winner {20,80}", out[0])
+	}
+	if out[1].Turn != 2 || out[1].Uncached != 50 {
+		t.Fatalf("turn2 = %+v", out[1])
+	}
+}
+
+// TestAggregateRecords pins：跨进程聚合口径与 Meter.Report 一致——token 各项
+// 直加、cost/saving 直加、session_hit 加权（Σread/(Σuncached+Σwrite+Σread)）
+// 而非逐回合均值、cold_turns 计数。
+func TestAggregateRecords(t *testing.T) {
+	recs := []Record{
+		{Turn: 1, Uncached: 100, Write: 300, Read: 100, Output: 50, Cost: 1.5, Saving: 0.8, ExpectedCold: true},
+		{Turn: 2, Uncached: 10, Write: 0, Read: 390, Output: 70, Cost: 0.2, Saving: 0.4},
+	}
+	rep := AggregateRecords(recs)
+	if rep.Turns != 2 || rep.Uncached != 110 || rep.Write != 300 || rep.Read != 490 || rep.Output != 120 {
+		t.Fatalf("aggregate = %+v", rep)
+	}
+	if rep.ColdTurns != 1 {
+		t.Fatalf("cold turns = %d, want 1", rep.ColdTurns)
+	}
+	if abs(rep.Cost-1.7) > 1e-9 || abs(rep.Saving-1.2) > 1e-9 {
+		t.Fatalf("cost/saving = %v/%v", rep.Cost, rep.Saving)
+	}
+	wantHit := float64(490) / float64(110+300+490)
+	if abs(rep.SessionHit-wantHit) > 1e-9 {
+		t.Fatalf("session_hit = %v, want weighted %v", rep.SessionHit, wantHit)
+	}
+}
+
+// TestReadUsageReport pins：读 usage 文件 → 对账 → 聚合全链路；缺文件 =
+// 零值 Report（会话尚无记账是合法状态，不是错误）。
+func TestReadUsageReport(t *testing.T) {
+	root := t.TempDir()
+	sid := "s-agg"
+	m, err := NewMeter(MeterOptions{Root: root, SessionID: sid, Pricing: testPricing()})
+	if err != nil {
+		t.Fatalf("new meter: %v", err)
+	}
+	if _, err := m.Observe(TurnUsage{InputTokens: 100, CacheWriteTokens: 200, CacheReadTokens: 300, OutputTokens: 20}); err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	rep, err := ReadUsageReport(root, sid)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	if rep.Turns != 1 || rep.Read != 300 || rep.Write != 200 {
+		t.Fatalf("report = %+v", rep)
+	}
+	// 缺文件：零值合法
+	empty, err := ReadUsageReport(root, "s-none")
+	if err != nil || empty.Turns != 0 {
+		t.Fatalf("missing session = (%+v, %v), want zero/nil", empty, err)
+	}
+}

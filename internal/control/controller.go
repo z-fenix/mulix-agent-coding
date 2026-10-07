@@ -620,6 +620,11 @@ func (c *Controller) evaluateCacheGuard() {
 
 // writeCacheProjection 把 Meter 汇总 + §8.3 标记写入 cache.json
 // （design §10：索引 sidecar 由 control 写）。
+//
+// 口径注记（T26 评审钉）：此处用内存 Meter.Report（本引擎会话实时投影），
+// 不改用 cache.ReadUsageReport（跨进程权威口径，含 resume 前历史）——
+// cache.json 的语义是「当前运行的 Meter 汇总投影」。两口径并存是有意设计，
+// 勿在此处单方面统一（T26 报告 Ruling-6b）。
 func (c *Controller) writeCacheProjection() {
 	rep, _ := c.opts.Meter.Report()
 	g := cache.NewGuard(cache.GuardOptions{Floor: c.opts.Config.Cache.HitRateFloor})
