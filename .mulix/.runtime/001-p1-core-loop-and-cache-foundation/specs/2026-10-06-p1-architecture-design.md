@@ -74,7 +74,7 @@ Mulix 是一个全新的开源风格 coding agent，**引擎能力取自 Claude 
 | 归引擎管（回合内，Go 不重建、不重排） | 归 Go 管（回合间，Go 拥有权威） |
 | --- | --- |
 | 消息序列的组装、发送与 compaction（上下文压缩） | 会话权威镜像：所有事件的 JSONL 追加日志（审计/回放/检索的事实来源） |
-| 模型采样、流式输出、工具循环的推进 | 权限策略与审批 UI（canUseTool 回调的裁决方） |
+| 模型采样、流式输出、工具循环的推进 | 权限策略与审批 UI（权限工具回调的裁决方，见 §7.2 实测修订） |
 | 内置工具的执行（Read/Write/Edit/Bash/Glob/Grep/…） | 缓存治理三层（§8）：构造约束、指标、门禁 |
 | 文件 checkpointing（rewind 的执行） | 多入口编排（Controller 抽象 transport） |
 | KV cache 的实际命中（Anthropic 侧） | 子代理调度、记忆服务、指标与成本核算 |
@@ -115,7 +115,7 @@ Mulix 是一个全新的开源风格 coding agent，**引擎能力取自 Claude 
 | `internal/cli` | TUI（bubbletea v2 + lipgloss）、子命令路由（run/doctor/cache/sessions/permissions） | `ChatUI`、`RunCmd` |
 | `internal/serve` | HTTP/SSE 前端（P4，本规格只预留分层位置） | — |
 | `internal/control` | Controller：接收前端命令（Submit/Cancel/Approve/NewSession/Resume…），驱动 engine，向单一 `event.Sink` 发类型化事件；turn 生命周期/取消/审批的唯一所有者 | `Controller`、`Options`、`Sink` |
-| `internal/engine` | CLI 宿主层：子进程生命周期、stream-json 编解码、控制协议（canUseTool / hook / interrupt）、`Host` 接口抽象、`engine.lock` 加载与校验 | `Host`、`ClaudeHost`、`FakeHost`、`Event`、`ControlRequest` |
+| `internal/engine` | CLI 宿主层：子进程生命周期、stream-json 编解码、控制协议（hook / interrupt / SDK-MCP 信封）、权限工具回调（`--permission-prompt-tool`，§7.2 实测修订）、`Host` 接口抽象、`engine.lock` 加载与校验 | `Host`、`ClaudeHost`、`FakeHost`、`Event`、`ControlRequest` |
 | `internal/sessionx` | 会话权威镜像：JSONL 追加日志、内存投影、崩溃恢复回放、session id ↔ 引擎 id 映射 | `Store`、`Ledger`、`Projection` |
 | `internal/cache` | 缓存治理：`Boot`（配置组装与字节稳定）、`Meter`（usage 记账与命中率）、`Guard`（阈值告警、TTL 感知） | `BootComposer`、`Meter`、`Report` |
 | `internal/guard` | 权限与钩子：纯函数 Policy（deny>ask>allow>fallback）、审批队列（超时 fail-closed）、钩子分发 | `Policy`、`Gate`、`Hooks` |
@@ -142,7 +142,7 @@ Mulix 是一个全新的开源风格 coding agent，**引擎能力取自 Claude 
  → 引擎循环（引擎域）：
      assistant 事件（text/thinking delta）─┬─► sessionx 镜像（先持久化后发布）
                                            └─► 前端 Sink（流式渲染）
-     tool_use 事件 ──► 控制协议 canUseTool 回调
+      tool_use 事件 ──► 权限工具回调（--permission-prompt-tool，§7.2 实测修订）
                     ──► guard.Policy 裁决（deny>ask>allow）
                     ──► Ask → TUI 审批卡（单次/本会话/拒绝；超时 fail-closed）
                     ──► Allow → 引擎执行内置工具 → tool_result 回流
@@ -178,9 +178,10 @@ type Host interface {
 - 输入输出：`--input-format stream-json --output-format stream-json`；流式增量按需开启 `--include-partial-messages`。
 - 系统提示：`--append-system-prompt "<BootComposer 产物>"`（只追加，不替换引擎默认提示——保持引擎能力）。
 - 工具注入：`--mcp-config <generated.json>`，内容为 Go 侧 in-process/stdio MCP 服务器清单（顺序稳定）；`--allowedTools`/`--disallowedTools` 由 BootComposer 依配置生成，注册期冻结。
-- 权限模式：`--permission-mode`（default/acceptEdits/plan）+ canUseTool 控制协议回调；**绝不使用** `--dangerously-skip-permissions`。
-- 会话：`--resume <engine-session-id>`（续链）、`--fork-session`（分叉）；P1 不使用 `--max-turns`（由 Go 侧预算控制，P3 完备）。
-- 其它：`--model`、`--setting-sources`（限定加载来源，防止外部 settings 漂移缓存与行为）。
+- 权限模式：`--permission-mode`（default/acceptEdits/plan；**必须显式传入**——用户环境默认 `auto` 会绕过审批）+ 权限回路 `--permission-prompt-tool <mulix 权限 MCP 工具>`；**绝不使用** `--dangerously-skip-permissions`。
+  > **实测修订（2026-10-06 探针，scripts/probe-engine.md ④）**：P1 权限回路不采用 SDK 内部控制协议的 canUseTool（standalone CLI 不可达），改为 `--permission-prompt-tool` 指向 mulix 自有 stdio MCP 权限工具：引擎以 MCP `tools/call{tool_name,input,tool_use_id}` 发起审批，宿主以 content JSON `{"behavior":"allow","updatedInput":…}`（或 `{"behavior":"deny","message":…}`）应答。无权限回调 + `--permission-mode default` 时引擎对未授工具**立即自动拒绝**（`system/permission_denied` 事件 + `result.permission_denials[]` 汇总）——fail-closed 兜底与 120s 审批超时（FR-009）叠加。
+- 会话：`--resume <engine-session-id>`（续链，实测**不换** session id）、`--fork-session`（分叉，实测生成新 session id）；P1 不使用 `--max-turns`（由 Go 侧预算控制，P3 完备）。
+- 其它：`--model`、`--setting-sources`（限定加载来源，防止外部 settings 漂移缓存与行为；**实测修订：必须包含 user 作用域**——仅 project 时用户级凭据不加载，引擎报 Not logged in）。
 
 > 协议事实核查（P1 首任务 T0，0.5 天 spike）：以上 flag 与 stream-json/控制协议字段（init/assistant/user/result 事件、control_request 的 can_use_tool/hook_callback/interrupt）以**锁定版本的 CLI 实测 + 官方 TS/Python SDK 开源实现**核对为准，结论固化为 fixture 与 `docs/specs/engine-protocol.md`。若与本文冲突，以实测为准并修订本节。
 
