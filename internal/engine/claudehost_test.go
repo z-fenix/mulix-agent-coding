@@ -33,6 +33,9 @@ type fakeScript struct {
 	GarbageLine       string   `json:"garbage_line"`
 	EchoStdinToStderr bool     `json:"echo_stdin_to_stderr"`
 	HangOnEOF         bool     `json:"hang_on_eof"`
+	// DeferInitToInput（终评协议适配）：真实 claude 2.1.291 的 init 在首条
+	// user message 之后才发出——置位时 initLine 延迟到首个 stdin 输入。
+	DeferInitToInput bool `json:"defer_init_to_input"`
 }
 
 func runFakeCLI() {
@@ -72,7 +75,9 @@ func runFakeCLI() {
 	for _, l := range script.BeforeInput {
 		fmt.Fprintln(os.Stdout, l)
 	}
-	fmt.Fprintln(os.Stdout, initLine)
+	if !script.DeferInitToInput {
+		fmt.Fprintln(os.Stdout, initLine)
+	}
 
 	sc := newLargeScanner(os.Stdin)
 	for sc.Scan() {
@@ -84,6 +89,9 @@ func runFakeCLI() {
 			Type string `json:"type"`
 		}
 		if json.Unmarshal(line, &probe) == nil && probe.Type == "user" {
+			if script.DeferInitToInput {
+				fmt.Fprintln(os.Stdout, initLine)
+			}
 			for _, l := range script.PerInput {
 				fmt.Fprintln(os.Stdout, l)
 			}
@@ -293,6 +301,58 @@ func waitExit(t *testing.T, ch <-chan Event, wantReason string) {
 		case <-deadline:
 			t.Fatal("timeout waiting exit event")
 		}
+	}
+}
+
+// TestStartProvisionalWithoutInit pins（终评协议适配 Critical-1）：真实
+// claude 2.1.291 的 init 在首条 user message 之后才发出——spawn 窗口内无
+// init 且进程存活 → Start 临时放行（provisional）；首个 init 随首回合到达
+// 后照常校验/验收（Info 填充、事件直通）。
+func TestStartProvisionalWithoutInit(t *testing.T) {
+	h := newTestHost(t, "fake-lateinit.json", func(c *BootConfig, o *ClaudeHostOptions) {
+		o.HandshakeTimeout = 500 * time.Millisecond // 窗口快速过期
+	})
+	if err := h.Start(context.Background(), h.cfg); err != nil {
+		t.Fatalf("provisional start must succeed: %v", err)
+	}
+	if info := h.Info(); info.SessionID != "" || info.CLIVersion != "" {
+		t.Fatalf("info must be empty before init, got %+v", info)
+	}
+	// 首条消息触发 init → 校验通过 → 回合事件照常
+	if err := h.Send(context.Background(), UserMessage{Text: "hello"}); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	events := collectEvents(t, h.Events(), 5) // hook 对（provisional 期 stash）→ init → assistant → result
+	if events[0].Kind != KindHookStarted || events[1].Kind != KindHookResponse || events[2].Kind != KindInit ||
+		events[3].Kind != KindAssistant || events[4].Kind != KindResult {
+		t.Fatalf("post-provisional order wrong: %s/%s/%s/%s/%s",
+			events[0].Kind, events[1].Kind, events[2].Kind, events[3].Kind, events[4].Kind)
+	}
+	if info := h.Info(); info.SessionID != "11111111-2222-4333-8444-555555555555" || info.CLIVersion != "2.1.291" {
+		t.Fatalf("info after deferred init wrong: %+v", info)
+	}
+	if err := h.Close(context.Background()); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+}
+
+// TestDeferredDriftRefusal pins（终评协议适配）：provisional start 后首个
+// init 校验失败（版本漂移且未放行）→ 终止引擎 + 以拒绝原因合成 exit 事件
+// （fail-closed：SC-005 的拒绝语义在新协议下前移为「首轮拒绝」）。
+func TestDeferredDriftRefusal(t *testing.T) {
+	h := newTestHost(t, "fake-lateindrift.json", func(c *BootConfig, o *ClaudeHostOptions) {
+		o.HandshakeTimeout = 500 * time.Millisecond
+	})
+	if err := h.Start(context.Background(), h.cfg); err != nil {
+		t.Fatalf("provisional start must succeed: %v", err)
+	}
+	if err := h.Send(context.Background(), UserMessage{Text: "hello"}); err != nil {
+		t.Fatalf("send: %v", err) // 消息已写——拒绝发生在 init 校验点
+	}
+	// 合成 exit（reason=refused: drift…）先于 monitor 的 killed exit
+	waitExit(t, h.Events(), "refused: engine: version drift: lock 2.1.291, actual 9.9.9 (refusing; allow with --allow-engine-drift)")
+	if err := h.Close(context.Background()); err != nil {
+		t.Fatalf("close: %v", err)
 	}
 }
 

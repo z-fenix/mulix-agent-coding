@@ -7,6 +7,7 @@ import (
 
 	"mulix/internal/cli"
 	// 内置 MCP 工具经 init() 自注册（design §5.1.4）；父包不反向 import。
+	_ "mulix/internal/tools/mulixpermission" // 权限回路回调工具（终评 Critical-1）
 	_ "mulix/internal/tools/mulixusage"
 )
 

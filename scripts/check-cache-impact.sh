@@ -27,7 +27,7 @@ CACHE_SENSITIVE=(
 
 required_keys=("Cache-impact:" "Cache-guard:")
 
-# ---- 取 diff 文件列表 ----
+# ---- 取 diff 文件列表（fail-closed：git 出错即拒绝，终评 M-7）----
 if [[ $# -ge 2 ]]; then
   BASE="$1"; HEAD="$2"
 elif [[ $# -eq 1 ]]; then
@@ -41,7 +41,7 @@ else
   fi
 fi
 
-files=$(git diff --name-only "$BASE" "$HEAD" -- "${CACHE_SENSITIVE[@]}" || true)
+files=$(git diff --name-only "$BASE" "$HEAD" -- "${CACHE_SENSITIVE[@]}")
 if [[ -z "$files" ]]; then
   echo "check-cache-impact: diff 未触及缓存敏感路径 — 通过"
   exit 0

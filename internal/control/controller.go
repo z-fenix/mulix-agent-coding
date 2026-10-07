@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -93,10 +95,19 @@ type Controller struct {
 	resolved  map[string]gateRuling   // 已裁决权限请求（引擎 tool_use_id → 裁决；重发信封直接应答，人只裁决一次）
 	pubMu     sync.Mutex              // 发布串行化（镜像 Append 互斥；见 publish 注）
 
+	permCallback *permissionCallbackServer // 权限回路跨进程桥（真实引擎 --permission-prompt-tool 传输）
+
 	pumpDone chan struct{} // 泵退出信号（Close 等待）
 	initSeen chan struct{} // 首个 init 消费完成（NewSession 等待）
 	initOnce sync.Once
-	now      func() time.Time // 时钟注入（cache.json updated_at；测试冻结）
+	// resume 延迟留痕（终评协议适配）：真实引擎 init 在首条消息后到达——
+	// start() 的 initSeen 等待带宽限放行，resume 链日志改由 onInit 首次
+	// 消费时补发（resumeLogged 防重）。
+	resumeRequested string
+	resumeMirrorID  string
+	resumeMetaErr   error
+	resumeLogged    bool
+	now             func() time.Time // 时钟注入（cache.json updated_at；测试冻结）
 }
 
 // NewController 校验参数并构造（fail-closed：缺组件拒绝构造）。
@@ -158,6 +169,28 @@ func (c *Controller) start(ctx context.Context, boot engine.BootConfig) error {
 	}
 	c.mu.Unlock()
 
+	// 权限回调桥（终评 Critical-1 第三层）：先起监听，再把地址经 registry
+	//（SetPermissionEnv → MCPServers().Env → mcp-config env）注入 serve 子
+	// 进程的 permission 工具。Registry 为空面（无 mulix stdio 条目）时跳过
+	// ——无回调面就无需桥；监听失败 → 不注入，serve 侧 fail-closed deny。
+	c.mu.Lock()
+	hasRegistry := c.opts.Registry != nil
+	c.mu.Unlock()
+	if hasRegistry {
+		if pcs := c.startPermissionCallback(); pcs != nil {
+			c.mu.Lock()
+			c.permCallback = pcs
+			c.mu.Unlock()
+			if setter, ok := c.opts.Registry.(interface {
+				SetPermissionEnv(map[string]string)
+			}); ok {
+				setter.SetPermissionEnv(map[string]string{
+					"MULIX_PERMISSION_CALLBACK": pcs.addr,
+				})
+			}
+		}
+	}
+
 	artifact, err := c.composeBoot(boot)
 	if err != nil {
 		return fmt.Errorf("control: compose boot: %w", err)
@@ -191,6 +224,13 @@ func (c *Controller) start(ctx context.Context, boot engine.BootConfig) error {
 	}
 	go c.pump(host)
 
+	// init 等待（终评协议适配）：真实 claude 2.1.291 的 init 在首条 user
+	// message 之后才发出（实测：stdin 开 20s 无 init；消息后 1.1s 到达）——
+	// 「NewSession 等 init ← Submit 等 NewSession ← 引擎等首条消息」是三方
+	// 死锁。故 initSeen 等待只保留 pumpDone 快速失败与宽限窗：宽限内 init
+	// 未到（fake 引擎/即时协议不会走到这）→ 临时放行，Submit 得以发生；
+	// init 随首回合到达后 onInit 照常回填 meta 并补发 resume 链日志。
+	const initGrace = 2 * time.Second
 	select {
 	case <-c.initSeen: // 首个 init 已消费（TurnStarted 的 engine id 可靠）
 		if boot.ResumeEngineSessionID != "" {
@@ -199,6 +239,14 @@ func (c *Controller) start(ctx context.Context, boot engine.BootConfig) error {
 		return nil
 	case <-c.pumpDone: // 引擎在 init 前就退出——快速失败，不等 ctx 超时
 		return errors.New("control: engine exited before init")
+	case <-time.After(initGrace):
+		if boot.ResumeEngineSessionID != "" {
+			// resume 链校验语义移到 onInit 首次消费（引擎上报后以引擎为权威）
+			c.resumeRequested = boot.ResumeEngineSessionID
+			c.resumeMirrorID = mirrorEngineID
+			c.resumeMetaErr = metaErr
+		}
+		return nil
 	case <-ctx.Done():
 		return fmt.Errorf("control: waiting init: %w", ctx.Err())
 	}
@@ -236,6 +284,101 @@ func (c *Controller) logResumeChain(requested, mirrorEngineID string, metaErr er
 	}
 }
 
+// permissionCallbackServer 是权限回路的跨进程桥（终评 Critical-1 第三层）：
+// 真实引擎经 `mulix mcp serve` 子进程上的 mcp__mulix__permission 工具发起
+// 审批（--permission-prompt-tool 传输），gate 在前台进程——回调服务器接收
+// serve 子进程的 POST {tool_name, input, tool_use_id}，复用 evaluateCanUseTool
+// 裁决核，应答 behavior JSON（serve 侧原样透传给引擎）。
+type permissionCallbackServer struct {
+	ctrl *Controller
+	srv  *http.Server
+	addr string
+}
+
+// startPermissionCallback 启动 127.0.0.1 回调监听（会话生命周期绑定——
+// Close 时关闭）。监听失败不阻断启动：composeBoot 不注入回调地址，serve
+// 侧权限工具 fail-closed deny（引擎不悬挂，审批回路降级记录）。
+func (c *Controller) startPermissionCallback() *permissionCallbackServer {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		c.publish(event.NoticeEvent{Seq: c.nextSeq(), Level: "warning", IsMeta: true,
+			Content: "权限回调监听失败（审批回路降级为 fail-closed deny）: " + err.Error()})
+		return nil
+	}
+	pcs := &permissionCallbackServer{ctrl: c, addr: "http://" + l.Addr().String()}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", pcs.handle)
+	pcs.srv = &http.Server{Handler: mux}
+	go func() { _ = pcs.srv.Serve(l) }()
+	return pcs
+}
+
+// handle 处理一次审批回调：body {tool_name, input, tool_use_id} → 裁决核 →
+// behavior JSON。错误路径 = 200 + deny（serve 侧 fail-closed 语义与协议
+// 层解耦——引擎只见 behavior）。
+func (p *permissionCallbackServer) handle(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	var args struct {
+		ToolName  string          `json:"tool_name"`
+		Input     json.RawMessage `json:"input"`
+		ToolUseID string          `json:"tool_use_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&args); err != nil || args.ToolName == "" || args.ToolUseID == "" {
+		writeBehavior(w, map[string]any{"behavior": "deny",
+			"message": "malformed permission callback body"})
+		return
+	}
+	if len(args.Input) == 0 {
+		args.Input = json.RawMessage(`{}`)
+	}
+	// 与 FakeHost 传输（onControlRequest）共用裁决核——同 tool_use_id 重发
+	// 取缓存裁决，镜像 approval_request/resolved 审计一致。
+	resp := p.ctrl.evaluateCanUseTool("callback-"+args.ToolUseID, args.ToolUseID,
+		args.ToolName, args.Input, nil)
+	var envelope struct {
+		Result struct {
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(resp.Response, &envelope); err != nil ||
+		len(envelope.Result.Content) == 0 {
+		writeBehavior(w, map[string]any{"behavior": "deny", "message": "ruling envelope malformed"})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(envelope.Result.Content[0].Text))
+}
+
+// writeBehavior 写 behavior JSON（回调应答的统一出口）。
+func writeBehavior(w http.ResponseWriter, behavior map[string]any) {
+	raw, _ := json.Marshal(behavior)
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(raw)
+}
+
+// Env 返回注入 mcp-config 的回调环境（key=value；未启动 = nil）。
+func (p *permissionCallbackServer) Env() string {
+	if p == nil {
+		return ""
+	}
+	return "MULIX_PERMISSION_CALLBACK=" + p.addr
+}
+
+// close 收口回调监听（会话关闭时调用；幂等）。
+func (p *permissionCallbackServer) close() {
+	if p == nil || p.srv == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = p.srv.Shutdown(ctx)
+}
+
 // composeBoot 组装引擎拉起参数（P1 固定集）。registry 由 cli 注入
 // （Options.Registry；nil = 空面）。注入面含 mulix 服务器时同步钉
 // --permission-prompt-tool=mcp__mulix__permission——mcp-config 里没有该
@@ -258,6 +401,14 @@ func (c *Controller) composeBoot(base engine.BootConfig) (engine.BootConfig, err
 	base.Workspace = c.opts.Workspace
 	base.Model = c.opts.Config.DefaultModel
 	base.AllowEngineDrift = c.opts.AllowEngineDrift
+	// 引擎可执行（终评 Critical-1）：config engine.path 优先，空值回退
+	// "claude"（PATH 解析——exec.Command 的 LookPath 语义；与 doctor 探测
+	// 同一约定）。缺此接线 ClaudeHost.Start 对空 EnginePath fail-closed，
+	// 两个产品入口（TUI/run）都无法拉起真实引擎。
+	base.EnginePath = c.opts.Config.Engine.Path
+	if base.EnginePath == "" {
+		base.EnginePath = "claude"
+	}
 	for _, s := range reg.MCPServers() {
 		if s.Name == permissionServerName {
 			base.PermissionPromptTool = "mcp__" + permissionServerName + "__" + permissionToolName
@@ -433,7 +584,11 @@ func (c *Controller) Close(ctx context.Context) error {
 	}
 	c.closed = true
 	host := c.host
+	cb := c.permCallback
 	c.mu.Unlock()
+	if cb != nil {
+		cb.close() // 先收口回调监听——serve 子进程的挂起审批快速失败（deny）
+	}
 	if host == nil {
 		// start 未走到挂泵（构造后 NewSession/Resume 失败即此态）——无泵可
 		// 等，pumpDone 永不关闭；直接返回（T27 e2e 暴露：Close 在此曾无限
@@ -550,6 +705,14 @@ func (c *Controller) onInit(host engine.Host, ev engine.Event) {
 		if err := c.opts.Store.SetEngineID(ev.SessionID); err != nil {
 			c.publish(event.NoticeEvent{Seq: c.nextSeq(), Level: "warning",
 				Content: "镜像 meta 回填失败: " + err.Error()})
+		}
+		// resume 延迟留痕（终评协议适配）：start() 宽限放行时链校验在此补发
+		c.mu.Lock()
+		requested, mirrorID, metaErr, logged := c.resumeRequested, c.resumeMirrorID, c.resumeMetaErr, c.resumeLogged
+		c.resumeLogged = true
+		c.mu.Unlock()
+		if requested != "" && !logged {
+			c.logResumeChain(requested, mirrorID, metaErr)
 		}
 		c.initOnce.Do(func() { close(c.initSeen) })
 		return

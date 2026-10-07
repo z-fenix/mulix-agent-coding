@@ -117,7 +117,29 @@ func buildComponents(o Options, store *sessionx.Store, meter *cache.Meter, sink 
 	if err != nil {
 		return nil, nil, err
 	}
-	policy, err := guard.NewPolicy(guard.Preset(cfg.Permissions.Preset), nil) // 显式规则集接入 T29+
+	// 显式规则集（终评冒烟发现：此前恒为 nil——config 的 allow/deny 清单
+	// 从未生效，无人值守下写操作全被 fail-closed 拒绝，引擎空转 deny 循环）。
+	// 口径：deny 清单 → DecisionDeny；allow 清单 → DecisionAllow；预设兜底
+	// 未命中的工具（default=Ask → 无人值守 fail-closed）。解析失败 = 配置
+	// 损坏 → 拒绝启动（fail-closed，绝不静默丢弃规则）。
+	var rules []guard.Rule
+	for _, raw := range cfg.Permissions.Deny {
+		r, perr := guard.ParseRule(raw)
+		if perr != nil {
+			return nil, nil, fmt.Errorf("permissions.deny %q: %w", raw, perr)
+		}
+		r.Effect = guard.DecisionDeny
+		rules = append(rules, r)
+	}
+	for _, raw := range cfg.Permissions.Allow {
+		r, perr := guard.ParseRule(raw)
+		if perr != nil {
+			return nil, nil, fmt.Errorf("permissions.allow %q: %w", raw, perr)
+		}
+		r.Effect = guard.DecisionAllow
+		rules = append(rules, r)
+	}
+	policy, err := guard.NewPolicy(guard.Preset(cfg.Permissions.Preset), rules)
 	if err != nil {
 		return nil, nil, err
 	}

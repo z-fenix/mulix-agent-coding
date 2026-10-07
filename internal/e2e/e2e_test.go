@@ -139,13 +139,10 @@ func newEnv(t *testing.T, o envOpts) *env {
 // ---- 六场景 ----
 
 // 场景 1：happy 回合（含审批 Allow）→ 事件全落镜像、Sink 顺序正确。
+// can_use_tool 请求由 newEnv 预埋在 fixture 回合中段（result 前）——pump 对
+// 回合外的控制请求会拒绝，goroutine 延时注入不可靠（终评 M-9 移除）。
 func TestE2EHappyTurnWithApproval(t *testing.T) {
 	e := newEnv(t, envOpts{attended: true})
-	go func() {
-		// 注入 can_use_tool 审批请求（控制协议信封——与 control routing_test 同构）
-		time.Sleep(50 * time.Millisecond)
-		_ = e.fake.InjectControlRequest(*canUseTool("req-1", "tu-1", "Write", `{"file_path":"x.txt","content":"hi"}`).Control)
-	}()
 	if err := e.ctrl.Submit(context.Background(), "write a file"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -183,13 +180,9 @@ func TestE2EHappyTurnWithApproval(t *testing.T) {
 	assertSinkMirrorsStore(t, e)
 }
 
-// 场景 2：审批 Deny / 无人值守 fail-closed。
+// 场景 2：审批 Deny / 无人值守 fail-closed（请求同样由 fixture 中段预埋）。
 func TestE2EDenyFailClosed(t *testing.T) {
 	e := newEnv(t, envOpts{attended: false}) // 无 Approver
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		_ = e.fake.InjectControlRequest(*canUseTool("req-2", "tu-2", "Bash", `{"command":"rm"}`).Control)
-	}()
 	if err := e.ctrl.Submit(context.Background(), "try dangerous"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -215,31 +208,37 @@ func TestE2EUsageReportConsistency(t *testing.T) {
 	if err := e.ctrl.Submit(context.Background(), "hi"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	// 手工复算口径：weighted hit = read / (uncached+write+read)
-	recs, err := e.meter.Records(), error(nil)
+	// 手工复算口径（终评 I-3 实化）：weighted hit = read/(uncached+write+read)，
+	// 与 AggregateRecords 的 SessionHit 口径逐数字对账。
+	recs := e.meter.Records()
 	if len(recs) == 0 {
 		t.Fatal("meter must have observed the turn")
 	}
-	var unc, wr, rd float64
+	var unc, wr, rd, out int64
 	for _, r := range recs {
-		unc += float64(r.Uncached)
-		wr += float64(r.Write)
-		rd += float64(r.Read)
+		unc += r.Uncached
+		wr += r.Write
+		rd += r.Read
+		out += r.Output
 	}
 	report, err := cache.ReadUsageReport(e.root, "s-e2e")
 	if err != nil {
-		// 记账根 = TempDir root；用 meter 的路径口径
 		t.Fatalf("read report: %v", err)
 	}
-	_ = unc
-	_ = wr
-	_ = rd
-	_ = report
 	if report.Turns != int64(len(recs)) {
 		t.Fatalf("report turns = %d, want %d", report.Turns, len(recs))
 	}
-	if report.SessionHit <= 0 {
-		t.Fatalf("fixture usage must yield positive hit, got %v", report.SessionHit)
+	if report.Uncached != unc || report.Write != wr || report.Read != rd || report.Output != out {
+		t.Fatalf("token sums diverge: report(u=%d,w=%d,r=%d,o=%d) vs meter(u=%d,w=%d,r=%d,o=%d)",
+			report.Uncached, report.Write, report.Read, report.Output, unc, wr, rd, out)
+	}
+	denom := unc + wr + rd
+	if denom == 0 {
+		t.Fatal("fixture usage must produce nonzero denominator")
+	}
+	wantHit := float64(rd) / float64(denom)
+	if diff := report.SessionHit - wantHit; diff > 1e-9 || diff < -1e-9 {
+		t.Fatalf("SessionHit = %v, want %v (manual weighted口径)", report.SessionHit, wantHit)
 	}
 }
 
@@ -306,7 +305,10 @@ func TestE2ECrashRecoveryResume(t *testing.T) {
 	if err := store.SetEngineID("e-crash"); err != nil {
 		t.Fatalf("meta: %v", err)
 	}
-	cfg, _, _ := config.NewLoader().Load(config.Flags{}, config.Paths{})
+	cfg, _, cfgErr := config.NewLoader().Load(config.Flags{}, config.Paths{})
+	if cfgErr != nil {
+		t.Fatalf("config: %v", cfgErr)
+	}
 	policy, err := guard.NewPolicy(guard.Preset(cfg.Permissions.Preset), nil)
 	if err != nil {
 		t.Fatalf("policy: %v", err)
@@ -315,7 +317,10 @@ func TestE2ECrashRecoveryResume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gate: %v", err)
 	}
-	fixture, _ := engine.FixtureScript("../../fixtures/engine/happy-turn.jsonl")
+	fixture, ferr := engine.FixtureScript("../../fixtures/engine/happy-turn.jsonl")
+	if ferr != nil {
+		t.Fatalf("fixture: %v", ferr)
+	}
 	sink := &recordingSink{}
 	ctrl, err := control.NewController(control.Options{
 		HostFactory: func(engine.BootConfig) (engine.Host, error) { return engine.NewFakeHost(fixture), nil },
@@ -363,43 +368,40 @@ func TestE2EBootArtifactByteStable(t *testing.T) {
 
 // ---- 辅助 ----
 
-// assertSinkMirrorsStore 校验 Sink 发布序列与镜像事件序一致（同型事件相对
-// 顺序；mirror-first 不变量的系统边界观测）。
+// assertSinkMirrorsStore 校验 Sink 发布序列与镜像事件序一致（mirror-first
+// 不变量的系统边界观测；终评 I-5 修复：两个序列各自独立取序号再比较）。
 func assertSinkMirrorsStore(t *testing.T, e *env) {
 	t.Helper()
 	events, err := e.store.ReadAllEvents()
 	if err != nil {
 		t.Fatalf("read mirror: %v", err)
 	}
-	// 镜像里的镜像事件类型 → Sink 里的前端事件类型一一对应（计数校验 + 关键
-	// 顺序对：ApprovalRequest 必须先于其 ApprovalResolved）。
-	var storeReqIdx, sinkReqIdx = -1, -1
-	var sinkResIdx = -1
-	for i, ev := range events {
+	// 存在性对等：镜像里有审批请求 ⇔ Sink 里有。
+	storeReq, sinkReq := false, false
+	for _, ev := range events {
 		if _, ok := ev.(event.ApprovalRequestEvent); ok {
-			storeReqIdx = i
-			for i, ev := range e.sink.events {
-				if _, ok := ev.(event.ApprovalRequestEvent); ok {
-					sinkReqIdx = i
-					break
-				}
-			}
+			storeReq = true
 			break
+		}
+	}
+	sinkResIdx, sinkReqIdx := -1, -1
+	for i, ev := range e.sink.events {
+		if _, ok := ev.(event.ApprovalRequestEvent); ok && sinkReqIdx == -1 {
+			sinkReq = true
+			sinkReqIdx = i
 		}
 		if _, ok := ev.(event.ApprovalResolvedEvent); ok && sinkResIdx == -1 {
 			sinkResIdx = i
 		}
 	}
-	if storeReqIdx == -1 && sinkReqIdx != -1 || storeReqIdx != -1 && sinkReqIdx == -1 {
+	if storeReq != sinkReq {
 		t.Fatal("approval request presence differs between mirror and sink")
 	}
+	// Sink 序内：ApprovalRequest 必须先于其 ApprovalResolved。
 	if sinkReqIdx != -1 && sinkResIdx != -1 && sinkResIdx < sinkReqIdx {
 		t.Fatal("sink resolved before request — order broken")
 	}
 }
-
-// fake2ndTurn 让同一 FakeHost 再跑一个回合脚本（场景 4 用）。
-func (e *env) fake2ndTurn(t *testing.T) { t.Helper() }
 
 // canUseTool 构造引擎发来的 can_use_tool 控制请求信封（与 control 的 routing
 // 测试同构；e2e 在系统边界注入——权限回路的入口复验）。

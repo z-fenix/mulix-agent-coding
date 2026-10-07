@@ -45,6 +45,9 @@ func TestDefaultsWithoutFiles(t *testing.T) {
 	if cfg.Engine.AllowDrift {
 		t.Errorf("AllowDrift default must be false")
 	}
+	if cfg.Engine.Path != "claude" {
+		t.Errorf("Engine.Path default = %q, want claude", cfg.Engine.Path)
+	}
 	if cfg.Tools.MemorySearch {
 		t.Errorf("MemorySearch default must be false")
 	}

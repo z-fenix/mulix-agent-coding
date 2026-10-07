@@ -36,6 +36,10 @@ type PermissionsConfig struct {
 // EngineConfig 是引擎相关策略。
 type EngineConfig struct {
 	AllowDrift bool `toml:"allow_drift"` // user-global；true 时版本漂移仅告警不拒绝
+	// Path 是引擎可执行（PATH 解析或绝对路径；空值回退 "claude"——与 doctor
+	// 的 LookPath 探测同一约定）。终评 Critical-1：composeBoot 缺 EnginePath
+	// 接线时 ClaudeHost.Start fail-closed，真实引擎无法拉起。
+	Path string `toml:"path"`
 }
 
 // ToolsConfig 是内置 Go 工具开关（注册期冻结）。
@@ -48,7 +52,7 @@ func defaultConfig() Config {
 		DefaultModel: "claude-sonnet-4-5",
 		Cache:        CacheConfig{HitRateFloor: 0.70, ColdAfterIdle: "4m"},
 		Permissions:  PermissionsConfig{Preset: "default"},
-		Engine:       EngineConfig{AllowDrift: false},
+		Engine:       EngineConfig{AllowDrift: false, Path: "claude"},
 		Tools:        ToolsConfig{MemorySearch: false},
 	}
 }
@@ -74,7 +78,13 @@ func DefaultPaths() (Paths, error) {
 	if err != nil {
 		return Paths{}, fmt.Errorf("config: user home: %w", err)
 	}
-	return Paths{User: filepath.Join(home, ".mulix", "config.toml")}, nil
+	// 项目层（终评冒烟发现：此前缺失——项目 mulix.toml 从未被加载，FR-016
+	// 的 flag > project > user > default 分层退化成 user > default）。
+	// 工作区根 = 进程 cwd（cli 注入 cwd() 为 Workspace 同一口径）。
+	return Paths{
+		Project: "mulix.toml",
+		User:    filepath.Join(home, ".mulix", "config.toml"),
+	}, nil
 }
 
 // keyLocks 是 user-global 锁定项（键级）：项目层不得设置这些键（防恶意 clone 提权）。

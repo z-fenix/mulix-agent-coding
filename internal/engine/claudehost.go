@@ -59,6 +59,12 @@ type ClaudeHost struct {
 	exited      chan struct{} // monitor Wait 完成后关闭
 	killed      bool          // 由 Close 强杀置位（exit 事件 reason）
 	monitorOnce sync.Once
+	// provisional：真实引擎 init 后置协议适配（终评 Critical-1）——Start 在
+	// 握手窗口内无 init 时临时放行；首个 init 到达时照常校验。
+	provisional bool
+	// exitClosed：eventsOut 已被 provisional 拒绝路径关闭（deliver 跳过，
+	// 防止 route 循环残余事件 send-on-closed panic）。
+	exitClosed bool
 
 	routeDone  chan struct{} // 路由结束（stdout 泵停 + 事件投递完毕）——monitor 在 Wait 前等待
 	stderrDone chan struct{} // stderr 泵结束
@@ -229,9 +235,23 @@ func (h *ClaudeHost) Start(ctx context.Context, cfg BootConfig) error {
 		}
 		return nil
 	case <-time.After(timeout):
-		h.signalStart(fmt.Errorf("engine: handshake timeout after %v", h.opts.HandshakeTimeout))
-		h.killTree()
-		return h.startErr
+		// 协议适配（终评 Critical-1 实测）：真实 claude 2.1.291 的 init 在
+		// 首条 user message 之后才发出——窗口内无 init 且进程仍存活 → 临时
+		// 放行（provisional start）；首个 init 到达时照常校验（失败 → 终止
+		// 引擎 + 拒绝原因合成 exit 事件，fail-closed 保留）。
+		select {
+		case <-h.exited:
+			// 进程在窗口内退出（monitor 已 signalStart「exited during
+			// handshake」）——按启动失败收口。
+			h.killTree()
+			return h.startErr
+		default:
+		}
+		h.routeMu.Lock()
+		h.provisional = true
+		h.routeMu.Unlock()
+		h.signalStart(nil)
+		return nil
 	case <-ctx.Done():
 		h.signalStart(fmt.Errorf("engine: start cancelled: %w", ctx.Err()))
 		h.killTree()
@@ -259,6 +279,26 @@ func (h *ClaudeHost) route(pumpCh <-chan Event, pumpDone <-chan error) {
 		// init：校验 → 接受（置 ready）→ 按序 flush
 		if err := h.validateHandshake(ev); err != nil {
 			h.signalStart(err)
+			// provisional start（Start 已返回）下的校验失败：Start 的错误
+			// 通道无人等待——终止引擎并以拒绝原因合成 exit 事件（先于
+			// monitor 的 killed exit 投递；monitorOnce 保证 close 互斥）。
+			h.routeMu.Lock()
+			prov := h.provisional
+			if prov {
+				h.killed = true
+			}
+			h.routeMu.Unlock()
+			if prov {
+				h.killTree()
+				h.monitorOnce.Do(func() {
+					h.deliver(Event{Kind: KindExit, Exit: &ExitInfo{Code: -1,
+						Reason: "refused: " + err.Error()}})
+					h.routeMu.Lock()
+					h.exitClosed = true
+					h.routeMu.Unlock()
+					close(h.eventsOut)
+				})
+			}
 			continue
 		}
 		flush := h.acceptHandshake(ev)
@@ -335,8 +375,15 @@ func (h *ClaudeHost) acceptHandshake(ev Event) []Event {
 	return flush
 }
 
-// deliver 投递事件（Close 后丢弃）。
+// deliver 投递事件（Close 后丢弃；eventsOut 关闭后跳过——provisional 拒绝
+// 路径关闭事件流后，route 循环里残余的 pump 事件安全丢弃）。
 func (h *ClaudeHost) deliver(ev Event) {
+	h.routeMu.Lock()
+	closed := h.exitClosed
+	h.routeMu.Unlock()
+	if closed {
+		return
+	}
 	select {
 	case h.eventsOut <- ev:
 	case <-h.done:

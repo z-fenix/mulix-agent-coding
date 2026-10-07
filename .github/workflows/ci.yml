@@ -64,7 +64,8 @@ jobs:
       - name: cache-impact 门禁
         if: github.event_name == 'pull_request'
         env:
+          PR_BODY: ${{ github.event.pull_request.body }} # 经 env 传递——不进脚本文本（防注入）
           PR_BODY_FILE: pr-body.txt
         run: |
-          cat <<<"${{ github.event.pull_request.body }}" > pr-body.txt
+          printf '%s\n' "$PR_BODY" > pr-body.txt
           bash scripts/check-cache-impact.sh "origin/${{ github.base_ref }}" HEAD
