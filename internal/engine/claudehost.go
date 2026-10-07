@@ -220,12 +220,19 @@ func (h *ClaudeHost) Start(ctx context.Context, cfg BootConfig) error {
 	// 进程监视：stdout/stderr 汇合后 Wait；退出 → exit 事件 → 关闭 eventsOut。
 	go h.monitor()
 
-	// 握手等待（有界）
+	// 握手等待（有界）。timeout 非正数（调用方已取消/到期 deadline）→
+	// 不进定时分支（终评审 Minor-6：time.After(负数) 立即触发与 ctx.Done
+	// 竞争 select 随机性——不得在取消的 ctx 上临时放行）。
 	timeout := h.opts.HandshakeTimeout
 	if dl, ok := ctx.Deadline(); ok {
 		if d := time.Until(dl); d < timeout {
 			timeout = d
 		}
+	}
+	if ctx.Err() != nil || timeout <= 0 {
+		h.signalStart(fmt.Errorf("engine: start cancelled: %w", ctx.Err()))
+		h.killTree()
+		return h.startErr
 	}
 	select {
 	case <-h.startDone:
@@ -244,6 +251,14 @@ func (h *ClaudeHost) Start(ctx context.Context, cfg BootConfig) error {
 			// 进程在窗口内退出（monitor 已 signalStart「exited during
 			// handshake」）——按启动失败收口。
 			h.killTree()
+			return h.startErr
+		case <-h.startDone:
+			// init 与窗口到期同时就绪（终评审 Minor-5：select 随机性不得
+			// 吞掉窗口内 init 的校验结果）——按 startDone 结果收口：拒绝
+			// → 杀引擎；放行（init 刚好校验通过）→ 正常返回（route 已就绪）。
+			if h.startErr != nil {
+				h.killTree()
+			}
 			return h.startErr
 		default:
 		}

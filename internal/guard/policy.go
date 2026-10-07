@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"sync"
 )
 
 // Decision 是策略裁决词表（JSON 稳定字符串）。ask 表示进入审批队列
@@ -191,11 +192,10 @@ func inputString(input json.RawMessage, key string) string {
 	return ""
 }
 
-// globCache 并发注记：Decide 目前只在 control 的串行路径被调用
-// （会话内回合互斥，design §6；测试顺序执行）——首次命中时写入该 map 是
-// 唯一的变异点。P2/P4 若出现并发 Decide（多入口/异步审批路径），必须先改
-// sync.Map 或构造期预编译。
-var globCache = map[string]*globMatcher{}
+// globCache 并发注记（终评审 Important-3b 修复）：权限回调桥引入了并发
+// Decide 面（HTTP handler goroutine），普通 map 的并发写是进程致命错误——
+// 改 sync.Map（读多写少、键集收敛：pattern 数量有限）。串行路径语义不变。
+var globCache = sync.Map{}
 
 // globMatcher 是极简 glob（对齐 gitignore/claude 约定的子集）：
 // `**` 跨段（含空），`*`/`?` 单段；段边界按 `/`。
@@ -214,10 +214,12 @@ func globMatches(pattern, p string) bool {
 		return false
 	}
 	p = strings.ReplaceAll(p, "\\", "/")
-	m := globCache[pattern]
-	if m == nil {
+	var m *globMatcher
+	if v, ok := globCache.Load(pattern); ok {
+		m = v.(*globMatcher)
+	} else {
 		m = compileGlob(pattern)
-		globCache[pattern] = m
+		globCache.Store(pattern, m)
 	}
 	return m.match(strings.Split(p, "/"))
 }

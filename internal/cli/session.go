@@ -122,6 +122,9 @@ func buildComponents(o Options, store *sessionx.Store, meter *cache.Meter, sink 
 	// 口径：deny 清单 → DecisionDeny；allow 清单 → DecisionAllow；预设兜底
 	// 未命中的工具（default=Ask → 无人值守 fail-closed）。解析失败 = 配置
 	// 损坏 → 拒绝启动（fail-closed，绝不静默丢弃规则）。
+	// 防重叠注记（终评审 Minor-10）：deny 清单同时经 BootComposer 流为引擎
+	// --disallowedTools（boot.go）——两侧各有职责（引擎侧硬拒 vs mulix
+	// 裁决核审计），不是可互相去重的重复路径。
 	var rules []guard.Rule
 	for _, raw := range cfg.Permissions.Deny {
 		r, perr := guard.ParseRule(raw)

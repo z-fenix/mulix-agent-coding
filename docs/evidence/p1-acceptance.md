@@ -67,6 +67,11 @@
   `TestDeferredDriftRefusal`（协议适配后的拒绝语义：init 延迟到首条消息 →
   首轮 validateHandshake 拒绝并以 `refused:` 收口杀引擎）；
   `TestStartAllowsDriftWithTrace`（放行 → trace）。
+  - **已知副作用（如实记录，终评审 Minor-8）**：临时放行路径下，首条用户
+    消息先于版本/模式校验送达引擎——被拒绝的引擎在终止前可能已开始回合
+    侧副作用（引擎侧效果无法撤回；事件面被抑制，镜像只见 refused exit）。
+    漂移拒绝从「启动即拒」变为「首轮拒绝并杀引擎」是实测协议（init 滞后）
+    的必然权衡；P2 可用引擎侧 system prompt 预校验缓解。
 - `TestComposeBootAllowDriftPassthrough` / `TestResumeDriftTraceMirrored`
   （control：放行留痕）。
 - `TestDoctorVersionDriftWarn`（doctor：漂移 warn + 提示，warn 不破坏 OK）。
@@ -104,6 +109,16 @@
 按 design §8.1 C3 与 Task 24 交付记录：**P1 交付启动快照 + 会话内不重载**；
 「会话中变更仅提醒」的 watcher 属 **P2**（spec/design 已记录该分期）。
 本清单如实记录：P1 无会话中重载路径（快照冻结），P2 补 watcher。
+
+## 已知限制（P1 如实记录）
+
+- **临时放行后的 init 无二次看门狗（终评审 Minor-9）**：宽限窗放行后若引擎
+  存活但永不发 init，前台将无限等待（无 init 监视器）；同因，握手前的
+  事件 stash 无界（存活但沉默的引擎不触发 flush）。固定 2.1.291 引擎下
+  init 必随首回合到达（探针实证），该面不可达；P2 补 init 超时监视。
+- **SC-003 与回调地址的隔离**：权限回调地址经 Boot Env（引擎子进程继承 →
+  serve 孙进程继承）传递，绝不入 mcp-config/指纹——逐次启动的临时端口
+  不影响字节稳定（终评审 Important-1 修复，复测：冒烟 B `3487d01` 全回合）。
 
 ## 汇总
 

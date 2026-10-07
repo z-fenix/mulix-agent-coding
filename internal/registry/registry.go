@@ -116,10 +116,6 @@ type Server struct {
 	mcpServer *mcp.Server
 	name      string
 	selfCmd   []string
-	// permEnv 是权限回调环境（MULIX_PERMISSION_CALLBACK，终评 Critical-1
-	// 第三层桥接）——运行期寻址注入，非工具面变更（C2 冻结的是工具清单与
-	// schema；MCPServers() 输出时并入条目 env）。
-	permEnv map[string]string
 }
 
 // Options 是 NewServer 参数。
@@ -188,15 +184,14 @@ func canonicalize(raw json.RawMessage) json.RawMessage {
 
 // MCPServers 实现 cache.Registry（编译期钉见测试）：SelfCommand 非空时返回
 // 唯一的 mulix stdio 条目（Command 显式顺序；cache 侧再做排序归一——双保险）。
-// SetPermissionEnv 注入权限回调环境（control 在 start() 期以回调地址调用；
-// 前台进程内存活期与地址一致）。运行期寻址注入——不触碰已冻结的工具面。
-func (s *Server) SetPermissionEnv(env map[string]string) { s.permEnv = env }
-
 func (s *Server) MCPServers() []cache.MCPServer {
 	if len(s.selfCmd) == 0 {
 		return nil
 	}
-	return []cache.MCPServer{{Name: s.name, Command: slices.Clone(s.selfCmd), Env: s.permEnv}}
+	// 注意（终评审 Important-1）：条目 env 必须保持为空——运行期寻址信息
+	//（权限回调地址）经 Boot Env 传递，不入 mcp-config（SC-003 字节稳定 +
+	// 设计 §8.1 C2 注册面冻结）。新增 env 时必须有冻结面豁免裁决。
+	return []cache.MCPServer{{Name: s.name, Command: slices.Clone(s.selfCmd)}}
 }
 
 // ServeStdio 以 stdio 传输运行服务器（阻塞至 ctx 取消或对端 EOF）——

@@ -7,6 +7,8 @@ package control
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -91,9 +93,11 @@ type Controller struct {
 	lastTurnTokens cache.TurnUsage
 	sessionID      string // mulix 会话 id（构造期读一次 meta，避免快照路径磁盘 I/O）
 
-	turnDones map[int64]chan struct{} // 回合收口通道（泵唯一关闭方）
-	resolved  map[string]gateRuling   // 已裁决权限请求（引擎 tool_use_id → 裁决；重发信封直接应答，人只裁决一次）
-	pubMu     sync.Mutex              // 发布串行化（镜像 Append 互斥；见 publish 注）
+	turnDones map[int64]chan struct{}    // 回合收口通道（泵唯一关闭方）
+	resolved  map[string]gateRuling      // 已裁决权限请求（引擎 tool_use_id → 裁决；重发信封直接应答，人只裁决一次）
+	inflight  map[string]chan gateRuling // 裁决单飞（终评审 Important-3：并发传输同 id 只评估一次）
+	approveMu sync.Mutex                 // SetAlias+Evaluate 原子化（别名配对不被并发传输交错；P1 审批串行语义）
+	pubMu     sync.Mutex                 // 发布串行化（镜像 Append 互斥；见 publish 注）
 
 	permCallback *permissionCallbackServer // 权限回路跨进程桥（真实引擎 --permission-prompt-tool 传输）
 
@@ -125,6 +129,7 @@ func NewController(opts Options) (*Controller, error) {
 		sessionID: sessionID,
 		turnDones: map[int64]chan struct{}{},
 		resolved:  map[string]gateRuling{},
+		inflight:  map[string]chan gateRuling{},
 		pumpDone:  make(chan struct{}),
 		initSeen:  make(chan struct{}),
 		now:       time.Now,
@@ -169,25 +174,18 @@ func (c *Controller) start(ctx context.Context, boot engine.BootConfig) error {
 	}
 	c.mu.Unlock()
 
-	// 权限回调桥（终评 Critical-1 第三层）：先起监听，再把地址经 registry
-	//（SetPermissionEnv → MCPServers().Env → mcp-config env）注入 serve 子
-	// 进程的 permission 工具。Registry 为空面（无 mulix stdio 条目）时跳过
-	// ——无回调面就无需桥；监听失败 → 不注入，serve 侧 fail-closed deny。
-	c.mu.Lock()
-	hasRegistry := c.opts.Registry != nil
-	c.mu.Unlock()
-	if hasRegistry {
+	// 权限回调桥（终评 Critical-1 第三层）：先起监听，再把回调地址经 Boot
+	// Env 注入（引擎子进程继承 → `mulix mcp serve` 孙进程继承——评审
+	// Important-1：地址绝不入 mcp-config/指纹，否则逐次启动的临时端口破坏
+	// SC-003 字节稳定）。仅当注册面真的含 mulix stdio 条目时才起桥——
+	// Registry 非 nil 但空面（selfCommand 回退）不起无用监听；监听失败 →
+	// 不注入，serve 侧 fail-closed deny。
+	if c.hasMulixRegistryEntry() {
 		if pcs := c.startPermissionCallback(); pcs != nil {
 			c.mu.Lock()
 			c.permCallback = pcs
 			c.mu.Unlock()
-			if setter, ok := c.opts.Registry.(interface {
-				SetPermissionEnv(map[string]string)
-			}); ok {
-				setter.SetPermissionEnv(map[string]string{
-					"MULIX_PERMISSION_CALLBACK": pcs.addr,
-				})
-			}
+			boot.Env = append(boot.Env, "MULIX_PERMISSION_CALLBACK="+pcs.addr)
 		}
 	}
 
@@ -241,10 +239,14 @@ func (c *Controller) start(ctx context.Context, boot engine.BootConfig) error {
 		return errors.New("control: engine exited before init")
 	case <-time.After(initGrace):
 		if boot.ResumeEngineSessionID != "" {
-			// resume 链校验语义移到 onInit 首次消费（引擎上报后以引擎为权威）
+			// resume 链校验语义移到 onInit 首次消费（引擎上报后以引擎为权威）。
+			// 锁保护（终评审 Important-2）：pump goroutine 的 onInit 在锁下读
+			// 这三个字段——start goroutine 的写入必须同样持锁。
+			c.mu.Lock()
 			c.resumeRequested = boot.ResumeEngineSessionID
 			c.resumeMirrorID = mirrorEngineID
 			c.resumeMetaErr = metaErr
+			c.mu.Unlock()
 		}
 		return nil
 	case <-ctx.Done():
@@ -290,14 +292,18 @@ func (c *Controller) logResumeChain(requested, mirrorEngineID string, metaErr er
 // serve 子进程的 POST {tool_name, input, tool_use_id}，复用 evaluateCanUseTool
 // 裁决核，应答 behavior JSON（serve 侧原样透传给引擎）。
 type permissionCallbackServer struct {
-	ctrl *Controller
-	srv  *http.Server
-	addr string
+	ctrl  *Controller
+	srv   *http.Server
+	addr  string // 含随机 token 路径（http://127.0.0.1:PORT/<token>）
+	token string
 }
 
 // startPermissionCallback 启动 127.0.0.1 回调监听（会话生命周期绑定——
 // Close 时关闭）。监听失败不阻断启动：composeBoot 不注入回调地址，serve
-// 侧权限工具 fail-closed deny（引擎不悬挂，审批回路降级记录）。
+// 侧权限工具 fail-closed deny（引擎不悬挂，审批回路降级为 deny）。
+// 安全面（终评审 Minor-4 裁决：P1 回环可接受 + 四项廉价加固全做）：
+// 127.0.0.1 绑定 + 会话级随机 token 路径（不猜不可达）+ 请求体上限 +
+// 会话关闭后拒绝处理。
 func (c *Controller) startPermissionCallback() *permissionCallbackServer {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -305,9 +311,20 @@ func (c *Controller) startPermissionCallback() *permissionCallbackServer {
 			Content: "权限回调监听失败（审批回路降级为 fail-closed deny）: " + err.Error()})
 		return nil
 	}
-	pcs := &permissionCallbackServer{ctrl: c, addr: "http://" + l.Addr().String()}
+	var token [16]byte
+	if _, err := rand.Read(token[:]); err != nil {
+		_ = l.Close()
+		c.publish(event.NoticeEvent{Seq: c.nextSeq(), Level: "warning", IsMeta: true,
+			Content: "权限回调 token 生成失败（审批回路降级为 fail-closed deny）: " + err.Error()})
+		return nil
+	}
+	pcs := &permissionCallbackServer{
+		ctrl:  c,
+		token: hex.EncodeToString(token[:]),
+	}
+	pcs.addr = "http://" + l.Addr().String() + "/" + pcs.token
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", pcs.handle)
+	mux.HandleFunc("/"+pcs.token, pcs.handle)
 	pcs.srv = &http.Server{Handler: mux}
 	go func() { _ = pcs.srv.Serve(l) }()
 	return pcs
@@ -317,6 +334,13 @@ func (c *Controller) startPermissionCallback() *permissionCallbackServer {
 // behavior JSON。错误路径 = 200 + deny（serve 侧 fail-closed 语义与协议
 // 层解耦——引擎只见 behavior）。
 func (p *permissionCallbackServer) handle(w http.ResponseWriter, r *http.Request) {
+	p.ctrl.mu.Lock()
+	closed := p.ctrl.closed
+	p.ctrl.mu.Unlock()
+	if closed || p.srv == nil { // 会话已收口——不再产出裁决
+		writeBehavior(w, map[string]any{"behavior": "deny", "message": "session closed"})
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
@@ -326,7 +350,8 @@ func (p *permissionCallbackServer) handle(w http.ResponseWriter, r *http.Request
 		Input     json.RawMessage `json:"input"`
 		ToolUseID string          `json:"tool_use_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&args); err != nil || args.ToolName == "" || args.ToolUseID == "" {
+	body := http.MaxBytesReader(w, r.Body, 1<<20) // 1 MiB 上限（工具入参远小于此）
+	if err := json.NewDecoder(body).Decode(&args); err != nil || args.ToolName == "" || args.ToolUseID == "" {
 		writeBehavior(w, map[string]any{"behavior": "deny",
 			"message": "malformed permission callback body"})
 		return
@@ -335,7 +360,7 @@ func (p *permissionCallbackServer) handle(w http.ResponseWriter, r *http.Request
 		args.Input = json.RawMessage(`{}`)
 	}
 	// 与 FakeHost 传输（onControlRequest）共用裁决核——同 tool_use_id 重发
-	// 取缓存裁决，镜像 approval_request/resolved 审计一致。
+	// 取缓存裁决（singleflight），镜像 approval_request/resolved 审计一致。
 	resp := p.ctrl.evaluateCanUseTool("callback-"+args.ToolUseID, args.ToolUseID,
 		args.ToolName, args.Input, nil)
 	var envelope struct {
@@ -361,14 +386,6 @@ func writeBehavior(w http.ResponseWriter, behavior map[string]any) {
 	_, _ = w.Write(raw)
 }
 
-// Env 返回注入 mcp-config 的回调环境（key=value；未启动 = nil）。
-func (p *permissionCallbackServer) Env() string {
-	if p == nil {
-		return ""
-	}
-	return "MULIX_PERMISSION_CALLBACK=" + p.addr
-}
-
 // close 收口回调监听（会话关闭时调用；幂等）。
 func (p *permissionCallbackServer) close() {
 	if p == nil || p.srv == nil {
@@ -377,6 +394,23 @@ func (p *permissionCallbackServer) close() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	_ = p.srv.Shutdown(ctx)
+}
+
+// hasMulixRegistryEntry 判定注册面是否真的含 mulix stdio 条目（决定回调桥
+// 是否启动——空注册面时无 serve 子进程，起监听是无用暴露面）。
+func (c *Controller) hasMulixRegistryEntry() bool {
+	c.mu.Lock()
+	reg := c.opts.Registry
+	c.mu.Unlock()
+	if reg == nil {
+		return false
+	}
+	for _, s := range reg.MCPServers() {
+		if s.Name == permissionServerName {
+			return true
+		}
+	}
+	return false
 }
 
 // composeBoot 组装引擎拉起参数（P1 固定集）。registry 由 cli 注入
@@ -1005,29 +1039,7 @@ func (c *Controller) handleControlRequest(cr *engine.ControlRequest) engine.Cont
 // approval_resolved → MCP result。同 tool_use_id 的重发信封直接取缓存
 // 裁决（人只裁决一次；裁决词汇映射：Gate deny/timeout → 镜像 timeout）。
 func (c *Controller) evaluateCanUseTool(requestID, toolUseID, tool string, input, mcpID json.RawMessage) engine.ControlResponse {
-	c.mu.Lock()
-	ruling, cached := c.resolved[toolUseID]
-	c.mu.Unlock()
-	if !cached {
-		c.publish(event.ApprovalRequestEvent{Seq: c.nextSeq(), Turn: c.currentTurn(),
-			ToolUseID: toolUseID, Tool: tool, Input: input})
-		// 别名配对不变量：本函数是 Gate.Evaluate 的唯一生产调用点，且每次
-		// Evaluate 前必须 SetAlias（同 goroutine）——桥的别名配对正确性系于
-		// 此；未来新增 Evaluate 调用点（registry 等）必须沿用同一配对。
-		if c.opts.Approvals != nil {
-			c.opts.Approvals.SetAlias(toolUseID)
-		}
-		decision, err := c.opts.Gate.Evaluate(context.Background(), tool, input)
-		if err != nil { // 防御：Gate 约定 err 恒空，仍 fail-closed 兜底
-			decision = guard.GateDecision{Decision: guard.DecisionDeny,
-				Source: guard.SourceTimeout, ResolvedBy: "gate: " + err.Error()}
-		}
-		ruling = gateRuling{decision: string(decision.Decision),
-			source: string(decision.Source), resolvedBy: decision.ResolvedBy}
-		c.mu.Lock()
-		c.resolved[toolUseID] = ruling
-		c.mu.Unlock()
-	}
+	ruling := c.rulingFor(toolUseID, tool, input)
 	evDecision, evSource := ruling.decision, ruling.source
 	if evDecision == string(guard.DecisionDeny) && evSource == string(guard.SourceTimeout) {
 		evDecision, evSource = "timeout", "timeout" // 词表：非人为 fail-closed
@@ -1035,6 +1047,51 @@ func (c *Controller) evaluateCanUseTool(requestID, toolUseID, tool string, input
 	c.publish(event.ApprovalResolvedEvent{Seq: c.nextSeq(), ToolUseID: toolUseID,
 		Decision: evDecision, Source: evSource, ResolvedBy: ruling.resolvedBy})
 	return c.mcpBehaviorResponse(requestID, mcpID, ruling, input)
+}
+
+// rulingFor 是裁决的单飞入口（终评审 Important-3）：回调桥（HTTP handler
+// goroutine）与泵（onControlRequest）并发进入——同 tool_use_id 的并发/重发
+// 请求只评估一次（其余等待复用），人只裁决一次；resolved 缓存命中直接返回。
+func (c *Controller) rulingFor(toolUseID, tool string, input json.RawMessage) gateRuling {
+	c.mu.Lock()
+	if r, cached := c.resolved[toolUseID]; cached {
+		c.mu.Unlock()
+		return r
+	}
+	if ch, inFlight := c.inflight[toolUseID]; inFlight {
+		c.mu.Unlock()
+		return <-ch // 首个评估进行中——等待并复用（发布面照旧：与重发信封同义）
+	}
+	ch := make(chan gateRuling, 1)
+	c.inflight[toolUseID] = ch
+	c.mu.Unlock()
+
+	c.publish(event.ApprovalRequestEvent{Seq: c.nextSeq(), Turn: c.currentTurn(),
+		ToolUseID: toolUseID, Tool: tool, Input: input})
+	// 别名配对不变量：本函数是 Gate.Evaluate 的唯一生产调用点，且每次
+	// Evaluate 前必须 SetAlias——别名配对 + 评估在 approveMu 内原子完成
+	//（终评审 Important-3c：并发传输下 SetAlias/Evaluate 交错会把人的裁决
+	// 交叉投递到错误工具调用；P1 审批语义 = 串行，与泵串行分发一致）。
+	c.approveMu.Lock()
+	if c.opts.Approvals != nil {
+		c.opts.Approvals.SetAlias(toolUseID)
+	}
+	decision, err := c.opts.Gate.Evaluate(context.Background(), tool, input)
+	c.approveMu.Unlock()
+	if err != nil { // 防御：Gate 约定 err 恒空，仍 fail-closed 兜底
+		decision = guard.GateDecision{Decision: guard.DecisionDeny,
+			Source: guard.SourceTimeout, ResolvedBy: "gate: " + err.Error()}
+	}
+	ruling := gateRuling{decision: string(decision.Decision),
+		source: string(decision.Source), resolvedBy: decision.ResolvedBy}
+	c.mu.Lock()
+	c.resolved[toolUseID] = ruling
+	if c.inflight[toolUseID] == ch {
+		ch <- ruling
+		delete(c.inflight, toolUseID)
+	}
+	c.mu.Unlock()
+	return ruling
 }
 
 // mcpBehaviorResponse 组 MCP tools/call 应答：content[0].text = behavior JSON
