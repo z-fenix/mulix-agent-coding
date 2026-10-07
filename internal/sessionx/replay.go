@@ -148,3 +148,35 @@ func metaString(meta map[string]any, key, fallback string) string {
 	}
 	return fallback
 }
+
+// EngineID 返回当前映射的引擎 session id（mulix → engine 方向；--resume 续链用）。
+// 引擎 init 到达前为空串。
+func (s *Store) EngineID() (string, error) {
+	meta, err := s.ReadMeta()
+	if err != nil {
+		return "", err
+	}
+	return metaString(meta, "engine_session_id", ""), nil
+}
+
+// FindByEngineID 按引擎 session id 反查会话（engine → mulix 方向；恢复链
+// --resume <engine-id> 的定位入口）。未命中返回 (零值, false, nil)。
+// 空 engineID 直接未命中（防静默错配——空串会匹配到尚未回填的会话）。
+// 注意：ScanSessions 的损坏 meta 警告在此被丢弃——Resume 编排（Task 24）如需
+// 呈现损坏信号应直接调用 ScanSessions。多会话映射同一引擎 id 属异常
+// （返回首个；doctor 经 ScanSessions 检测）。
+func FindByEngineID(root, engineID string) (SessionInfo, bool, error) {
+	if engineID == "" {
+		return SessionInfo{}, false, nil
+	}
+	sessions, _, err := ScanSessions(root)
+	if err != nil {
+		return SessionInfo{}, false, err
+	}
+	for _, s := range sessions {
+		if s.EngineID == engineID {
+			return s, true, nil
+		}
+	}
+	return SessionInfo{}, false, nil
+}
