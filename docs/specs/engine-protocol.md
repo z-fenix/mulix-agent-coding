@@ -110,7 +110,7 @@
 }
 ```
 
-**Meter 口径（Task 13）**：`usage.*` 为**本回合**值（`input_tokens`、`output_tokens`（write）、`cache_read_input_tokens`（read）、`output_tokens_details.thinking_tokens`（output 内细目））；`modelUsage.*`（`inputTokens/outputTokens/cacheReadInputTokens/…/costUSD`）与 `total_cost_usd` 为**会话累计**值（fixture 实证：result#2 的 usage.in=22138 本回合 vs modelUsage.in=44198=22060+22138 累计）。**Task 13 逐 result 累加 `usage.*` 得会话计数；成本仅用末条 result 的 `total_cost_usd`（或 `modelUsage.*.costUSD`），不得对多条 result 求和（会双计）**。四类 token = uncached_input（≈input−cache_read−cache_creation，缺省回退 input）、output（write）、cache_read（read）、thinking（output 细目，单列统计）。
+**Meter 口径（Task 13，按 design §8.2 公式落地；2026-10-07 修订 uncached 公式）**：`usage.*` 为**本回合**值；`modelUsage.*` 与 `total_cost_usd` 为**会话累计**值（fixture 实证：result#2 的 usage.in=22138 本回合 vs modelUsage.in=44198=22060+22138 累计）。**Task 13 逐 result 累加 `usage.*` 得会话计数；引擎自报成本仅用末条 result（不得对多条 result 求和，会双计）**。四类 token 的 Anthropic 语义：**uncached = `usage.input_tokens`（input_tokens 本身不含缓存命中/写入部分；总输入 = input + cache_creation + cache_read）**、write = `usage.cache_creation_input_tokens`、read = `usage.cache_read_input_tokens`、output = `usage.output_tokens`（thinking = `output_tokens_details.thinking_tokens` 细目，单列统计）。（初版此处误写「uncached ≈ input−cache_read−cache_creation」——那会双重扣减；Task 13 实现按 §8.2 修正。）
 
 ## 3. 权限回路（P1 契约，实测修订）
 
