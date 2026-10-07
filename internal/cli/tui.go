@@ -161,6 +161,11 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.approval = nil // 旧会话的审批卡作废（对旧桥的裁决路径已不存在）
 		m.appendLine("[会话] 已切换 → " + msg.h.id)
 		return m, nil
+	case doctorDoneMsg:
+		for _, l := range msg.lines {
+			m.appendLine(l)
+		}
+		return m, nil
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	case typedInput:
@@ -308,7 +313,10 @@ func (m *tuiModel) slash(line string) tea.Cmd {
 		m.appendLine(fmt.Sprintf("[cache] 回合 %d | 命中率 %.1f%% | 成本 $%.4f | 节省 $%.4f | 冷回合 %d",
 			rep.Turns, rep.SessionHit*100, rep.Cost, rep.Saving, rep.ColdTurns))
 	case "/doctor":
-		m.appendLine("[doctor] 自检项在 Task 29 落地")
+		// T29 接线：与 CLI doctor 共用同一检查清单（探针注入与 CLI 一致）。
+		// 异步（T29 评审 I-1）：claude --version 是引擎时长级子进程——
+		// 同步在 Update 内会冻结事件循环（与 T28 Critical-1 同类）。
+		return m.doctorCmd()
 	case "/rewind":
 		m.appendLine("[rewind] 引擎 checkpoint 透传随 T32 真实引擎联调落地")
 	case "/new":
@@ -324,6 +332,24 @@ func (m *tuiModel) slash(line string) tea.Cmd {
 	}
 	return nil
 }
+
+// doctorCmd 异步执行 doctor 检查（T29 评审 I-1）——回执 doctorDoneMsg。
+func (m *tuiModel) doctorCmd() tea.Cmd {
+	probes := realDoctorProbes(m.opts)
+	if m.opts.doctorProbes != nil { // 与 CLI 同一注入面（T29 评审 M-2）
+		probes = *m.opts.doctorProbes
+	}
+	return func() tea.Msg {
+		checks := doctorChecks(probes, m.opts)
+		lines := make([]string, len(checks))
+		for i, c := range checks {
+			lines[i] = fmt.Sprintf("[doctor] %s: %s — %s", c.Name, c.Status, c.Detail)
+		}
+		return doctorDoneMsg{lines: lines}
+	}
+}
+
+type doctorDoneMsg struct{ lines []string }
 
 // swapSession 异步换绑（/new //resume 复用装配路径 openSession）。评审两轮
 // 结论的合成：T28 首轮 Critical-1（Update 内同步等待冻结事件循环）+ 复审

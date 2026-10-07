@@ -43,6 +43,9 @@ type Options struct {
 	RunTUI func(ctx context.Context, o Options, resumeID string) error
 	// Config 注入生效配置（测试；nil = 分层加载默认）。
 	Config *config.Config
+	// doctorProbes 注入 doctor 探针（nil = 生产实探针；测试注入假探针保证
+	// 确定性——路由矩阵不依赖宿主机 node/claude 环境）。
+	doctorProbes *doctorProbes
 
 	// allowEngineDrift 指向根命令解析出的 flag 值（run 会话构造读取）。
 	allowEngineDrift *bool
@@ -170,14 +173,23 @@ func newCacheCommand(opts *Options) *cobra.Command {
 }
 
 func newDoctorCommand(opts *Options) *cobra.Command {
-	return &cobra.Command{
+	var redact bool
+	cmd := &cobra.Command{
 		Use:   "doctor",
-		Short: "环境自检（Task 29 实装）",
+		Short: "环境自检（node/claude/engine.lock/凭据/工作区）",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, _ = fmt.Fprintln(opts.stdout(), "doctor: 骨架就位，检查项在 Task 29 落地")
+			report, err := runDoctor(*opts, redact)
+			if err != nil {
+				return err
+			}
+			if !report.OK {
+				return fmt.Errorf("doctor: 存在失败检查项")
+			}
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&redact, "redact", false, "脱敏导出（home/工作区路径掩码化）")
+	return cmd
 }
 
 func newMCPCommand(opts *Options) *cobra.Command {

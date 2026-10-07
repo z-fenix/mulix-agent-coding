@@ -18,7 +18,7 @@ func TestRouteMatrix(t *testing.T) {
 	}{
 		{args: []string{"--help"}, wantOutput: []string{"run", "doctor", "cache", "sessions", "mcp", "resume"}},
 		{args: []string{"nonsense-cmd"}, wantErr: true},
-		{args: []string{"doctor"}, wantOutput: []string{"doctor"}},
+		{args: []string{"doctor"}, wantOutput: []string{"engine.lock", "consistency"}}, // doctor JSON 检查名——T29 评审 M-3 去空洞化
 		{args: []string{"cache", "--help"}, wantOutput: []string{"cache"}},
 		{args: []string{"sessions", "--help"}, wantOutput: []string{"sessions"}},
 		{args: []string{"mcp", "--help"}, wantOutput: []string{"serve"}},
@@ -27,6 +27,8 @@ func TestRouteMatrix(t *testing.T) {
 		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
 			var out, errOut bytes.Buffer
 			opts := Options{Stdout: &out, Stderr: &errOut, Workspace: t.TempDir(), SessionsRoot: t.TempDir(), UsageRoot: t.TempDir()}
+			probes := okProbes() // doctor 用假探针——路由测试不依赖宿主机 node/claude
+			opts.doctorProbes = &probes
 			cmd := NewRootCommand(opts)
 			cmd.SetOut(&out)
 			cmd.SetErr(&errOut)
