@@ -19,6 +19,8 @@ const (
 	KindControlRequest   EventKind = "control_request"   // 控制信封（P1 观察）
 	KindNoise            EventKind = "noise"             // informational/status/thinking_tokens（必须容忍）
 	KindUnknown          EventKind = "unknown"           // 未知 type；decoder 当前策略：跳过不产出（保留供 P2 透传）
+	KindTrace            EventKind = "trace"             // 宿主留痕（engine_drift 等；control 映射为镜像留痕事件）
+	KindExit             EventKind = "exit"              // 宿主产出的进程退出事件（graceful|killed|crashed）
 )
 
 // Event 是引擎 stdout 事件的解码形态：归一化信封 + 按类载荷指针。
@@ -35,9 +37,25 @@ type Event struct {
 	Denied     *PermissionDeniedInfo // KindPermissionDenied
 	Hook       *HookInfo             // KindHookStarted/KindHookResponse
 	Control    *ControlRequest       // KindControlRequest
+	Trace      *TraceInfo            // KindTrace（宿主留痕）
+	Exit       *ExitInfo             // KindExit（宿主产出的进程退出）
 	// KindNoise 不带结构化载荷（内容按值容忍）；需要时经 Raw 取原始行。
 
 	Raw json.RawMessage `json:"-"` // 原始行（审计/调试；内存持有，不序列化）
+}
+
+// TraceInfo 是宿主留痕事件载荷（如 engine_drift 放行——FR-003/SC-005；
+// control 映射为镜像留痕事件）。
+type TraceInfo struct {
+	Code    string          `json:"code"`    // engine_drift 等
+	Message string          `json:"message"` // 人读说明
+	Details json.RawMessage `json:"details,omitempty"`
+}
+
+// ExitInfo 是进程退出事件载荷（reason: graceful|killed|crashed|stdout_decode_error…）。
+type ExitInfo struct {
+	Code   int    `json:"code"`
+	Reason string `json:"reason"`
 }
 
 // MCPServerStatus 是 init.mcp_servers 条目。

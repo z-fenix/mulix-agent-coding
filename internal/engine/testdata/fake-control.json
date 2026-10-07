@@ -1,0 +1,12 @@
+{
+  "session_id": "44444444-2222-4333-8444-555555555555",
+  "version": "2.1.291",
+  "model": "fake-model",
+  "permission_mode": "default",
+  "before_input": [
+    "{\"type\":\"control_request\",\"request_id\":\"r-42\",\"request\":{\"subtype\":\"mcp_message\",\"server_name\":\"stdio\",\"message\":{\"method\":\"tools/call\",\"params\":{\"name\":\"perm\",\"arguments\":{\"tool_name\":\"Write\",\"tool_use_id\":\"call_1\"}}}}}"
+  ],
+  "per_input": [],
+  "echo_stdin_to_stderr": true,
+  "hang_on_eof": false
+}

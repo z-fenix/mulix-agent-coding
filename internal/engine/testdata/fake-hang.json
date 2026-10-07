@@ -1,0 +1,9 @@
+{
+  "session_id": "33333333-2222-4333-8444-555555555555",
+  "version": "2.1.291",
+  "model": "fake-model",
+  "permission_mode": "default",
+  "before_input": [],
+  "per_input": [],
+  "hang_on_eof": true
+}
