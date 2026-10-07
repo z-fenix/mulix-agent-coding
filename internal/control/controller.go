@@ -76,17 +76,18 @@ type Options struct {
 type Controller struct {
 	opts Options
 
-	mu         sync.Mutex
-	host       engine.Host
-	engineInfo engine.EngineInfo // 首个 init 推导（幂等，以首条为准）
-	turn       int64             // 当前回合序号（Submit 递增）
-	running    bool
-	closed     bool
-	seq        int64
-	exitLogged bool // 已落 EngineExited（防通道关闭后的合成事件重复）
-	engineDead bool // 引擎已退出（后续 Submit 拒绝为 ErrNoSession）
-	lastReport cache.Report
-	sessionID  string // mulix 会话 id（构造期读一次 meta，避免快照路径磁盘 I/O）
+	mu             sync.Mutex
+	host           engine.Host
+	engineInfo     engine.EngineInfo // 首个 init 推导（幂等，以首条为准）
+	turn           int64             // 当前回合序号（Submit 递增）
+	running        bool
+	closed         bool
+	seq            int64
+	exitLogged     bool // 已落 EngineExited（防通道关闭后的合成事件重复）
+	engineDead     bool // 引擎已退出（后续 Submit 拒绝为 ErrNoSession）
+	lastReport     cache.Report
+	lastTurnTokens cache.TurnUsage
+	sessionID      string // mulix 会话 id（构造期读一次 meta，避免快照路径磁盘 I/O）
 
 	turnDones map[int64]chan struct{} // 回合收口通道（泵唯一关闭方）
 	resolved  map[string]gateRuling   // 已裁决权限请求（引擎 tool_use_id → 裁决；重发信封直接应答，人只裁决一次）
@@ -395,14 +396,15 @@ func (c *Controller) Meter() *cache.Meter { return c.opts.Meter }
 
 // Snapshot 是状态栏快照（TUI 数据源）。
 type Snapshot struct {
-	SessionID       string       // mulix 会话 id
-	EngineSessionID string       // 引擎 session id（首个 init）
-	Model           string       // 引擎侧模型名
-	CLIVersion      string       // 引擎 CLI 版本
-	Turn            int64        // 回合序号
-	Running         bool         // 是否有活跃回合
-	MeterReport     cache.Report // 记账汇总（泵侧快照，不触碰 Meter 内部）
-	Dir             string       // 会话镜像目录
+	SessionID       string          // mulix 会话 id
+	EngineSessionID string          // 引擎 session id（首个 init）
+	Model           string          // 引擎侧模型名
+	CLIVersion      string          // 引擎 CLI 版本
+	Turn            int64           // 回合序号
+	Running         bool            // 是否有活跃回合
+	MeterReport     cache.Report    // 记账汇总（泵侧快照，不触碰 Meter 内部）
+	TurnTokens      cache.TurnUsage // 最近回合用量（泵侧快照——状态栏「本回合 tokens」）
+	Dir             string          // 会话镜像目录
 }
 
 // Snapshot 返回当前状态快照（锁内纯内存读取，无磁盘 I/O、无 Meter 访问）。
@@ -417,6 +419,7 @@ func (c *Controller) Snapshot() Snapshot {
 		Turn:            c.turn,
 		Running:         c.running,
 		MeterReport:     c.lastReport,
+		TurnTokens:      c.lastTurnTokens,
 		Dir:             c.opts.Store.Dir(),
 	}
 }
@@ -621,6 +624,7 @@ func (c *Controller) onResult(ev engine.Event) {
 	})
 	c.mu.Lock()
 	c.lastReport, _ = c.opts.Meter.Report() // 泵是 Meter 唯一写者，快照供 Snapshot
+	c.lastTurnTokens = c.opts.Meter.TurnTokens()
 	c.mu.Unlock()
 	c.publish(event.UsageEvent{
 		Seq: c.nextSeq(), Turn: turn,

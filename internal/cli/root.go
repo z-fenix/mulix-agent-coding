@@ -13,7 +13,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -104,10 +103,11 @@ func NewRootCommand(opts Options) *cobra.Command {
 		SilenceErrors: true,
 		Version:       Version,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if opts.RunTUI == nil {
-				return errors.New("TUI 将在 Task 28 落地；当前可用：mulix run <文本> / mulix --resume（-28 前由 run 承载）")
+			runTUI := opts.RunTUI
+			if runTUI == nil {
+				runTUI = RunTUI // 生产 TUI（T9.2）；测试注入替身
 			}
-			return opts.RunTUI(context.Background(), opts, resumeID)
+			return runTUI(context.Background(), opts, resumeID)
 		},
 	}
 	flags := root.PersistentFlags()

@@ -177,83 +177,122 @@ func newRegistryServer() *registry.Server {
 	})
 }
 
+// sessionHandle 是一次会话的组件集合（TUI /new /resume 换绑与 RunPrompt
+// 共用装配路径——单一入口，防止接线分叉）。
+type sessionHandle struct {
+	ctrl   *control.Controller
+	bridge *control.UserApprovalBridge // attended 审批桥（可 nil）
+	store  *sessionx.Store
+	meter  *cache.Meter
+	id     string // mulix 会话 id
+}
+
+// close 有序收口（幂等安全：各组件自身幂等）。
+func (h *sessionHandle) close() {
+	if h == nil {
+		return
+	}
+	if h.ctrl != nil {
+		_ = h.ctrl.Close(context.Background())
+	}
+	if h.meter != nil {
+		_ = h.meter.Close()
+	}
+	if h.store != nil {
+		_ = h.store.Close()
+	}
+}
+
+// openSession 装配一次会话（attended 与 unattended 共用）：
+// resumeID 非空 → 解析镜像引擎 id → 开既有镜像（记账续号）+ Resume；
+// 否则 → 新镜像 + 新会话。返回 (handle, 退出码, 错误)——code != 0 时 handle
+// 为 nil（错误已由调用方决定如何呈现）。
+func openSession(o Options, resumeID string, attended bool, sink control.Sink) (*sessionHandle, int, error) {
+	o = withDefaults(o)
+	if resumeID == "" {
+		if err := checkRecovery(o); err != nil {
+			return nil, 3, err
+		}
+	}
+	var store *sessionx.Store
+	var engineID string
+	var err error
+	if resumeID != "" {
+		var dir string
+		engineID, dir, err = resolveResume(resumeID, o)
+		if err != nil {
+			return nil, 2, err
+		}
+		if store, err = sessionx.OpenStore(dir); err != nil {
+			return nil, 2, err
+		}
+	} else {
+		if store, err = sessionx.Create(o.SessionsRoot, sessionx.Options{
+			ID: newSessionID(), Workspace: o.Workspace, Unattended: !attended,
+		}); err != nil {
+			return nil, 2, err
+		}
+	}
+	h := &sessionHandle{store: store, id: storeID(store)}
+	// fail 收口半成品组件（T28 评审 Important-2：h 构造后任何失败路径都必须
+	// 释放已开资源——meter 的 usage 文件句柄、镜像 store、control 宿主（含
+	// mcp-config 临时文件清理），否则泄漏且 Windows 上句柄占用会卡 TempDir 清理。
+	fail := func(code int, err error) (*sessionHandle, int, error) {
+		if h.ctrl != nil {
+			_ = h.ctrl.Close(context.Background())
+		}
+		if h.meter != nil {
+			_ = h.meter.Close()
+		}
+		_ = h.store.Close()
+		return nil, code, err
+	}
+	// 记账：resume 续号（T26 评审修复——同会话记账文件不撞回合号）
+	offset := int64(0)
+	if engineID != "" {
+		if offset, err = cache.NextTurnNumber(o.UsageRoot, h.id); err != nil {
+			return fail(2, fmt.Errorf("记账续号失败: %w", err))
+		}
+	}
+	if h.meter, err = cache.NewMeter(cache.MeterOptions{
+		Root: o.UsageRoot, SessionID: h.id,
+		Pricing:    cache.Pricing{InputPerMTok: 3, OutputPerMTok: 15}, // TODO(P2): 配置化定价表
+		TurnOffset: offset,
+	}); err != nil {
+		return fail(2, err)
+	}
+	ctrl, bridge, err := buildComponents(o, store, h.meter, sink, attended)
+	if err != nil {
+		return fail(2, err)
+	}
+	h.ctrl, h.bridge = ctrl, bridge
+	// T26 接线：mulix_usage 的跨进程权威口径
+	setUsageSource(o.UsageRoot, h.id)
+	if engineID != "" {
+		if err := ctrl.Resume(context.Background(), engineID); err != nil {
+			return fail(2, fmt.Errorf("resume: %w", err))
+		}
+	} else {
+		if err := ctrl.NewSession(context.Background()); err != nil {
+			return fail(2, fmt.Errorf("new session: %w", err))
+		}
+	}
+	return h, 0, nil
+}
+
 // RunPrompt 无人值守单回合（`mulix run`）：策略 deny 全自动，ask fail-closed；
 // 助手文本经 lineSink 到 stdout；回合收口即退出。resumeID 非空时续链。
 // 返回进程退出码（0 = 成功）。
 func RunPrompt(ctx context.Context, o Options, text, resumeID string) int {
 	o = withDefaults(o)
-	if err := checkRecovery(o); err != nil && resumeID == "" {
-		_, _ = fmt.Fprintln(o.stderr(), "mulix:", err)
-		return 3
-	}
-	var store *sessionx.Store
-	var meter *cache.Meter
-	var err error
-	if resumeID != "" {
-		var dir string
-		var engineID string
-		engineID, dir, err = resolveResume(resumeID, o)
-		if err != nil {
-			_, _ = fmt.Fprintln(o.stderr(), "mulix:", err)
-			return 2
-		}
-		resumeID = engineID
-		store, err = sessionx.OpenStore(dir)
-	} else {
-		store, err = sessionx.Create(o.SessionsRoot, sessionx.Options{
-			ID: newSessionID(), Workspace: o.Workspace, Unattended: true,
-		})
-	}
-	if err != nil {
-		_, _ = fmt.Fprintln(o.stderr(), "mulix:", err)
-		return 2
-	}
-	defer func() { _ = store.Close() }()
-
-	// 记账：resume 续号（T26 评审修复——同会话记账文件不撞回合号）
-	offset := int64(0)
-	if resumeID != "" {
-		sid := storeID(store)
-		offset, err = cache.NextTurnNumber(o.UsageRoot, sid)
-		if err != nil {
-			_, _ = fmt.Fprintln(o.stderr(), "mulix: 记账续号失败:", err)
-			return 2
-		}
-	}
-	meter, err = cache.NewMeter(cache.MeterOptions{
-		Root: o.UsageRoot, SessionID: storeID(store),
-		Pricing:    cache.Pricing{InputPerMTok: 3, OutputPerMTok: 15}, // TODO(P2): 配置化定价表
-		TurnOffset: offset,
-	})
-	if err != nil {
-		_, _ = fmt.Fprintln(o.stderr(), "mulix:", err)
-		return 2
-	}
-	defer func() { _ = meter.Close() }()
-
 	sink := &lineSink{w: o.stdout()}
-	c, _, err := buildComponents(o, store, meter, sink, false)
+	h, code, err := openSession(o, resumeID, false, sink)
 	if err != nil {
 		_, _ = fmt.Fprintln(o.stderr(), "mulix:", err)
-		return 2
+		return code
 	}
-	defer func() { _ = c.Close(ctx) }()
-
-	// T26 接线：mulix_usage 的跨进程权威口径
-	setUsageSource(o.UsageRoot, storeID(store))
-
-	if resumeID != "" {
-		if err := c.Resume(ctx, resumeID); err != nil {
-			_, _ = fmt.Fprintln(o.stderr(), "mulix: resume:", err)
-			return 2
-		}
-	} else {
-		if err := c.NewSession(ctx); err != nil {
-			_, _ = fmt.Fprintln(o.stderr(), "mulix: new session:", err)
-			return 2
-		}
-	}
-	if err := c.Submit(ctx, text); err != nil {
+	defer h.close()
+	if err := h.ctrl.Submit(ctx, text); err != nil {
 		_, _ = fmt.Fprintln(o.stderr(), "mulix: submit:", err)
 		return 1
 	}

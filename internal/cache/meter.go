@@ -82,6 +82,7 @@ type Meter struct {
 	haveActivity  bool
 	sum           Report
 	records       []Record
+	lastTokens    TurnUsage // 最近回合的用量（状态栏「本回合 tokens」——Snapshot 轮询消费）
 }
 
 // NewMeter 创建记账器并打开 JSONL 追加句柄（不存在则建目录）。
@@ -158,6 +159,7 @@ func (m *Meter) Observe(u TurnUsage) (Record, error) {
 	}
 	// 无论写盘成败，内存累计照常推进（Report 反映已观察事实；JSONL 为审计源）
 	m.turn++
+	m.lastTokens = u
 	m.records = append(m.records, rec)
 	m.sum.Turns++
 	m.sum.Uncached += rec.Uncached
@@ -181,6 +183,12 @@ func (m *Meter) Report() (Report, error) {
 		rep.SessionHit = float64(rep.Read) / float64(denom)
 	}
 	return rep, nil
+}
+
+// TurnTokens 返回最近观察回合的原始用量（非累计——状态栏「本回合 tokens」）。
+// Meter 为泵侧单写者：读方必须经 Controller.Snapshot（锁内缓存），不得并发直调。
+func (m *Meter) TurnTokens() TurnUsage {
+	return m.lastTokens
 }
 
 // Records 返回本会话已观察记录的副本（追加序；Guard.Evaluate 的会话内数据源）。
