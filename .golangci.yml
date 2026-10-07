@@ -1,0 +1,24 @@
+# golangci-lint 配置（版本 pin 见 .golangci.version；T10.2）。
+# P1 从简：默认 linters（errcheck/gosimple/go vet/ineffassign/staticcheck/
+# unused）+ gofmt；噪音大的 linter 不启用——评审按任务逐个把关。
+run:
+  timeout: 5m
+
+linters:
+  disable-all: true
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+    - ineffassign
+    - gosimple
+    - gofmt
+    - misspell
+
+issues:
+  exclude-rules:
+    # 测试文件：errcheck 对显式忽略的 fmt.Fprintln 等放行面太窄，按任务评审把关
+    - path: _test\.go
+      linters:
+        - errcheck

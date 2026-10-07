@@ -1,0 +1,70 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (race)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: go test (race)
+        # -race 门禁：linux runner 有 cgo（本仓库 Windows 开发机无 cgo 的缺口
+        # 在此补齐——T28 报告交接）。
+        run: go test -race ./...
+
+  lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: golangci-lint (pinned)
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64.8 # pin 与 .golangci.version 同源（手工同步）
+      - name: verify pin file
+        run: grep -q "1.64.8" .golangci.version
+
+  cross:
+    name: cross-compile smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: make test cross（三平台编译冒烟）
+        run: |
+          go test ./...
+          make cross
+          ./bin/mulix-linux-amd64 --version
+
+  guard:
+    name: cache-impact + engine.lock
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # cache-impact 需要 base..head diff
+      - name: engine.lock 格式校验
+        run: bash scripts/check-engine-lock.sh
+      - name: cache-impact 门禁
+        if: github.event_name == 'pull_request'
+        env:
+          PR_BODY_FILE: pr-body.txt
+        run: |
+          cat <<<"${{ github.event.pull_request.body }}" > pr-body.txt
+          bash scripts/check-cache-impact.sh "origin/${{ github.base_ref }}" HEAD
