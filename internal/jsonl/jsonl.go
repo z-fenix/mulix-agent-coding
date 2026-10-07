@@ -88,16 +88,31 @@ func (w *Writer) Append(b []byte) error {
 }
 
 // Repair 截断损坏尾部（保留此前全部完整行），使写入可继续。
-// 幂等：无损坏尾部时为 no-op。
+// 以**实际文件状态**为准：不信任缓存的 damagedTail 标志（打开后文件可能被
+// 带外改动——如恢复流程再次撞上损坏），每次都重新探测末字节。
+// 幂等：末字节为换行（无损坏）时为 no-op。
 func (w *Writer) Repair() error {
-	if !w.damagedTail {
-		return nil
-	}
 	path := w.f.Name()
 	info, err := os.Stat(path)
 	if err != nil {
 		return fmt.Errorf("jsonl: stat: %w", err)
 	}
+	// 重新探测实际末字节，而不是信任缓存的 damagedTail（Task 10 评审裁决）。
+	probe0, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("jsonl: open probe: %w", err)
+	}
+	var last [1]byte
+	if _, err := probe0.ReadAt(last[:], info.Size()-1); err != nil {
+		probe0.Close()
+		return fmt.Errorf("jsonl: read last byte: %w", err)
+	}
+	probe0.Close()
+	if last[0] == '\n' {
+		w.damagedTail = false
+		return nil // 无损坏尾部：no-op（幂等）
+	}
+	w.damagedTail = true
 	// 从文件末尾向前找最后一个换行；截断到其后（用只读句柄扫描，避开 Windows 只写句柄限制）。
 	size := info.Size()
 	probe, err := os.Open(path)
