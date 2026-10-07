@@ -77,6 +77,7 @@ type Meter struct {
 	lastActivity  time.Time
 	haveActivity  bool
 	sum           Report
+	records       []Record
 }
 
 // NewMeter 创建记账器并打开 JSONL 追加句柄（不存在则建目录）。
@@ -152,6 +153,7 @@ func (m *Meter) Observe(u TurnUsage) (Record, error) {
 	}
 	// 无论写盘成败，内存累计照常推进（Report 反映已观察事实；JSONL 为审计源）
 	m.turn++
+	m.records = append(m.records, rec)
 	m.sum.Turns++
 	m.sum.Uncached += rec.Uncached
 	m.sum.Write += rec.Write
@@ -174,6 +176,13 @@ func (m *Meter) Report() (Report, error) {
 		rep.SessionHit = float64(rep.Read) / float64(denom)
 	}
 	return rep, nil
+}
+
+// Records 返回本会话已观察记录的副本（追加序；Guard.Evaluate 的会话内数据源）。
+func (m *Meter) Records() []Record {
+	out := make([]Record, len(m.records))
+	copy(out, m.records)
+	return out
 }
 
 // Close 关闭 JSONL 句柄（幂等）。
