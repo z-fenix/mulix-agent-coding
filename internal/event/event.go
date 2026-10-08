@@ -20,6 +20,12 @@ const (
 	Notice            Kind = "notice"
 	TurnDone          Kind = "turn_done"
 	EngineExited      Kind = "engine_exited"
+
+	// 委派链事件（P2 Task 1，M12 前置）：父会话镜像记录子代理委派生命周期。
+	DelegationStarted   Kind = "delegation_started"
+	DelegationCompleted Kind = "delegation_completed"
+	DelegationCancelled Kind = "delegation_cancelled"
+	DelegationFailed    Kind = "delegation_failed"
 )
 
 // TurnStartedEvent 标记一个回合的开始。
@@ -121,4 +127,35 @@ type EngineExitedEvent struct {
 	Seq    int64  `json:"seq"`
 	Code   int    `json:"code"`
 	Reason string `json:"reason"`
+}
+
+// DelegationStartedEvent 标记一次对子代理的委派开始（父会话镜像记录）。
+type DelegationStartedEvent struct {
+	Seq          int64  `json:"seq"`
+	SubSessionID string `json:"sub_session_id"`
+	Task         string `json:"task"`
+	Depth        int    `json:"depth"`
+}
+
+// DelegationCompletedEvent 标记一次委派正常完成（含用量与成本）。
+type DelegationCompletedEvent struct {
+	Seq          int64  `json:"seq"`
+	SubSessionID string `json:"sub_session_id"`
+	Summary      string `json:"summary"`
+	TotalTokens  int64  `json:"total_tokens"`
+	CostUSDCents int64  `json:"cost_usd_cents"`
+}
+
+// DelegationCancelledEvent 标记一次委派被取消（Reason 说明取消方/原因）。
+type DelegationCancelledEvent struct {
+	Seq          int64  `json:"seq"`
+	SubSessionID string `json:"sub_session_id"`
+	Reason       string `json:"reason"`
+}
+
+// DelegationFailedEvent 标记一次委派失败（Reason 说明失败原因）。
+type DelegationFailedEvent struct {
+	Seq          int64  `json:"seq"`
+	SubSessionID string `json:"sub_session_id"`
+	Reason       string `json:"reason"`
 }

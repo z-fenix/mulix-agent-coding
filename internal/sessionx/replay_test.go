@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -277,5 +278,45 @@ func TestScanSessionsEmptyRoot(t *testing.T) {
 	sessions, warnings, err := ScanSessions(t.TempDir())
 	if err != nil || len(sessions) != 0 || len(warnings) != 0 {
 		t.Fatalf("empty root: %v %v %v", sessions, warnings, err)
+	}
+}
+
+// TestDelegationEventsRoundTrip 钉住 P2 委派链事件的镜像往返（P2 Task 1）：
+// Append → 重开 → ReadAllEvents → DeepEqual，与 P1 TestAppendMultipleKindsRoundTrip
+// 走同一条编解码路径——红线：镜像 1:1（所有字段 JSON 往返稳定）。
+func TestDelegationEventsRoundTrip(t *testing.T) {
+	root := t.TempDir()
+	s, err := Create(root, Options{ID: "s-deleg", Workspace: "w", EngineID: "e", Model: "m"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	defer s.Close()
+	events := []any{
+		event.DelegationStartedEvent{Seq: 1, SubSessionID: "sub1", Task: "add tests", Depth: 1},
+		event.DelegationCompletedEvent{Seq: 2, SubSessionID: "sub1", Summary: "done", TotalTokens: 100, CostUSDCents: 7},
+		event.DelegationCancelledEvent{Seq: 3, SubSessionID: "sub1", Reason: "user"},
+		event.DelegationFailedEvent{Seq: 4, SubSessionID: "sub1", Reason: "engine crash"},
+	}
+	for _, ev := range events {
+		if err := s.Append(ev); err != nil {
+			t.Fatalf("append %T: %v", ev, err)
+		}
+	}
+	r, err := OpenStore(filepath.Join(root, "s-deleg"))
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer r.Close()
+	got, err := r.ReadAllEvents()
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(got) != len(events) {
+		t.Fatalf("got %d events, want %d", len(got), len(events))
+	}
+	for i, want := range events {
+		if !reflect.DeepEqual(got[i], want) {
+			t.Fatalf("event %d mismatch: got %#v want %#v", i, got[i], want)
+		}
 	}
 }

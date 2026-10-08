@@ -32,13 +32,21 @@ func eventKindOf(ev any) (event.Kind, error) {
 		return event.TurnDone, nil
 	case event.EngineExitedEvent:
 		return event.EngineExited, nil
+	case event.DelegationStartedEvent:
+		return event.DelegationStarted, nil
+	case event.DelegationCompletedEvent:
+		return event.DelegationCompleted, nil
+	case event.DelegationCancelledEvent:
+		return event.DelegationCancelled, nil
+	case event.DelegationFailedEvent:
+		return event.DelegationFailed, nil
 	default:
 		return "", fmt.Errorf("sessionx: unknown event type %T", ev)
 	}
 }
 
 // eventFromKind 按 kind 标注还原类型化事件（值语义，便于消费方类型切换）。
-// 未知 kind 报错——镜像记录只可能是本包写入的 11 种；出现未知 kind 说明
+// 未知 kind 报错——镜像记录只可能是本包写入的 15 种；出现未知 kind 说明
 // 镜像被外部改动，交由恢复路径告警。
 func eventFromKind(kind string, raw json.RawMessage) (any, error) {
 	switch event.Kind(kind) {
@@ -74,6 +82,18 @@ func eventFromKind(kind string, raw json.RawMessage) (any, error) {
 		return ev, unmarshalInto(&ev, raw)
 	case event.EngineExited:
 		var ev event.EngineExitedEvent
+		return ev, unmarshalInto(&ev, raw)
+	case event.DelegationStarted:
+		var ev event.DelegationStartedEvent
+		return ev, unmarshalInto(&ev, raw)
+	case event.DelegationCompleted:
+		var ev event.DelegationCompletedEvent
+		return ev, unmarshalInto(&ev, raw)
+	case event.DelegationCancelled:
+		var ev event.DelegationCancelledEvent
+		return ev, unmarshalInto(&ev, raw)
+	case event.DelegationFailed:
+		var ev event.DelegationFailedEvent
 		return ev, unmarshalInto(&ev, raw)
 	default:
 		return nil, fmt.Errorf("unknown kind %q", kind)

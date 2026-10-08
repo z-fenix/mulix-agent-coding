@@ -48,6 +48,40 @@ func TestKindConstants(t *testing.T) {
 	}
 }
 
+// TestDelegationKindsAndJSONTags 钉住 P2 委派链事件（Task 1）：Kind 常量值 +
+// json tag 拼写（golden 断言——tag 漂移即破坏镜像 1:1 红线）。
+func TestDelegationKindsAndJSONTags(t *testing.T) {
+	kinds := map[Kind]string{
+		DelegationStarted:   "delegation_started",
+		DelegationCompleted: "delegation_completed",
+		DelegationCancelled: "delegation_cancelled",
+		DelegationFailed:    "delegation_failed",
+	}
+	for kind, want := range kinds {
+		if string(kind) != want {
+			t.Errorf("kind %q != %q", kind, want)
+		}
+	}
+	goldens := []struct {
+		ev   any
+		want string
+	}{
+		{DelegationStartedEvent{Seq: 1, SubSessionID: "sub1", Task: "add tests", Depth: 1}, `{"seq":1,"sub_session_id":"sub1","task":"add tests","depth":1}`},
+		{DelegationCompletedEvent{Seq: 2, SubSessionID: "sub1", Summary: "done", TotalTokens: 100, CostUSDCents: 7}, `{"seq":2,"sub_session_id":"sub1","summary":"done","total_tokens":100,"cost_usd_cents":7}`},
+		{DelegationCancelledEvent{Seq: 3, SubSessionID: "sub1", Reason: "user"}, `{"seq":3,"sub_session_id":"sub1","reason":"user"}`},
+		{DelegationFailedEvent{Seq: 4, SubSessionID: "sub1", Reason: "engine crash"}, `{"seq":4,"sub_session_id":"sub1","reason":"engine crash"}`},
+	}
+	for _, g := range goldens {
+		got, err := json.Marshal(g.ev)
+		if err != nil {
+			t.Fatalf("marshal %T: %v", g.ev, err)
+		}
+		if string(got) != g.want {
+			t.Errorf("%T tag drift:\n got:  %s\n want: %s", g.ev, got, g.want)
+		}
+	}
+}
+
 func TestTurnStartedRoundTrip(t *testing.T) {
 	roundTrip(t, TurnStartedEvent{Seq: 1, SessionID: "s-1", EngineSessionID: "e-1", PinnedModel: "m", Unattended: true})
 }
