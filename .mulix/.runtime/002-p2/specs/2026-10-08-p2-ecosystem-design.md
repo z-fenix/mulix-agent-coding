@@ -44,7 +44,7 @@
 spawn ──→ running ──→ completed
              │  └──→ failed（引擎错误/收口异常）
              ├─────→ cancelled（用户或主代理取消）
-             └─────→ timeout（可选整体上限，默认无；FR-103 只限深度/并发）
+             └─────→ timeout（不实现——整体时长上限属 P3 预算控制，见 Out of Scope 语义边界）
 ```
 
 - `Spawn(parentSession, task, opts)`：为子代理创建独立 sessionx Store（`.mulix/sessions/` 同池，meta 记 `parent_id` 与 `delegation_task`）、构造子 Controller（复用 `buildComponents` 的组装序：store → meter → policy/gate → controller，attended 语义 = 继承父会话的审批桥）、`NewSession` 后 Submit(task)。
