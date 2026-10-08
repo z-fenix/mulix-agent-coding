@@ -1,0 +1,17 @@
+schema: mulix.state.v2
+change: 001-p1-core-loop-and-cache-foundation
+phase: archive
+spec_path: docs/specs/001-p1-core-loop-and-cache-foundation/spec.md
+tasks_path: docs/changes/001-p1-core-loop-and-cache-foundation/tasks.md
+report_path: docs/changes/001-p1-core-loop-and-cache-foundation/report.md
+clarify_skipped: true
+design_track: architectural
+design_path: .mulix/.runtime/001-p1-core-loop-and-cache-foundation/specs/2026-10-06-p1-architecture-design.md
+design_approved: true
+execution_method: subagent-driven
+verify_result: pass
+verify_failures: 0
+archive_confirmation: pending
+archived: false
+created_at: 2026-10-06T12:37:12.0694738Z
+updated_at: 2026-10-07T23:52:07.2677581Z
