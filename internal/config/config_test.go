@@ -323,6 +323,36 @@ func TestExplicitZeroValueRoundTrip(t *testing.T) {
 	}
 }
 
+// TestMemoryConfigDefaultsAndLayering pins（P2 Global Constraints：新配置键
+// 进默认值与分层加载测试）：[memory] recall_top_k=3 / recall_budget_chars=2000
+// （design 002 §4；2000 字符预算 = spec Assumptions），项目层可覆盖、单键覆盖
+// 时另一键保默认（BurntSushi 解码保底值语义）。
+func TestMemoryConfigDefaultsAndLayering(t *testing.T) {
+	cfg, _, err := NewLoader().Load(Flags{}, Paths{})
+	if err != nil {
+		t.Fatalf("load defaults: %v", err)
+	}
+	if cfg.Memory.RecallTopK != 3 || cfg.Memory.RecallBudgetChars != 2000 {
+		t.Fatalf("memory defaults = %+v, want recall_top_k 3 / recall_budget_chars 2000", cfg.Memory)
+	}
+	project := writeTOML(t, "[memory]\nrecall_top_k = 5\nrecall_budget_chars = 512\n")
+	cfg2, _, err := NewLoader().Load(Flags{}, Paths{Project: project})
+	if err != nil {
+		t.Fatalf("load project layer: %v", err)
+	}
+	if cfg2.Memory.RecallTopK != 5 || cfg2.Memory.RecallBudgetChars != 512 {
+		t.Fatalf("project layer memory = %+v, want 5/512", cfg2.Memory)
+	}
+	partial := writeTOML(t, "[memory]\nrecall_top_k = 7\n")
+	cfg3, _, err := NewLoader().Load(Flags{}, Paths{Project: partial})
+	if err != nil {
+		t.Fatalf("load partial layer: %v", err)
+	}
+	if cfg3.Memory.RecallTopK != 7 || cfg3.Memory.RecallBudgetChars != 2000 {
+		t.Fatalf("partial layer memory = %+v, want top_k 7 with budget default 2000", cfg3.Memory)
+	}
+}
+
 func warnMentions(warnings []string, key string) bool {
 	for _, w := range warnings {
 		if strings.Contains(w, key) {

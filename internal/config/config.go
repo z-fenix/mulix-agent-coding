@@ -18,6 +18,7 @@ type Config struct {
 	Permissions  PermissionsConfig `toml:"permissions"`
 	Engine       EngineConfig      `toml:"engine"`
 	Tools        ToolsConfig       `toml:"tools"`
+	Memory       MemoryConfig      `toml:"memory"`
 	Subagent     SubagentConfig    `toml:"subagent"`
 }
 
@@ -54,6 +55,12 @@ type SubagentConfig struct {
 	MaxConcurrent int `toml:"max_concurrent"` // 同时运行的子代理上限
 }
 
+// MemoryConfig 是记忆召回参数（P2/M13；design 002 §4）。
+type MemoryConfig struct {
+	RecallTopK        int `toml:"recall_top_k"`        // 每回合召回条数上限（默认 3）
+	RecallBudgetChars int `toml:"recall_budget_chars"` // 注入预算上限（rune 数；默认 2000——spec Assumptions）
+}
+
 func defaultConfig() Config {
 	return Config{
 		DefaultModel: "claude-sonnet-4-5",
@@ -61,6 +68,7 @@ func defaultConfig() Config {
 		Permissions:  PermissionsConfig{Preset: "default"},
 		Engine:       EngineConfig{AllowDrift: false, Path: "claude"},
 		Tools:        ToolsConfig{MemorySearch: false},
+		Memory:       MemoryConfig{RecallTopK: 3, RecallBudgetChars: 2000},
 		Subagent:     SubagentConfig{MaxDepth: 3, MaxConcurrent: 4},
 	}
 }

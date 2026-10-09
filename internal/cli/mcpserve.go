@@ -13,6 +13,7 @@ import (
 	"mulix/internal/event"
 	"mulix/internal/registry"
 	"mulix/internal/sessionx"
+	"mulix/internal/tools/mulixmemory"
 )
 
 // lineSink 是无人值守/骨架期的行式事件出口（TUI 是 attended 的正装出口——
@@ -116,11 +117,21 @@ func printReport(w io.Writer, sessionID string, rep cache.Report) {
 
 // ServeMCP 实现 `mulix mcp serve`：以 stdio 传输运行内置工具服务器
 // （Boot 自 spawn 条目的对端——引擎经此直连 mulix 工具）。注册表在进程
-// 启动时由 init() 完成工具注册（main 的空白导入触发）；serve 进程不设
-// SelfCommand（自引用嵌套）。
+// 启动时定型：无条件工具经 init()（main 的空白导入触发）；条件工具在此
+// 组合根注册后、NewServer 冻结（serve 进程不设 SelfCommand——自引用嵌套）。
+//
+// 记忆工具条件注册（M13/T13.2）：serve 进程是自己的组合根——workspace =
+// 进程 cwd（引擎 cmd.Dir = 工作区，cwd 语义），配置与前台同源分层加载
+// （同一项目 mulix.toml → memory_search 开关两侧判定一致）。开关关时
+// memory_* 不注册（注册期冻结：工具面在进程启动期决定）。
 func ServeMCP(ctx context.Context, o Options) error {
 	serveCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	cfg, err := effectiveConfig(o)
+	if err != nil {
+		return fmt.Errorf("mcp serve: load config: %w", err)
+	}
+	mulixmemory.RegisterConditional(nil, o.Workspace, cfg.Tools.MemorySearch)
 	srv := registry.NewServer(registry.Options{Name: "mulix", Version: Version})
 	return srv.ServeStdio(serveCtx)
 }

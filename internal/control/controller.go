@@ -25,6 +25,7 @@ import (
 	"mulix/internal/engine"
 	"mulix/internal/event"
 	"mulix/internal/guard"
+	"mulix/internal/memory"
 	"mulix/internal/sessionx"
 	"mulix/internal/subagent"
 )
@@ -83,7 +84,27 @@ type Options struct {
 	// SubagentLimits 是子代理编排限额（零值字段由 subagent.NewManager 取
 	// 默认 3/4；design 002 §3）。
 	SubagentLimits SubagentLimits
+
+	// Memory 是记忆召回源（M13/T13.2；nil = [tools] memory_search=false 的
+	// cli 接线结果——零检索、零注入、零 Boot 面变化，行为与 P1 一致）。
+	// cli 组装根注入 *memory.Store（进程内每会话树恰一实例；Task 5 移交：
+	// <workspace>/.mulix/memory 的拼装在组合根）。
+	Memory MemoryRecall
 }
+
+// MemoryRecall 是记忆召回的检索缝（M13/T13.2）：Submit turn-tail 注入的唯一
+// 数据源。窄接口——*memory.Store 天然满足，测试以 stub 钉注入参数；检索的
+// 预算/条数策略由 control 侧消费配置（[memory] recall_top_k/recall_budget_chars）。
+type MemoryRecall interface {
+	Search(query string, k int, budgetChars int) []memory.Entry
+}
+
+// 记忆召回的默认参数（design 002 §4；config 包的分层默认值是权威，此处兜底
+// 手拼 Config 的零值——withMemoryRecall 消费端防御）。
+const (
+	defaultRecallTopK        = 3
+	defaultRecallBudgetChars = 2000
+)
 
 // SubagentLimits 是子代理编排限额（深度/并发；design 002 §3：默认 3/4）。
 type SubagentLimits struct {
@@ -233,6 +254,14 @@ func (c *Controller) start(ctx context.Context, boot engine.BootConfig) error {
 			c.mu.Unlock()
 			boot.Env = append(boot.Env, "MULIX_SUBAGENT_CALLBACK="+scs.addr)
 		}
+	}
+
+	// 记忆会话溯源（M13/T13.2）：serve 子进程的 memory_save 用它给条目盖
+	// source_session 戳（Boot Env 通道——绝不入 mcp-config，SC-003 字节稳定，
+	// 与 MULIX_SUBAGENT_CALLBACK 同一裁定）。仅 Memory 已接线且注册面含 mulix
+	// 条目（存在会消费它的 serve 子进程）时注入；value = 本会话镜像 id。
+	if c.opts.Memory != nil && c.hasMulixRegistryEntry() {
+		boot.Env = append(boot.Env, "MULIX_MEMORY_SESSION="+c.sessionID)
 	}
 
 	artifact, err := c.composeBoot(boot)
@@ -708,7 +737,50 @@ func (c *Controller) Submit(ctx context.Context, text string) error {
 	return c.submit(ctx, engine.UserMessage{Text: text})
 }
 
+// withMemoryRecall 是记忆召回的 turn-tail 注入函数（M13/T13.2；C5 注入点
+// 唯一化——**唯一调用点在 submit**，Task 10 lint 扫描钉此契约：user message
+// 组装只经本函数）。给定本回合用户输入：
+//   - Memory 未接线（[tools] memory_search=false）→ 空串（零注入）；
+//   - 命中 0 条 → 空串（静默跳过——spec Edge Cases）；
+//   - 命中 → 格式化 [记忆召回]\n- <entry text>\n 块（design 002 §4），由
+//     调用方追加进 engine.UserMessage.TurnTail（P1 预设计的 turn-tail 块
+//     通道——引擎侧以独立 text block 附在 user message 尾部）。
+//
+// 返回值仅为检索结果的文本块；绝不改 AppendSystemPrompt/MCPConfigJSON/
+// AllowedTools（SC-003 护栏由 memory_injection_test 钉死）。ctx 保留注入
+// 语义签名（plan 契约形状），当前检索为进程内内存操作不消费它。
+func (c *Controller) withMemoryRecall(ctx context.Context, text string) string {
+	if c.opts.Memory == nil || strings.TrimSpace(text) == "" {
+		return ""
+	}
+	k, budget := c.opts.Config.Memory.RecallTopK, c.opts.Config.Memory.RecallBudgetChars
+	if k <= 0 {
+		k = defaultRecallTopK
+	}
+	if budget <= 0 {
+		budget = defaultRecallBudgetChars
+	}
+	hits := c.opts.Memory.Search(text, k, budget)
+	if len(hits) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("[记忆召回]\n")
+	for _, h := range hits {
+		b.WriteString("- ")
+		b.WriteString(h.Text)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
 func (c *Controller) submit(ctx context.Context, msg engine.UserMessage) error {
+	// 记忆召回（M13/T13.2）：withMemoryRecall 的唯一调用点（C5 turn-tail
+	// 注入点唯一化，Task 10 lint 扫描面）。
+	tail := c.withMemoryRecall(ctx, msg.Text)
+	if tail != "" {
+		msg.TurnTail = append(msg.TurnTail, tail)
+	}
 	c.mu.Lock()
 	if c.closed || c.host == nil || c.engineDead {
 		// 引擎退出后拒绝新回合（fail-closed）：镜像以 EngineExited 收尾，
@@ -733,6 +805,12 @@ func (c *Controller) submit(ctx context.Context, msg engine.UserMessage) error {
 		PinnedModel:     c.opts.Config.DefaultModel,
 		Unattended:      c.opts.Unattended,
 	})
+	// 召回注入审计（SC-006：召回注入镜像可审计）：命中才留痕（0 条静默）。
+	// 块形状恒为 header + 每命中一条 "- " 行，行数即命中数。
+	if tail != "" {
+		c.publish(event.NoticeEvent{Seq: c.nextSeq(), Level: "info", IsMeta: true,
+			Content: fmt.Sprintf("记忆召回: %d 条命中，已注入本回合 turn tail", strings.Count(tail, "\n- "))})
+	}
 	if err := host.Send(ctx, msg); err != nil {
 		// Send 失败：泵不会有 result——本侧收口（无等待方，通道无需关闭）。
 		// 注意：本回合序号已消费（TurnStarted/send_failed 已入镜像），

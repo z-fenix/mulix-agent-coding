@@ -15,9 +15,11 @@ import (
 	"mulix/internal/engine"
 	"mulix/internal/event"
 	"mulix/internal/guard"
+	"mulix/internal/memory"
 	"mulix/internal/registry"
 	"mulix/internal/sessionx"
 	"mulix/internal/subagent"
+	"mulix/internal/tools/mulixmemory"
 	"mulix/internal/tools/mulixsubagent"
 )
 
@@ -181,16 +183,34 @@ func (o Options) assembleController(cfg config.Config, store *sessionx.Store, me
 	if hostFactory == nil {
 		hostFactory = productionHostFactory(o)
 	}
-	// 子代理工厂（M12/T12.4）：本会话作为父——子会话继承本会话审批桥；
-	// mulix stdio 条目不可产出（selfCommand 失败）时不接线（工厂 nil =
-	// 子代理禁用，Boot 面与 P1 逐字节一致）。
+	// 记忆库（M13/T13.2）：开关关 → 不开库（nil = control 零注入零检索，
+	// boot 面与 P1 逐字节一致）；开 → 解析进程内会话树唯一实例（子会话组装
+	// 复用父会话经工厂下传的同一实例）。Open 失败 = 记忆已启用而库不可用 →
+	// 组装失败（fail-closed，绝不静默降级）。
+	memStore, err := resolveMemoryStore(o, cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	// 子代理工厂（M12/T12.4）：本会话作为父——子会话继承本会话审批桥与
+	// 记忆库实例；mulix stdio 条目不可产出（selfCommand 失败）时不接线
+	//（工厂 nil = 子代理禁用，Boot 面与 P1 逐字节一致）。
 	var subFactory subagent.SessionFactory
 	if _, selfErr := selfCommand(); selfErr == nil {
-		subFactory = o.subagentSessionFactory(storeID(store), bridge, cfg, hostFactory, !unattended)
+		subFactory = o.subagentSessionFactory(storeID(store), bridge, cfg, hostFactory, !unattended, memStore)
 	}
 	// 子代理工具面条件注册（组合根职责）：注册期冻结（newRegistryServer 的
 	// NewServer）之前调用；Once 语义——进程内首次调用定型（配置进程内不变）。
 	mulixsubagent.RegisterConditional(nil, subFactory != nil)
+	// 记忆工具面条件注册（M13/T13.2 组合根职责，同上时序契约）：serve 子进程
+	// 直写 <workspace>/.mulix/memory（cwd 语义），前台注册钉注册面冻结语义。
+	mulixmemory.RegisterConditional(nil, o.Workspace, cfg.Tools.MemorySearch)
+	// Options.Memory 只接「真 nil 或真实例」：memStore 在开关关时是类型化
+	// nil *memory.Store，直接赋给接口会成「非 nil 接口持 nil 指针」——
+	// withMemoryRecall 的 nil 判定失效（typed-nil 陷阱）。
+	var memRecall control.MemoryRecall
+	if memStore != nil {
+		memRecall = memStore
+	}
 	c, err := control.NewController(control.Options{
 		HostFactory:      hostFactory,
 		Sink:             sink,
@@ -208,11 +228,36 @@ func (o Options) assembleController(cfg config.Config, store *sessionx.Store, me
 			MaxDepth:      cfg.Subagent.MaxDepth,
 			MaxConcurrent: cfg.Subagent.MaxConcurrent,
 		},
+		Memory: memRecall,
 	})
 	if err != nil {
 		return nil, nil, err
 	}
 	return c, bridge, nil
+}
+
+// resolveMemoryStore 解析本会话树的记忆库实例（M13/T13.2；Task 5 移交：
+// <workspace>/.mulix/memory 的拼装在组合根）：
+//   - [tools] memory_search=false → (nil, nil)——记忆关闭：不开库、不注入、
+//     工具不注册（cli 侧经 RegisterConditional(nil, ws, false) 跳过），行为
+//     与 P1 一致；
+//   - o.memoryStore 已预置（子会话组装：父会话经工厂沿 Options 副本下传）→
+//     原样复用——进程内每会话树恰一 *memory.Store 实例（Review Focus「记忆
+//     名称冲突」的组合根防线：多实例的内存 id 游标/BM25 索引会分叉）；
+//   - 否则打开 <workspace>/.mulix/memory。Open 失败 = 记忆已启用而库不可用
+//     → 组装失败（fail-closed，绝不静默降级）。
+func resolveMemoryStore(o Options, cfg config.Config) (*memory.Store, error) {
+	if !cfg.Tools.MemorySearch {
+		return nil, nil
+	}
+	if o.memoryStore != nil {
+		return o.memoryStore, nil
+	}
+	st, err := memory.Open(mulixmemory.Dir(o.Workspace))
+	if err != nil {
+		return nil, fmt.Errorf("memory store: %w", err)
+	}
+	return st, nil
 }
 
 // productionHostFactory 生产引擎宿主（engine.lock 校验在 Host 层——Task 17）。
@@ -245,12 +290,16 @@ func newRegistryServer() *registry.Server {
 // 记 parent_id、policy/gate 继承父 Approver），再 Submit(task) 驱动回合。
 // 会话序号 per-parent（每闭包一枚计数器——与「父 id 派生」的编号口径一致）。
 // 子会话组装复用同一 hostFactory（生产 = claude，测试 = FakeHost——引擎只是
-// 插件之一，design 002 §2.1）。
-func (o Options) subagentSessionFactory(parentID string, approvals *control.UserApprovalBridge, cfg config.Config, hostFactory func(engine.BootConfig) (engine.Host, error), attended bool) subagent.SessionFactory {
+// 插件之一，design 002 §2.1）。memStore 是父会话解析的记忆库实例（M13/T13.2：
+// 经 Options 副本下传，子会话与其共享同一实例——会话树恰一 Store；nil =
+// 记忆关闭，子会话同样关闭）。
+func (o Options) subagentSessionFactory(parentID string, approvals *control.UserApprovalBridge, cfg config.Config, hostFactory func(engine.BootConfig) (engine.Host, error), attended bool, memStore *memory.Store) subagent.SessionFactory {
 	var seq atomic.Int64
 	return func(ctx context.Context, task string) (subagent.SessionHandle, error) {
 		childID := fmt.Sprintf("%s-sub-%d", parentID, seq.Add(1))
-		return assembleSession(o, assembleSessionSpec{
+		o2 := o
+		o2.memoryStore = memStore // 会话树共享（nil = 记忆关闭——树级一致）
+		return assembleSession(o2, assembleSessionSpec{
 			HostFactory: hostFactory,
 			Root:        o.SessionsRoot,
 			UsageRoot:   o.UsageRoot,

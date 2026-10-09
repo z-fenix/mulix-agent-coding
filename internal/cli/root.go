@@ -23,6 +23,7 @@ import (
 
 	"mulix/internal/config"
 	"mulix/internal/engine"
+	"mulix/internal/memory"
 )
 
 // Version 是 mulix 版本（--version 输出；MCP implementation 元数据共用）。
@@ -46,6 +47,12 @@ type Options struct {
 	// doctorProbes 注入 doctor 探针（nil = 生产实探针；测试注入假探针保证
 	// 确定性——路由矩阵不依赖宿主机 node/claude 环境）。
 	doctorProbes *doctorProbes
+
+	// memoryStore 是会话树共享的记忆库实例（M13/T13.2）：主会话组装时按
+	// [tools] memory_search 打开，子代理工厂沿 Options 副本下传——进程内每
+	// 会话树恰一 *memory.Store 实例（Review Focus「记忆名称冲突」的组合根
+	// 防线：多实例的内存 id 游标/BM25 索引会分叉）。nil = 未决/记忆关闭。
+	memoryStore *memory.Store
 
 	// allowEngineDrift 指向根命令解析出的 flag 值（run 会话构造读取）。
 	allowEngineDrift *bool
