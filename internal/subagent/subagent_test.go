@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"mulix/internal/event"
 )
@@ -326,5 +327,107 @@ func TestDelegationEventsShareSeqStartingAtOne(t *testing.T) {
 	defer mu.Unlock()
 	if len(seqs) != 2 || seqs[0] != 1 || seqs[1] != 2 {
 		t.Fatalf("seqs = %v, want [1 2]（内部计数器从 1 起、全部委派事件共享）", seqs)
+	}
+}
+
+// 并发 Spawn 压力（评审修复轮 1）：10 个 goroutine 同时 Spawn（MaxConcurrent=默认 4）。
+// 工厂内设 barrier——全部 10 个涌入工厂或 500ms 超时才放行：旧实现（检查后即释放锁、
+// 无名额预约）在放行前不可能有登记完成，故全部 10 个都通过检查 → 确定性超发；
+// 正确实现必须恰好 4 成功 + 6 个含 "concurrent" 的错误，List 不超过 4 个 running。
+func TestSpawnConcurrentLimitUnderParallelSpawns(t *testing.T) {
+	const workers = 10
+	var (
+		fmu       sync.Mutex
+		inFactory int
+		release   = make(chan struct{})
+		idmu      sync.Mutex
+		n         int
+	)
+	m := newTestManager(t, func(ctx context.Context, task string) (SessionHandle, error) {
+		fmu.Lock()
+		inFactory++
+		if inFactory == workers {
+			close(release) // 全部涌入才放行（名额预约正确时到不了这个数，走超时分支）
+		}
+		fmu.Unlock()
+		select {
+		case <-release:
+		case <-time.After(500 * time.Millisecond):
+		}
+		idmu.Lock()
+		n++
+		h := &stubHandle{id: fmt.Sprintf("s%d", n), done: make(chan struct{})}
+		idmu.Unlock()
+		return h, nil
+	}, func(any) {})
+
+	var (
+		wg             sync.WaitGroup
+		resmu          sync.Mutex
+		successes      int
+		concurrentErrs int
+		otherErrs      int
+	)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := m.Spawn(context.Background(), "p", "task", 0)
+			resmu.Lock()
+			defer resmu.Unlock()
+			switch {
+			case err == nil:
+				successes++
+			case strings.Contains(err.Error(), "concurrent"):
+				concurrentErrs++
+			default:
+				otherErrs++
+			}
+		}()
+	}
+	wg.Wait()
+	if successes != 4 {
+		t.Fatalf("successes = %d, want 4（检查与登记之间的窗口不得超发）", successes)
+	}
+	if concurrentErrs != workers-4 || otherErrs != 0 {
+		t.Fatalf("concurrent errs = %d, want %d; other errs = %d, want 0", concurrentErrs, workers-4, otherErrs)
+	}
+	running := 0
+	for _, info := range m.List() {
+		if info.Status == StatusRunning {
+			running++
+		}
+	}
+	if running != 4 {
+		t.Fatalf("running = %d, want 4（List 不得显示超过 MaxConcurrent）", running)
+	}
+}
+
+// 自环拒绝（评审修复轮 1，可达判环路径）：工厂返回的句柄 id == parentID 即委派环，
+// 必须在登记前拒绝；被拒的 spawn 不得留下登记项、不得泄漏并发名额（随后仍可
+// 正常 Spawn 到默认限额 4，第 5 个被 "concurrent" 拒绝）。
+func TestSpawnRejectsSelfParentCycle(t *testing.T) {
+	n := 0
+	m := newTestManager(t, func(ctx context.Context, task string) (SessionHandle, error) {
+		n++
+		if n == 1 {
+			return &stubHandle{id: "sub1", done: make(chan struct{})}, nil // id == parentID：自环
+		}
+		return &stubHandle{id: fmt.Sprintf("s%d", n), done: make(chan struct{})}, nil
+	}, func(any) {})
+
+	if _, err := m.Spawn(context.Background(), "sub1", "task", 0); err == nil || !strings.Contains(err.Error(), "cycle") {
+		t.Fatalf("self-parent spawn err = %v, want cycle error", err)
+	}
+	if infos := m.List(); len(infos) != 0 {
+		t.Fatalf("rejected spawn left registry entries: %+v", infos)
+	}
+	for i := 0; i < 4; i++ {
+		if _, err := m.Spawn(context.Background(), "p", fmt.Sprintf("t%d", i), 0); err != nil {
+			t.Fatalf("spawn %d after self-loop rejection: %v", i, err)
+		}
+	}
+	if _, err := m.Spawn(context.Background(), "p", "t5", 0); err == nil || !strings.Contains(err.Error(), "concurrent") {
+		t.Fatalf("5th spawn should hit concurrent limit: %v", err)
 	}
 }

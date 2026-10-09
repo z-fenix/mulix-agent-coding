@@ -93,9 +93,10 @@ type Manager struct {
 
 	seq atomic.Int64 // 委派事件共享计数器，从 1 起
 
-	mu    sync.Mutex
-	subs  map[string]*subEntry
-	order []string // spawn 顺序（List / Close 的确定性遍历）
+	mu      sync.Mutex
+	pending int // 已过限额检查、尚未登记的 spawn 名额（限额口径 = running + pending）
+	subs    map[string]*subEntry
+	order   []string // spawn 顺序（List / Close 的确定性遍历）
 }
 
 // NewManager 校验必填项并应用默认限额。
@@ -133,24 +134,33 @@ func NewManager(opts Options) (*Manager, error) {
 }
 
 // Spawn 委派一个子代理：先判深度（depth >= MaxDepth → 错误），再判并发
-// （running >= MaxConcurrent → 错误），经 parentID 祖先链判环后调用工厂。
-// 成功即登记为 running、发布 DelegationStarted，并启动终态收口 goroutine。
+// （running + pending >= MaxConcurrent → 错误），经 parentID 祖先链判环后调用工厂。
+// 并发名额在检查锁内预约（pending）：检查与登记之间释放锁的窗口同样受限额约束，
+// 并发 Spawn 不可能超发。名额释放在本函数唯一出口收口（defer）：工厂失败/重复
+// id/自环被拒即释放，登记成功则转为 running 登记（口径不变）。成功即登记为
+// running、发布 DelegationStarted，并启动终态收口 goroutine。
 func (m *Manager) Spawn(ctx context.Context, parentID, task string, depth int) (string, error) {
 	m.mu.Lock()
 	if depth >= m.maxDepth {
 		m.mu.Unlock()
 		return "", fmt.Errorf("subagent: depth limit exceeded: depth %d >= max %d", depth, m.maxDepth)
 	}
-	running := m.runningLocked()
-	if running >= m.maxConcurrent {
+	inFlight := m.runningLocked() + m.pending
+	if inFlight >= m.maxConcurrent {
 		m.mu.Unlock()
-		return "", fmt.Errorf("subagent: concurrent limit exceeded: %d running >= max %d", running, m.maxConcurrent)
+		return "", fmt.Errorf("subagent: concurrent limit exceeded: %d in-flight >= max %d", inFlight, m.maxConcurrent)
 	}
 	if err := m.checkCycleLocked(parentID); err != nil {
 		m.mu.Unlock()
 		return "", err
 	}
+	m.pending++ // 预约并发名额：从此刻到本函数返回，唯一出口统一释放（含 panic）
 	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		m.pending--
+		m.mu.Unlock()
+	}()
 
 	handle, err := m.factory(ctx, task)
 	if err != nil {
@@ -159,9 +169,35 @@ func (m *Manager) Spawn(ctx context.Context, parentID, task string, depth int) (
 	subID := handle.ID()
 
 	m.mu.Lock()
+	regErr := m.registerLocked(handle, subID, parentID, task, depth, ctx)
+	m.mu.Unlock()
+	if regErr != nil {
+		return "", regErr
+	}
+
+	m.publish(event.DelegationStartedEvent{
+		Seq:          m.nextSeq(),
+		SubSessionID: subID,
+		Task:         task,
+		Depth:        depth,
+	})
+
+	go func() {
+		<-handle.Done()
+		m.reap(subID)
+	}()
+	return subID, nil
+}
+
+// registerLocked 在锁内校验并登记子代理：重复 id / 自环（工厂返回的句柄 id 等于
+// parentID——可达的判环路径）→ 错误；成功即登记为 running。并发名额的释放由
+// Spawn 的统一出口完成，此处不动 pending。调用方持锁。
+func (m *Manager) registerLocked(handle SessionHandle, subID, parentID, task string, depth int, ctx context.Context) error {
 	if _, dup := m.subs[subID]; dup {
-		m.mu.Unlock()
-		return "", fmt.Errorf("subagent: duplicate sub session id %q", subID)
+		return fmt.Errorf("subagent: duplicate sub session id %q", subID)
+	}
+	if subID == parentID {
+		return fmt.Errorf("subagent: delegation cycle detected: sub session %q cannot be its own parent", subID)
 	}
 	// kernel 关系（design §3.0）：每 spawn 一个子 Context，handle.Close 注册进
 	// 它——终态收口/取消时 Dispose 级联触发（幂等），先子后父语义由 kernel 保证。
@@ -177,20 +213,7 @@ func (m *Manager) Spawn(ctx context.Context, parentID, task string, depth int) (
 		childCtx: childCtx,
 	}
 	m.order = append(m.order, subID)
-	m.mu.Unlock()
-
-	m.publish(event.DelegationStartedEvent{
-		Seq:          m.nextSeq(),
-		SubSessionID: subID,
-		Task:         task,
-		Depth:        depth,
-	})
-
-	go func() {
-		<-handle.Done()
-		m.reap(subID)
-	}()
-	return subID, nil
+	return nil
 }
 
 // Poll 返回子代理当前状态；对已收口（Done 关闭）的 running 子代理就地完成终态
@@ -321,7 +344,10 @@ func (m *Manager) runningLocked() int {
 }
 
 // checkCycleLocked 沿 parentID 祖先链回溯判环（registry 内已登记的子代理才参与；
-// 链到主会话/未知父即终止）。调用方持锁。
+// 链到主会话/未知父即终止）。正规用法下 registry 按构造无环（id 唯一、父先于子
+// 登记、自环已在 Spawn 内拒绝），此回溯是防御畸形工厂的残留护栏：例如工厂把早前
+// 某 spawn 的未登记 parentID 当作新子会话 id 返回时，registry 仍可能成环——此
+// 回溯拦截后续 spawn 进入坏分量。调用方持锁。
 func (m *Manager) checkCycleLocked(parentID string) error {
 	e, ok := m.subs[parentID]
 	if !ok {
