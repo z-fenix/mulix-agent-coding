@@ -737,6 +737,12 @@ func (c *Controller) Submit(ctx context.Context, text string) error {
 	return c.submit(ctx, engine.UserMessage{Text: text})
 }
 
+// newlineFolding 把条目文本内的换行折叠为空格（评审修复轮 1 Minor-1）：
+// [记忆召回] 块的 bullet 形状 = 每条目恰一行——多行原文若不折叠会伪造
+// bullet 行（"\n- x" 混入）并虚增召回留痕计数。折叠只发生在注入点
+// （withMemoryRecall，格式唯一所有地）；store 保留用户原文。
+var newlineFolding = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ")
+
 // withMemoryRecall 是记忆召回的 turn-tail 注入函数（M13/T13.2；C5 注入点
 // 唯一化——**唯一调用点在 submit**，Task 10 lint 扫描钉此契约：user message
 // 组装只经本函数）。给定本回合用户输入：
@@ -768,7 +774,7 @@ func (c *Controller) withMemoryRecall(ctx context.Context, text string) string {
 	b.WriteString("[记忆召回]\n")
 	for _, h := range hits {
 		b.WriteString("- ")
-		b.WriteString(h.Text)
+		b.WriteString(newlineFolding.Replace(h.Text)) // 多行折叠：每条目恰一行（评审 Minor-1）
 		b.WriteString("\n")
 	}
 	return b.String()

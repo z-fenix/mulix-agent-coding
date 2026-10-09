@@ -253,6 +253,51 @@ func TestMemoryRecallBudgetTruncationRealStore(t *testing.T) {
 	}
 }
 
+// TestMemoryRecallFoldsMultilineEntryText 钉（评审修复轮 1 Minor-1）：多行
+// 条目文本在注入点折叠为单行——[记忆召回] 块的 bullet 形状（每条目恰一行）
+// 不得被原文换行伪造（"\n- x" 混入），召回留痕计数 = 真实条目数。
+func TestMemoryRecallFoldsMultilineEntryText(t *testing.T) {
+	stub := &stubMemoryRecall{hits: []memory.Entry{
+		{ID: "m1", Text: "第一行\n- 伪bullet\n第三行", SourceSession: "s1"},
+		{ID: "m2", Text: "单行条目", SourceSession: "s1"},
+	}}
+	fake := engine.NewFakeHost(resultTurn())
+	c := newTestControllerCapturingBoot(t, fake, &recordingSink{}, &engine.BootConfig{}, func(o *Options) {
+		o.Memory = stub
+	})
+	if err := c.NewSession(context.Background()); err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	if err := c.Submit(context.Background(), "hello"); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	sent := fake.Sent()
+	if len(sent) != 1 || len(sent[0].TurnTail) != 1 {
+		t.Fatalf("TurnTail = %#v, want 1 block", sent[0].TurnTail)
+	}
+	want := "[记忆召回]\n- 第一行 - 伪bullet 第三行\n- 单行条目\n"
+	if got := sent[0].TurnTail[0]; got != want {
+		t.Fatalf("recall block = %q, want %q（多行折叠为空格、恰两条目行）", got, want)
+	}
+	// 留痕计数 = 真实条目数 2（原文换行不得虚增）
+	mirror, err := c.Mirror().ReadAllEvents()
+	if err != nil {
+		t.Fatalf("read mirror: %v", err)
+	}
+	found := false
+	for _, ev := range mirror {
+		if n, ok := ev.(event.NoticeEvent); ok && strings.Contains(n.Content, "记忆召回") {
+			found = true
+			if !strings.Contains(n.Content, "2 条命中") {
+				t.Fatalf("recall notice = %q, want count 2（真实条目数）", n.Content)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("recall notice missing in mirror")
+	}
+}
+
 // TestMemorySessionEnvInjection 钉 ④：Memory 接线 + 注册面含 mulix 条目
 // （serve 子进程存在）→ Boot Env 携带 MULIX_MEMORY_SESSION=<mulix 会话 id>
 // （Boot Env 通道，绝不入 mcp-config——MULIX_SUBAGENT_CALLBACK 同款裁定）；

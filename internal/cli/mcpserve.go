@@ -10,10 +10,12 @@ import (
 	"syscall"
 
 	"mulix/internal/cache"
+	"mulix/internal/config"
 	"mulix/internal/event"
 	"mulix/internal/registry"
 	"mulix/internal/sessionx"
 	"mulix/internal/tools/mulixmemory"
+	"mulix/internal/tools/mulixsubagent"
 )
 
 // lineSink 是无人值守/骨架期的行式事件出口（TUI 是 attended 的正装出口——
@@ -115,15 +117,23 @@ func printReport(w io.Writer, sessionID string, rep cache.Report) {
 		sessionID, rep.Turns, rep.SessionHit*100, rep.Uncached, rep.Write, rep.Read, rep.Output, rep.Cost, rep.Saving, rep.ColdTurns)
 }
 
+// registerServeTools 是 serve 进程的组合根注册（评审修复轮 1 F1：注册面冻结
+// 前调用——前台 assembleController 与 serve 进程各自为政，进程内恰好一次）：
+//   - 子代理三件套：MULIX_SUBAGENT_CALLBACK 已注入 = control 已接线回调桥
+//     （Boot Env 通道随引擎进程树到达 serve 子进程）→ 注册；缺席 = fail-closed，
+//     工具不进引擎工具面（与工具自身 Execute 的 fail-closed 矩阵同向）；
+//   - 记忆三件套：[tools] memory_search=true → 注册（workspace = 进程 cwd，
+//     cwd 语义；同源分层配置与前台判定一致）。
+func registerServeTools(o Options, cfg config.Config) {
+	mulixsubagent.RegisterConditional(nil, os.Getenv("MULIX_SUBAGENT_CALLBACK") != "")
+	mulixmemory.RegisterConditional(nil, o.Workspace, cfg.Tools.MemorySearch)
+}
+
 // ServeMCP 实现 `mulix mcp serve`：以 stdio 传输运行内置工具服务器
 // （Boot 自 spawn 条目的对端——引擎经此直连 mulix 工具）。注册表在进程
-// 启动时定型：无条件工具经 init()（main 的空白导入触发）；条件工具在此
-// 组合根注册后、NewServer 冻结（serve 进程不设 SelfCommand——自引用嵌套）。
-//
-// 记忆工具条件注册（M13/T13.2）：serve 进程是自己的组合根——workspace =
-// 进程 cwd（引擎 cmd.Dir = 工作区，cwd 语义），配置与前台同源分层加载
-// （同一项目 mulix.toml → memory_search 开关两侧判定一致）。开关关时
-// memory_* 不注册（注册期冻结：工具面在进程启动期决定）。
+// 启动时定型：无条件工具经 init()（main 的空白导入触发）；条件工具经
+// registerServeTools 在此组合根注册后、NewServer 冻结（serve 进程不设
+// SelfCommand——自引用嵌套）。
 func ServeMCP(ctx context.Context, o Options) error {
 	serveCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -131,7 +141,7 @@ func ServeMCP(ctx context.Context, o Options) error {
 	if err != nil {
 		return fmt.Errorf("mcp serve: load config: %w", err)
 	}
-	mulixmemory.RegisterConditional(nil, o.Workspace, cfg.Tools.MemorySearch)
+	registerServeTools(o, cfg)
 	srv := registry.NewServer(registry.Options{Name: "mulix", Version: Version})
 	return srv.ServeStdio(serveCtx)
 }
