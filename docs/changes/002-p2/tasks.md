@@ -439,9 +439,10 @@ func TestSubagentCallbackBridge(t *testing.T) {
 
 **Files:**
 - Modify: `internal/cli/session.go`（SessionFactory 闭包：调 buildComponents 同序组装子会话——store.Create(parentID 衍生 id) + meter + policy/gate（继承父 Approver）+ controller；子 Controller 的 sink = 捕获式 no-op sink，事件落子镜像）
+- Modify: `internal/subagent/subagent.go`（**补 `func (m *Manager) Summary(subID string) (string, bool)` 访问器**——completed/failed 终态返回 (handle.Summary(), true)；running/unknown → ("", false)。Task 3 裁定：poll 应答 summary 来源，FR-102 最终消息回收）
 - Modify: `internal/cli/tui*.go`（`/agents` 面板：List() 渲染 + c 取消）
 - Modify: `internal/config/config.go`（`[subagent] max_depth/max_concurrent`，默认 3/4）
-- Test: `internal/cli/subagent_wiring_test.go`
+- Test: `internal/cli/subagent_wiring_test.go`、`internal/subagent/subagent_test.go`（Summary 访问器测试追加）
 
 **Interfaces:**
 - Consumes: Task 2/3 全部签名。
@@ -469,9 +470,14 @@ func TestSubagentConfigDefaults(t *testing.T) {
 }
 
 func TestSubagentDisabledWhenFactoryNil(t *testing.T) {
-	// Options.SubagentFactory == nil：cli 不调 RegisterConditional(enabled=true)
-	// → 注册表无 mulix_spawn 条目，Boot Env 无 MULIX_SUBAGENT_CALLBACK，
+	// Options.SubagentFactory == nil（Task 3 裁定：disabled 断言走 boot face，
+	// 注册表全局态跨测试共享不可反向断言）：Boot Env 无 MULIX_SUBAGENT_CALLBACK，
 	// boot 面与 P1 逐字节一致。
+}
+
+func TestManagerSummaryAccessor(t *testing.T) {
+	// Summary(subID)：终态（completed/failed）→ (handle.Summary(), true)；
+	// running → ("", false)；unknown id → ("", false)。TDD 先行。
 }
 ```
 
