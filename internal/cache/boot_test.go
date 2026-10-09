@@ -278,3 +278,182 @@ func TestComposeSystemPromptGolden(t *testing.T) {
 		t.Fatalf("golden mismatch:\n got: %q\nwant: %q", artifact.AppendSystemPrompt, want)
 	}
 }
+
+// ---- M14/Task 7：外部 MCP server 配置透传 ----
+
+// parsedMCPConfig 是外部条目测试的 mcp-config 解析形状（P1 形状测试同款）。
+type parsedMCPConfig struct {
+	MCPServers map[string]struct {
+		Type    string            `json:"type"`
+		Command string            `json:"command"`
+		Args    []string          `json:"args"`
+		Env     map[string]string `json:"env"`
+	} `json:"mcpServers"`
+}
+
+func parseMCPConfig(t *testing.T, raw string) parsedMCPConfig {
+	t.Helper()
+	var parsed parsedMCPConfig
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		t.Fatalf("mcp-config not json: %v\n%s", err, raw)
+	}
+	return parsed
+}
+
+// TestComposeMergesExternalServers 钉 M14 ①：两个外部 server + 内置 mulix →
+// mcp-config 恰 3 条目、名称排序字节序（沿用 P1 composeMCPConfig 的 map 序列化
+// 确定性——不实现自定义顺序序列化），两次 Compose 逐字节一致（SC-003 护栏
+// 扩展到外部条目）。输出条目形状沿 P1：{"type":"stdio","command","args","env"}。
+func TestComposeMergesExternalServers(t *testing.T) {
+	cfg := baseCfg()
+	cfg.MCP.Servers = []config.MCPServerDecl{
+		{Name: "zeta", Command: []string{"npx", "-y", "@zeta/mcp"}},
+		{Name: "alpha", Command: []string{"python", "-m", "alpha_mcp"}, Env: map[string]string{"A": "1"}},
+	}
+	reg := fakeRegistry{servers: []MCPServer{{Name: "mulix", Command: []string{"mulix", "mcp", "serve"}}}}
+	a1, err := Compose(cfg, "w", reg)
+	if err != nil {
+		t.Fatalf("compose 1: %v", err)
+	}
+	a2, err := Compose(cfg, "w", reg)
+	if err != nil {
+		t.Fatalf("compose 2: %v", err)
+	}
+	if a1.MCPConfigJSON != a2.MCPConfigJSON {
+		t.Fatalf("MCPConfigJSON not byte-stable with external entries:\n%s\n---\n%s", a1.MCPConfigJSON, a2.MCPConfigJSON)
+	}
+	if a1.Fingerprint != a2.Fingerprint {
+		t.Fatal("Fingerprint not byte-stable with external entries")
+	}
+	parsed := parseMCPConfig(t, a1.MCPConfigJSON)
+	if len(parsed.MCPServers) != 3 {
+		t.Fatalf("got %d servers, want 3 (2 external + built-in mulix): %s", len(parsed.MCPServers), a1.MCPConfigJSON)
+	}
+	// 字节级：名称排序 alpha < mulix < zeta
+	iAlpha := strings.Index(a1.MCPConfigJSON, `"alpha"`)
+	iMulix := strings.Index(a1.MCPConfigJSON, `"mulix"`)
+	iZeta := strings.Index(a1.MCPConfigJSON, `"zeta"`)
+	if iAlpha < 0 || iMulix < 0 || iZeta < 0 || iAlpha > iMulix || iMulix > iZeta {
+		t.Fatalf("servers not name-sorted in bytes: %s", a1.MCPConfigJSON)
+	}
+	// 外部条目形状（registry 条目同款：stdio + command/args + env 静态值）
+	a := parsed.MCPServers["alpha"]
+	if a.Type != "stdio" || a.Command != "python" ||
+		!reflect.DeepEqual(a.Args, []string{"-m", "alpha_mcp"}) || a.Env["A"] != "1" {
+		t.Fatalf("alpha def wrong: %+v", a)
+	}
+	if z := parsed.MCPServers["zeta"]; z.Command != "npx" || !reflect.DeepEqual(z.Args, []string{"-y", "@zeta/mcp"}) {
+		t.Fatalf("zeta def wrong: %+v", z)
+	}
+	if m := parsed.MCPServers["mulix"]; m.Command != "mulix" || !reflect.DeepEqual(m.Args, []string{"mcp", "serve"}) {
+		t.Fatalf("built-in mulix def wrong: %+v", m)
+	}
+}
+
+// TestComposeRejectsReservedMulixName 钉 M14 ②：外部条目占用内置保留名 mulix
+// → Compose error（fail-closed，绝不静默覆盖/共存——design 002 §5「内置名
+// mulix 保留」）。有内置条目时是重名冲突；无内置条目（空注册面）时保留名
+// 同样拒绝。
+func TestComposeRejectsReservedMulixName(t *testing.T) {
+	cfg := baseCfg()
+	cfg.MCP.Servers = []config.MCPServerDecl{{Name: "mulix", Command: []string{"evil"}}}
+	builtin := fakeRegistry{servers: []MCPServer{{Name: "mulix", Command: []string{"mulix", "mcp", "serve"}}}}
+	if _, err := Compose(cfg, "w", builtin); err == nil {
+		t.Fatal("external server named mulix must fail compose (built-in present)")
+	}
+	if _, err := Compose(cfg, "w", fakeRegistry{}); err == nil {
+		t.Fatal("reserved name mulix must fail compose even without the built-in entry")
+	}
+}
+
+// TestComposeRejectsEmptyExternalCommand 钉 M14 ③：外部条目 command 空 →
+// Compose error（与 P1 registry 条目的空 command 校验同一错误面）。
+func TestComposeRejectsEmptyExternalCommand(t *testing.T) {
+	cfg := baseCfg()
+	cfg.MCP.Servers = []config.MCPServerDecl{{Name: "broken", Command: nil}}
+	if _, err := Compose(cfg, "w", fakeRegistry{}); err == nil || !strings.Contains(err.Error(), "empty command") {
+		t.Fatalf("empty external command must fail compose, got %v", err)
+	}
+}
+
+// TestComposeMCPToolTimeoutEnv 钉 M14 ④：timeout_ms 计算为引擎 env
+// MCP_TOOL_TIMEOUT（Boot Env 通道面——与回调地址同款 "KEY=VALUE" 串）；
+// 多 server 取最小值、单 server 用其声明值、未声明用默认 60000；
+// 超时绝不进 mcp-config 字节（SC-003 同款裁定：mcp-config 面只含 server 定义），
+// 但入启动面指纹（BootArtifact 新字段必须进摘要——fingerprint 维护注）。
+func TestComposeMCPToolTimeoutEnv(t *testing.T) {
+	cfg := baseCfg()
+	cfg.MCP.Servers = []config.MCPServerDecl{
+		{Name: "slow", Command: []string{"s"}, TimeoutMS: 120000},
+		{Name: "fast", Command: []string{"f"}, TimeoutMS: 30000},
+	}
+	art, err := Compose(cfg, "w", fakeRegistry{})
+	if err != nil {
+		t.Fatalf("compose multi: %v", err)
+	}
+	if want := []string{"MCP_TOOL_TIMEOUT=30000"}; !reflect.DeepEqual(art.EngineEnv, want) {
+		t.Fatalf("EngineEnv = %v, want %v (min across servers)", art.EngineEnv, want)
+	}
+	if strings.Contains(art.MCPConfigJSON, "MCP_TOOL_TIMEOUT") {
+		t.Fatalf("MCP_TOOL_TIMEOUT must never enter mcp-config bytes: %s", art.MCPConfigJSON)
+	}
+	solo := baseCfg()
+	solo.MCP.Servers = []config.MCPServerDecl{{Name: "one", Command: []string{"x"}, TimeoutMS: 45000}}
+	art2, err := Compose(solo, "w", fakeRegistry{})
+	if err != nil {
+		t.Fatalf("compose single: %v", err)
+	}
+	if want := []string{"MCP_TOOL_TIMEOUT=45000"}; !reflect.DeepEqual(art2.EngineEnv, want) {
+		t.Fatalf("EngineEnv = %v, want %v (single server declared value)", art2.EngineEnv, want)
+	}
+	def := baseCfg()
+	def.MCP.Servers = []config.MCPServerDecl{{Name: "d", Command: []string{"x"}}}
+	art3, err := Compose(def, "w", fakeRegistry{})
+	if err != nil {
+		t.Fatalf("compose default: %v", err)
+	}
+	if want := []string{"MCP_TOOL_TIMEOUT=60000"}; !reflect.DeepEqual(art3.EngineEnv, want) {
+		t.Fatalf("EngineEnv = %v, want %v (default 60000)", art3.EngineEnv, want)
+	}
+	// 仅 timeout 不同（mcp-config 字节不变）→ 指纹必须变化（env 入启动面摘要）
+	onlyTimeout := baseCfg()
+	onlyTimeout.MCP.Servers = []config.MCPServerDecl{
+		{Name: "slow", Command: []string{"s"}, TimeoutMS: 120000},
+		{Name: "fast", Command: []string{"f"}, TimeoutMS: 31000},
+	}
+	art4, err := Compose(onlyTimeout, "w", fakeRegistry{})
+	if err != nil {
+		t.Fatalf("compose timeout-only delta: %v", err)
+	}
+	if art4.Fingerprint == art.Fingerprint {
+		t.Fatal("fingerprint must react to MCP_TOOL_TIMEOUT (launch-face field)")
+	}
+}
+
+// TestComposeExternalEnvStaticPassthrough 钉 M14 ⑤：外部条目 env 静态透传进
+// mcp-config（与声明逐键一致——mulix 不做运行期注入，终评 Important-1 教训）；
+// 未声明 env 的条目无 env 键（P1 registry 条目同款形状）。
+func TestComposeExternalEnvStaticPassthrough(t *testing.T) {
+	cfg := baseCfg()
+	env := map[string]string{"GITHUB_TOKEN": "t0k", "LOG_LEVEL": "debug"}
+	cfg.MCP.Servers = []config.MCPServerDecl{{Name: "gh", Command: []string{"npx", "-y", "gh-mcp"}, Env: env}}
+	art, err := Compose(cfg, "w", fakeRegistry{})
+	if err != nil {
+		t.Fatalf("compose: %v", err)
+	}
+	parsed := parseMCPConfig(t, art.MCPConfigJSON)
+	gh := parsed.MCPServers["gh"]
+	if !reflect.DeepEqual(gh.Env, env) {
+		t.Fatalf("external env must pass through statically: got %v, want %v", gh.Env, env)
+	}
+	plain := baseCfg()
+	plain.MCP.Servers = []config.MCPServerDecl{{Name: "plain", Command: []string{"p"}}}
+	art2, err := Compose(plain, "w", fakeRegistry{})
+	if err != nil {
+		t.Fatalf("compose plain: %v", err)
+	}
+	parsed2 := parseMCPConfig(t, art2.MCPConfigJSON)
+	if e := parsed2.MCPServers["plain"].Env; len(e) != 0 {
+		t.Fatalf("decl without env must not carry an env key: %v", e)
+	}
+}

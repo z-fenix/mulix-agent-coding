@@ -20,6 +20,7 @@ type Config struct {
 	Tools        ToolsConfig       `toml:"tools"`
 	Memory       MemoryConfig      `toml:"memory"`
 	Subagent     SubagentConfig    `toml:"subagent"`
+	MCP          MCPConfig         `toml:"mcp"`
 }
 
 // CacheConfig 是缓存三层可观测性相关配置。
@@ -59,6 +60,24 @@ type SubagentConfig struct {
 type MemoryConfig struct {
 	RecallTopK        int `toml:"recall_top_k"`        // 每回合召回条数上限（默认 3）
 	RecallBudgetChars int `toml:"recall_budget_chars"` // 注入预算上限（rune 数；默认 2000——spec Assumptions）
+}
+
+// MCPConfig 是外部 MCP server 声明面（P2/M14；design 002 §5：配置透传——
+// mulix 只声明，引擎原生托管外部 server 进程，mulix 不代理协议）。
+type MCPConfig struct {
+	Servers []MCPServerDecl `toml:"servers"`
+}
+
+// MCPServerDecl 是单个外部 MCP server 的声明（[[mcp.servers]] 数组元素）。
+// Command 是 argv 全量（argv[0] = 可执行文件）；Env 静态透传进 mcp-config
+// （不做运行期注入——终评 Important-1 教训）；TimeoutMS 缺省 0 = Compose 侧
+// 解释为默认 60000（R1：以引擎 env MCP_TOOL_TIMEOUT 透传，全组取最小值）。
+// 名称校验（保留名/重名/空名）与空 command 校验在 cache.Compose 收口。
+type MCPServerDecl struct {
+	Name      string            `toml:"name"`
+	Command   []string          `toml:"command"`
+	Env       map[string]string `toml:"env"`
+	TimeoutMS int               `toml:"timeout_ms"`
 }
 
 func defaultConfig() Config {

@@ -34,7 +34,13 @@ type BootArtifact struct {
 	AllowedTools       []string // --allowedTools（config allow 清单，显式顺序去重）
 	DisallowedTools    []string // --disallowedTools（config deny 清单，显式顺序去重）
 	PermissionMode     string   // --permission-mode（引擎侧映射值）
-	Fingerprint        string   // 启动面 sha256 前 16 hex（同输入同指纹）
+	// EngineEnv 是引擎进程 env 追加面（Boot Env 通道——与回调地址同款的
+	// "KEY=VALUE" 串，由 control 并入 boot.Env）。M14 唯一条目
+	// MCP_TOOL_TIMEOUT（R1：外部工具超时由引擎原生读取，mulix 不代理协议；
+	// 多外部 server 取最小 timeout_ms，缺省 60000）。config 派生、启动期
+	// 冻结 → 与逐次变化的回调地址不同面，可入指纹。
+	EngineEnv   []string // "KEY=VALUE" 串（Boot Env 通道；绝不入 mcp-config 字节）
+	Fingerprint string   // 启动面 sha256 前 16 hex（同输入同指纹）
 }
 
 // systemPromptTemplate 是 C1 静态模板：%s 依次为 workspace、model、
@@ -73,7 +79,7 @@ func Compose(cfg config.Config, workspace string, reg Registry) (BootArtifact, e
 
 	prompt := fmt.Sprintf(systemPromptTemplate, workspace, cfg.DefaultModel, cfg.Permissions.Preset)
 
-	mcpJSON, err := composeMCPConfig(reg)
+	mcpJSON, engineEnv, err := composeMCPConfig(reg, cfg.MCP.Servers)
 	if err != nil {
 		return BootArtifact{}, err
 	}
@@ -84,51 +90,83 @@ func Compose(cfg config.Config, workspace string, reg Registry) (BootArtifact, e
 		AllowedTools:       dedupePreserveOrder(cfg.Permissions.Allow),
 		DisallowedTools:    dedupePreserveOrder(cfg.Permissions.Deny),
 		PermissionMode:     mode,
+		EngineEnv:          engineEnv,
 	}
 	artifact.Fingerprint = fingerprint(artifact)
 	return artifact, nil
 }
 
+// defaultMCPToolTimeoutMS 是外部 server 未声明 timeout_ms 时的引擎工具超时
+// 默认（design 002 §5 / FR-108：默认 60 秒——与引擎原生默认一致，R1）。
+const defaultMCPToolTimeoutMS = 60000
+
+// reservedBuiltinName 是内置 mulix stdio 条目的保留名（design 002 §5「内置名
+// mulix 保留」）：外部声明占用即 Compose 拒绝——空注册面（无内置条目）时
+// 同样成立，保留名语义不随接线变化。
+const reservedBuiltinName = "mulix"
+
 // composeMCPConfig 稳定序列化 --mcp-config 内容：
 // 服务器按名字排序（sort.Slice 归一是第一道；最终字节序由 encoding/json 的
 // map 键排序保证——文档化行为，两层都在时改名/重排不会破坏稳定性）、
 // env 键由 encoding/json 排序、args 保持显式顺序。
-func composeMCPConfig(reg Registry) (string, error) {
-	servers := map[string]any{}
+// M14 合并：内置条目（registry）先并入、外部声明（[mcp.servers]）按声明序
+// 后并入——输出仍由 map 序列化按名排序，输入序不影响字节（SC-003 逐字节
+// 稳定沿用，不实现自定义顺序序列化）。外部 env 静态透传（不做运行期注入）；
+// 外部 timeout_ms 取全组最小值（缺省 60000）作为引擎 env MCP_TOOL_TIMEOUT
+// 返回（Boot Env 通道，绝不入 mcp-config 字节——与回调地址同一裁定）。
+// 校验（P1 名校验原样保留 + 外部保留名）：空名、空 command、重名、外部条目
+// 占用内置保留名 → error（fail-closed boot，绝不静默覆盖）。
+func composeMCPConfig(reg Registry, external []config.MCPServerDecl) (string, []string, error) {
+	timeoutMS := defaultMCPToolTimeoutMS
+	normalized := make([]MCPServer, 0)
 	if reg != nil {
-		normalized := make([]MCPServer, 0)
 		normalized = append(normalized, reg.MCPServers()...)
-		sort.Slice(normalized, func(i, j int) bool { return normalized[i].Name < normalized[j].Name })
-		for _, s := range normalized {
-			if s.Name == "" {
-				return "", fmt.Errorf("cache: mcp server with empty name")
-			}
-			if len(s.Command) == 0 {
-				return "", fmt.Errorf("cache: mcp server %q has empty command", s.Name)
-			}
-			if _, dup := servers[s.Name]; dup {
-				// 重名会让「哪个定义存活」依赖输入顺序——破坏 order-insensitivity，
-				// 且被覆盖的工具从冻结面静默消失。boot 拒绝，不静默覆盖。
-				return "", fmt.Errorf("cache: duplicate mcp server name %q", s.Name)
-			}
-			def := map[string]any{
-				"type":    "stdio",
-				"command": s.Command[0],
-			}
-			if len(s.Command) > 1 {
-				def["args"] = s.Command[1:]
-			}
-			if len(s.Env) > 0 {
-				def["env"] = s.Env
-			}
-			servers[s.Name] = def
+	}
+	for _, d := range external {
+		if d.Name == reservedBuiltinName {
+			return "", nil, fmt.Errorf("cache: mcp server name %q is reserved for the built-in mulix entry", d.Name)
 		}
+		normalized = append(normalized, MCPServer{Name: d.Name, Command: d.Command, Env: d.Env})
+		effective := d.TimeoutMS
+		if effective <= 0 {
+			effective = defaultMCPToolTimeoutMS
+		}
+		if effective < timeoutMS {
+			timeoutMS = effective
+		}
+	}
+	sort.Slice(normalized, func(i, j int) bool { return normalized[i].Name < normalized[j].Name })
+	servers := map[string]any{}
+	for _, s := range normalized {
+		if s.Name == "" {
+			return "", nil, fmt.Errorf("cache: mcp server with empty name")
+		}
+		if len(s.Command) == 0 {
+			return "", nil, fmt.Errorf("cache: mcp server %q has empty command", s.Name)
+		}
+		if _, dup := servers[s.Name]; dup {
+			// 重名会让「哪个定义存活」依赖输入顺序——破坏 order-insensitivity，
+			// 且被覆盖的工具从冻结面静默消失。boot 拒绝，不静默覆盖。
+			return "", nil, fmt.Errorf("cache: duplicate mcp server name %q", s.Name)
+		}
+		def := map[string]any{
+			"type":    "stdio",
+			"command": s.Command[0],
+		}
+		if len(s.Command) > 1 {
+			def["args"] = s.Command[1:]
+		}
+		if len(s.Env) > 0 {
+			def["env"] = s.Env
+		}
+		servers[s.Name] = def
 	}
 	payload, err := json.Marshal(map[string]any{"mcpServers": servers})
 	if err != nil {
-		return "", fmt.Errorf("cache: marshal mcp-config: %w", err)
+		return "", nil, fmt.Errorf("cache: marshal mcp-config: %w", err)
 	}
-	return string(payload), nil
+	env := []string{fmt.Sprintf("MCP_TOOL_TIMEOUT=%d", timeoutMS)}
+	return string(payload), env, nil
 }
 
 // dedupePreserveOrder 去重保首现（清单显式顺序，design §8.1「列表显式顺序」）。
@@ -156,12 +194,14 @@ func fingerprint(a BootArtifact) string {
 		AllowedTools       []string `json:"allowed_tools"`
 		DisallowedTools    []string `json:"disallowed_tools"`
 		PermissionMode     string   `json:"permission_mode"`
+		EngineEnv          []string `json:"engine_env"`
 	}{
 		AppendSystemPrompt: a.AppendSystemPrompt,
 		MCPConfigJSON:      a.MCPConfigJSON,
 		AllowedTools:       a.AllowedTools,
 		DisallowedTools:    a.DisallowedTools,
 		PermissionMode:     a.PermissionMode,
+		EngineEnv:          a.EngineEnv,
 	})
 	if err != nil {
 		// 结构体 marshal 不会失败；防御性兜底

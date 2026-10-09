@@ -353,6 +353,60 @@ func TestMemoryConfigDefaultsAndLayering(t *testing.T) {
 	}
 }
 
+// TestMCPConfigDefaultsAndLayering pins（P2 Global Constraints：新配置键进
+// 默认值与分层加载测试）：[mcp] servers 默认空；[[mcp.servers]] 数组解析
+// name/command/env/timeout_ms（design 002 §5）；缺省键保零值（env 空、
+// timeout_ms 0 = Compose 侧默认 60000）；跨层整组替换（数组语义，非拼接，
+// TestListReplacementPinned 同款裁定）。
+func TestMCPConfigDefaultsAndLayering(t *testing.T) {
+	cfg, _, err := NewLoader().Load(Flags{}, Paths{})
+	if err != nil {
+		t.Fatalf("load defaults: %v", err)
+	}
+	if len(cfg.MCP.Servers) != 0 {
+		t.Fatalf("default mcp servers must be empty: %+v", cfg.MCP.Servers)
+	}
+	project := writeTOML(t, `
+[[mcp.servers]]
+name = "github"
+command = ["npx", "-y", "@modelcontextprotocol/server-github"]
+env = { GITHUB_TOKEN = "t0k" }
+timeout_ms = 30000
+
+[[mcp.servers]]
+name = "fs"
+command = ["npx", "-y", "@modelcontextprotocol/server-fs"]
+`)
+	cfg2, _, err := NewLoader().Load(Flags{}, Paths{Project: project})
+	if err != nil {
+		t.Fatalf("load project layer: %v", err)
+	}
+	if len(cfg2.MCP.Servers) != 2 {
+		t.Fatalf("project layer servers = %+v, want 2 declarations", cfg2.MCP.Servers)
+	}
+	gh := cfg2.MCP.Servers[0]
+	if gh.Name != "github" ||
+		!reflect.DeepEqual(gh.Command, []string{"npx", "-y", "@modelcontextprotocol/server-github"}) ||
+		gh.TimeoutMS != 30000 || gh.Env["GITHUB_TOKEN"] != "t0k" {
+		t.Fatalf("github decl = %+v", gh)
+	}
+	// 缺省键保零值：未写 env/timeout_ms 的声明不误取默认（Compose 侧解释）
+	fs := cfg2.MCP.Servers[1]
+	if fs.Name != "fs" || !reflect.DeepEqual(fs.Command, []string{"npx", "-y", "@modelcontextprotocol/server-fs"}) ||
+		fs.TimeoutMS != 0 || len(fs.Env) != 0 {
+		t.Fatalf("fs decl = %+v", fs)
+	}
+	// 数组跨层整组替换：项目层 servers 覆盖用户层（不拼接）
+	user := writeTOML(t, "[[mcp.servers]]\nname = \"user-only\"\ncommand = [\"u\"]\n")
+	cfg3, _, err := NewLoader().Load(Flags{}, Paths{User: user, Project: project})
+	if err != nil {
+		t.Fatalf("load user+project layers: %v", err)
+	}
+	if len(cfg3.MCP.Servers) != 2 || cfg3.MCP.Servers[0].Name != "github" {
+		t.Fatalf("project layer must replace the user servers array: %+v", cfg3.MCP.Servers)
+	}
+}
+
 func warnMentions(warnings []string, key string) bool {
 	for _, w := range warnings {
 		if strings.Contains(w, key) {
