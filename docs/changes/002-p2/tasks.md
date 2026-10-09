@@ -481,6 +481,8 @@ func TestManagerSummaryAccessor(t *testing.T) {
 }
 ```
 
+**Task 3 评审移交（必须落实）**：桥恒传 depth=0（工具契约无 depth 字段）——若 Task 4 工厂接线不给真实深度来源，MaxDepth 限额是死代码。落点：SessionFactory 闭包按父镜像委派链深度计算 depth（如 `parentDepth+1`，父深度从 control 持有的委派链状态取），经 Spawn 传入——e2e 断言「祖父→父→子第三层 spawn 被拒（错误含 depth）」钉死可达性。
+
 （实现时按 P1 cli 既有 e2e/stub 模式补齐三个测试的完整断言体——TestSubagentWiringEndToEnd 复用 P1 FakeHost 工具调用注入路径。）
 - [ ] **Step 2: 验证 RED** — `go test ./internal/cli/ -count=1`；Expected: FAIL。
 - [ ] **Step 3: 最小实现**——cli：`assembleSession` 抽取（buildComponents 改为复用它）+ Factory 闭包（子 Approvals 继承父 bridge）+ control Options.SubagentFactory 传递 + **cli 在注册面冻结前调 `mulixsubagent.RegisterConditional(srv, factory != nil)`** + config `[subagent] max_depth/max_concurrent` 解析（默认 3/4）；TUI：`/agents` 面板（bubbletea 列表视图：子会话 id/状态/任务/深度；`c` 键调 mgr.Cancel；ctrl.Subagent()==nil 时命令提示未启用）。
