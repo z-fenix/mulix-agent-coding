@@ -27,6 +27,11 @@ func TestNoSecondSystemPromptPath(t *testing.T) {
 		"internal/engine/claudehost.go":      true,
 		"internal/engine/claudehost_test.go": true,
 		"internal/guard/repolint_test.go":    true,
+		// M17（Task 10）：本规则并入 internal/lint（design 002 §6）——规则定义处
+		// 与其测试必然包含标记字面量（本注释既定程序：「如属合法消费面请先更新
+		// 本规则的 allowlist 并过评审」）。生产扫描仍由本测试与本工具双保险。
+		"internal/lint/rules.go":     true,
+		"internal/lint/lint_test.go": true,
 	}
 
 	var offenders []string

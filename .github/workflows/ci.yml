@@ -37,6 +37,8 @@ jobs:
           version: v1.64.8 # pin 与 .golangci.version 同源（手工同步）
       - name: verify pin file
         run: grep -q "1.64.8" .golangci.version
+      - name: mulix lint layers（分层棘轮门禁——M17/design 002 §6）
+        run: go run ./cmd/mulix lint layers
 
   cross:
     name: cross-compile smoke

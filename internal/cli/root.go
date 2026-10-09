@@ -10,6 +10,8 @@
 //   - mulix doctor     自检（Task 29 实装；本任务为骨架声明）
 //   - mulix mcp serve  以 stdio MCP 服务器运行内置工具（Boot 自 spawn 条目）
 //   - mulix instructions 指令文件快照（P2 M15：FR-109 来源文件与内容摘要）
+//   - mulix lint layers 分层检查门禁（P2 M17：design 002 §6——导入矩阵 /
+//     注入点唯一 / 文件职责棘轮；违规 exit 1）
 package cli
 
 import (
@@ -137,6 +139,7 @@ func NewRootCommand(opts Options) *cobra.Command {
 	root.AddCommand(newDoctorCommand(&opts))
 	root.AddCommand(newMCPCommand(&opts))
 	root.AddCommand(newInstructionsCommand(&opts))
+	root.AddCommand(newLintCommand(&opts))
 	return root
 }
 
