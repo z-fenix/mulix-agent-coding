@@ -9,6 +9,7 @@
 //   - mulix cache      记账汇总（跨进程权威口径 cache.ReadUsageReport）
 //   - mulix doctor     自检（Task 29 实装；本任务为骨架声明）
 //   - mulix mcp serve  以 stdio MCP 服务器运行内置工具（Boot 自 spawn 条目）
+//   - mulix instructions 指令文件快照（P2 M15：FR-109 来源文件与内容摘要）
 package cli
 
 import (
@@ -135,6 +136,7 @@ func NewRootCommand(opts Options) *cobra.Command {
 	root.AddCommand(newCacheCommand(&opts))
 	root.AddCommand(newDoctorCommand(&opts))
 	root.AddCommand(newMCPCommand(&opts))
+	root.AddCommand(newInstructionsCommand(&opts))
 	return root
 }
 

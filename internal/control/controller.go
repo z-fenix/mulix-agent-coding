@@ -8,14 +8,17 @@ package control
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -140,6 +143,12 @@ type Controller struct {
 	permCallback *permissionCallbackServer // 权限回路跨进程桥（真实引擎 --permission-prompt-tool 传输）
 	subCallback  *subagentCallbackServer   // 子代理操作跨进程桥（M12：serve 子进程工具 → Manager）
 	subMgr       *subagent.Manager         // 子代理编排器（Factory 非空且注册面含 mulix 条目时组装；Task 4 Subagent() 消费）
+
+	// 指令文件快照与 watcher（M15/FR-109 前半）：start 成功序列尾装载/启动；
+	// Close 先置 closed 再停 watcher（与回调桥同一收口纪律）。快照只供
+	// watcher 与 mulix instructions 消费——绝不改 Boot 面（SC-003）。
+	instructionSnaps map[string]instructionSnap
+	instrWatch       *InstructionWatcher
 
 	pumpDone chan struct{} // 泵退出信号（Close 等待）
 	initSeen chan struct{} // 首个 init 消费完成（NewSession 等待）
@@ -309,7 +318,6 @@ func (c *Controller) start(ctx context.Context, boot engine.BootConfig) error {
 		if boot.ResumeEngineSessionID != "" {
 			c.logResumeChain(boot.ResumeEngineSessionID, mirrorEngineID, metaErr)
 		}
-		return nil
 	case <-c.pumpDone: // 引擎在 init 前就退出——快速失败，不等 ctx 超时
 		return errors.New("control: engine exited before init")
 	case <-time.After(initGrace):
@@ -323,10 +331,14 @@ func (c *Controller) start(ctx context.Context, boot engine.BootConfig) error {
 			c.resumeMetaErr = metaErr
 			c.mu.Unlock()
 		}
-		return nil
 	case <-ctx.Done():
 		return fmt.Errorf("control: waiting init: %w", ctx.Err())
 	}
+	// 指令文件快照 + 变更轮询（M15/FR-109 前半）：启动成功（含 init 宽限
+	// 放行）才装载与起 watcher——启动失败路径不起（无 goroutine 泄漏）。
+	// 快照绝不改 Boot 面（SC-003：system prompt/mcp-config 字节与 P1 一致）。
+	c.startInstructionWatcher()
+	return nil
 }
 
 // logResumeChain 落 resume 链事件（design §10）：续链留痕 + 两类不一致告警
@@ -962,7 +974,11 @@ func (c *Controller) Close(ctx context.Context) error {
 	cb := c.permCallback
 	scs := c.subCallback
 	mgr := c.subMgr
+	iw := c.instrWatch
 	c.mu.Unlock()
+	if iw != nil {
+		iw.Close() // 停止指令文件轮询（M15）——closed 先置位再收口（回调桥同纪律）
+	}
 	if mgr != nil {
 		// 级联取消全部运行中子代理（Review Focus 孤儿回合钉：父会话收口时
 		// 子镜像必须无孤儿回合——各子 ctrl.Close 的泵收口合成 TurnDone，随后
@@ -1528,4 +1544,174 @@ func (c *Controller) turnDoneChLocked(turn int64) chan struct{} {
 		c.turnDones[turn] = ch
 	}
 	return ch
+}
+
+// ---- 指令文件快照与变更轮询（M15/FR-109 前半；design 002 §8） ----
+
+// instructionWatchInterval 是指令文件轮询间隔（默认 2s）。包内变量便于测试
+// 注入短间隔（wire 面无此参数——运行时恒走默认；同包测试串行执行，覆盖与
+// 恢复由测试自管）。
+var instructionWatchInterval = 2 * time.Second
+
+// InstructionSnap 是单个指令文件的快照（内容 + sha256）。
+type InstructionSnap struct {
+	Content string // 文件全文（装载面读取）
+	SHA256  string // 内容 sha256 hex——watcher 的比较依据（非 mtime）
+}
+
+// instructionSnap 是 brief Produces 接口的小写拼写（= InstructionSnap 的类型
+// 别名；包内消费面沿用该拼写，两形态同型）。
+type instructionSnap = InstructionSnap
+
+// instructionFiles 是快照源文件清单（workspace 根相对；FR-109）。
+var instructionFiles = []string{"CLAUDE.md", "AGENTS.md"}
+
+// loadInstructionSnapshots 读 workspace 的指令文件快照：键 = workspace 下的
+// 文件路径（watcher 以键重读；提醒文案取 base 名），值 = 内容 + sha256。
+// 文件不存在/不可读 → 键缺席（P1 快照语义：无文件即无快照；装载面静默
+// 跳过——design 002 §8）。P1 从未读过指令文件（design 001 C3 的「启动快照」
+// 落地为 AppendSystemPrompt 模板）——本函数补齐 FR-109 的前半。
+func loadInstructionSnapshots(workspace string) map[string]instructionSnap {
+	snaps := make(map[string]instructionSnap, len(instructionFiles))
+	for _, name := range instructionFiles {
+		path := filepath.Join(workspace, name)
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			continue // 不存在/不可读——键缺席（不区分错误种类：装载面静默）
+		}
+		sum := sha256.Sum256(raw)
+		snaps[path] = instructionSnap{Content: string(raw), SHA256: hex.EncodeToString(sum[:])}
+	}
+	return snaps
+}
+
+// LoadInstructionSnapshots 是 loadInstructionSnapshots 的导出形式（组合根
+// 消费：`mulix instructions` 进程无运行中控制器句柄——启动快照不落镜像，
+// 以同一装载函数对 workspace 现读现报）。
+func LoadInstructionSnapshots(workspace string) map[string]InstructionSnap {
+	return loadInstructionSnapshots(workspace)
+}
+
+// InstructionWatcher 是指令文件轮询 watcher 的句柄（watchInstructions 返回）。
+type InstructionWatcher struct {
+	quit      chan struct{} // Close 关闭——ticker 停止，goroutine 经此收口
+	done      chan struct{} // goroutine 退出信号（泄漏检测/测试等待面）
+	closeOnce sync.Once
+}
+
+// Close 停止轮询（幂等；channel 关闭即退出信号——goroutine 无泄漏退出）。
+func (w *InstructionWatcher) Close() {
+	if w == nil {
+		return
+	}
+	w.closeOnce.Do(func() { close(w.quit) })
+}
+
+// Done 返回 goroutine 退出信号通道（Close 或 ctx 取消后关闭）。
+func (w *InstructionWatcher) Done() <-chan struct{} {
+	if w == nil {
+		return nil
+	}
+	return w.done
+}
+
+// watchInstructions 启动指令文件变更轮询（导出便于测试）：interval 节拍重
+// 读 files 的每个键，sha256 与基线比较（不是 mtime——touch 误报是 Review
+// Focus 钉子）；变化/删除 → publish 一条 info 提醒（文案钉「快照保持，下
+// 会话生效」），随后基线推进为当前观测——同文件多次变化在两次轮询间只报
+// 一次，此后同内容不刷屏。files 缺席的键不监控（启动时无文件即无快照——
+// P1 语义）。返回句柄：Close 停 ticker（goroutine 经 quit 通道收口，Done
+// 可等待）；ctx 取消同样停止。interval <= 0 用默认 2s。
+func watchInstructions(ctx context.Context, files map[string]instructionSnap, publish func(event.NoticeEvent), interval time.Duration) *InstructionWatcher {
+	if interval <= 0 {
+		interval = instructionWatchInterval
+	}
+	base := make(map[string]instructionSnap, len(files))
+	for k, v := range files {
+		base[k] = v
+	}
+	paths := make([]string, 0, len(base))
+	for k := range base {
+		paths = append(paths, k)
+	}
+	sort.Strings(paths) // 确定性轮询序（多文件同 tick 变化时提醒顺序稳定）
+	w := &InstructionWatcher{quit: make(chan struct{}), done: make(chan struct{})}
+	go func() {
+		defer close(w.done)
+		w.loop(ctx, base, paths, publish, interval)
+	}()
+	return w
+}
+
+// loop 是轮询核（单 goroutine 私有基线；每 tick 重读并比较 sha256）。
+func (w *InstructionWatcher) loop(ctx context.Context, base map[string]instructionSnap, paths []string, publish func(event.NoticeEvent), interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-w.quit:
+			return
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		for _, path := range paths {
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				if !errors.Is(err, fs.ErrNotExist) {
+					continue // 瞬态读取失败（如文件占用）——静默跳过不误报
+				}
+				// 删除 = 修改同语义：提醒一次，基线墓碑化（SHA256 空串
+				// 哨兵——空内容的 sha256 是确定的非空 hex，不撞哨兵）。
+				if base[path].SHA256 != "" {
+					publish(instructionNotice(path))
+					base[path] = instructionSnap{}
+				}
+				continue
+			}
+			sum := sha256.Sum256(raw)
+			sha := hex.EncodeToString(sum[:])
+			if sha == base[path].SHA256 {
+				continue // 内容未变（含 mtime 变化的 touch）——不提醒
+			}
+			publish(instructionNotice(path))
+			base[path] = instructionSnap{Content: string(raw), SHA256: sha}
+		}
+	}
+}
+
+// instructionNotice 组变更提醒事件（level=info + IsMeta——与 resume 链/
+// 记忆召回等 info 级 harness 事件一致；文案由 brief 钉死）。
+func instructionNotice(path string) event.NoticeEvent {
+	return event.NoticeEvent{Level: "info", IsMeta: true,
+		Content: fmt.Sprintf("指令文件变更: %s（快照保持，下会话生效）", filepath.Base(path))}
+}
+
+// startInstructionWatcher 是 start 序列尾的快照装载 + watcher 启动（M15/
+// FR-109 前半）：仅在 start 成功路径调用——失败路径不起 watcher。快照存入
+// 控制器（本任务只供 watcher 与 mulix instructions 消费——绝不改 Boot 面，
+// SC-003）；无指令文件 → 不起 watcher（轮询空集无意义）。与 Close 的竞态：
+// 存句柄前复查 closed，已收口则立即停掉刚起的 goroutine（无泄漏）。
+func (c *Controller) startInstructionWatcher() {
+	snaps := loadInstructionSnapshots(c.opts.Workspace)
+	c.mu.Lock()
+	c.instructionSnaps = snaps
+	closed := c.closed
+	c.mu.Unlock()
+	if closed || len(snaps) == 0 {
+		return
+	}
+	publish := func(ev event.NoticeEvent) {
+		ev.Seq = c.nextSeq()
+		c.publish(ev)
+	}
+	w := watchInstructions(context.Background(), snaps, publish, 0) // 0 → 默认 2s
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		w.Close() // Close 竞态抢先——立即收口刚起的 goroutine
+		return
+	}
+	c.instrWatch = w
+	c.mu.Unlock()
 }
