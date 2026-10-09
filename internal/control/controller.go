@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +25,7 @@ import (
 	"mulix/internal/event"
 	"mulix/internal/guard"
 	"mulix/internal/sessionx"
+	"mulix/internal/subagent"
 )
 
 // ErrTurnRunning：同一会话已有活跃回合时 Submit 返回（design §6；多回合排队
@@ -72,6 +74,20 @@ type Options struct {
 	// AllowEngineDrift 是 engine.lock 版本漂移的显式放行（FR-016；cli 的
 	// --allow-engine-drift / 用户配置。放行时引擎留痕 engine_drift trace）。
 	AllowEngineDrift bool
+
+	// SubagentFactory 是子代理会话工厂（cli 组合根注入，M12/Task 4；nil =
+	// 子代理整体禁用：不组装 Manager、不起回调桥、不注入
+	// MULIX_SUBAGENT_CALLBACK——Boot 面与 P1 逐字节一致）。
+	SubagentFactory subagent.SessionFactory
+	// SubagentLimits 是子代理编排限额（零值字段由 subagent.NewManager 取
+	// 默认 3/4；design 002 §3）。
+	SubagentLimits SubagentLimits
+}
+
+// SubagentLimits 是子代理编排限额（深度/并发；design 002 §3：默认 3/4）。
+type SubagentLimits struct {
+	MaxDepth      int
+	MaxConcurrent int
 }
 
 // Controller 是一次引擎会话的编排器（单会话；多会话=多实例）。
@@ -100,6 +116,8 @@ type Controller struct {
 	pubMu     sync.Mutex                 // 发布串行化（镜像 Append 互斥；见 publish 注）
 
 	permCallback *permissionCallbackServer // 权限回路跨进程桥（真实引擎 --permission-prompt-tool 传输）
+	subCallback  *subagentCallbackServer   // 子代理操作跨进程桥（M12：serve 子进程工具 → Manager）
+	subMgr       *subagent.Manager         // 子代理编排器（Factory 非空且注册面含 mulix 条目时组装；Task 4 Subagent() 消费）
 
 	pumpDone chan struct{} // 泵退出信号（Close 等待）
 	initSeen chan struct{} // 首个 init 消费完成（NewSession 等待）
@@ -186,6 +204,33 @@ func (c *Controller) start(ctx context.Context, boot engine.BootConfig) error {
 			c.permCallback = pcs
 			c.mu.Unlock()
 			boot.Env = append(boot.Env, "MULIX_PERMISSION_CALLBACK="+pcs.addr)
+		}
+	}
+
+	// 子代理回调桥（M12/Task 3）：Factory 非空且注册面含 mulix 条目时组装
+	// Manager 并注入 MULIX_SUBAGENT_CALLBACK——Boot Env 通道，绝不入
+	// mcp-config（SC-003 字节稳定，与权限回调同一裁定；无 serve 子进程时
+	// 起监听是无用暴露面，故同样受 hasMulixRegistryEntry 门控）。失败路径
+	// 不阻断启动：不注入 env，工具侧 fail-closed deny（引擎不悬挂）。
+	// Publish 走 c.publish——镜像 Append 成功才经 Sink 发布（先持久化后发布
+	// 红线由父侧保证，design 002 subagent.Options.Publish 注）。
+	if c.opts.SubagentFactory != nil && c.hasMulixRegistryEntry() {
+		mgr, err := subagent.NewManager(subagent.Options{
+			Root:          filepath.Dir(c.opts.Store.Dir()), // sessions 根（与主会话同池）
+			MaxDepth:      c.opts.SubagentLimits.MaxDepth,
+			MaxConcurrent: c.opts.SubagentLimits.MaxConcurrent,
+			Factory:       c.opts.SubagentFactory,
+			Publish:       c.publish,
+		})
+		if err != nil {
+			c.publish(event.NoticeEvent{Seq: c.nextSeq(), Level: "warning", IsMeta: true,
+				Content: "子代理编排器组装失败（mulix_spawn 降级为 fail-closed deny）: " + err.Error()})
+		} else if scs := c.startSubagentCallback(managerOps{m: mgr}); scs != nil {
+			c.mu.Lock()
+			c.subMgr = mgr
+			c.subCallback = scs
+			c.mu.Unlock()
+			boot.Env = append(boot.Env, "MULIX_SUBAGENT_CALLBACK="+scs.addr)
 		}
 	}
 
@@ -413,6 +458,157 @@ func (c *Controller) hasMulixRegistryEntry() bool {
 	return false
 }
 
+// ---- 子代理操作回调桥（M12/Task 3；permissionCallbackServer 同构） ----
+
+// subagentOps 是子代理回调桥消费的窄接口（R-P2-4：回调桥的内部缝——
+// *subagent.Manager 经 managerOps 适配注入 ctx 并重排参数；测试 stub 直接
+// 实现。不携带逐请求 ctx——Manager 编排操作由 Close/Cancel 的级联语义收口）。
+type subagentOps interface {
+	Spawn(task, parentID string, depth int) (string, error)
+	Poll(subID string) (subagent.Status, error)
+	Cancel(subID, reason string) error
+}
+
+// managerOps 把 *subagent.Manager 适配为 subagentOps：注入 Background ctx
+// （取消经 Manager.Cancel 级联，不靠逐请求 ctx）并重排 Spawn 参数序。
+type managerOps struct{ m *subagent.Manager }
+
+func (a managerOps) Spawn(task, parentID string, depth int) (string, error) {
+	return a.m.Spawn(context.Background(), parentID, task, depth)
+}
+
+func (a managerOps) Poll(subID string) (subagent.Status, error) {
+	return a.m.Poll(context.Background(), subID)
+}
+
+func (a managerOps) Cancel(subID, reason string) error {
+	return a.m.Cancel(context.Background(), subID, reason)
+}
+
+// subagentCallbackServer 是子代理操作的跨进程桥（M12/Task 3）：serve 子进程
+// 上的 mulix_spawn/poll/cancel 工具把 {op,...} POST 到本服务器，转发给前台
+// 的 subagent.Manager，应答 JSON 原样透传给引擎。permissionCallbackServer
+// 同构的安全面：127.0.0.1 绑定 + 会话级随机 token 路径（不猜不可达）+
+// 请求体上限 + 会话关闭后拒绝处理。
+type subagentCallbackServer struct {
+	ctrl  *Controller
+	mgr   subagentOps
+	srv   *http.Server
+	addr  string // http://127.0.0.1:PORT/<token>（env 注入值，与权限回调同形）
+	token string
+}
+
+// startSubagentCallback 启动子代理回调监听（会话生命周期绑定——Close 时
+// 关闭）。监听/token 失败不阻断启动：不注入 MULIX_SUBAGENT_CALLBACK，工具
+// 侧 fail-closed deny（引擎不悬挂）。仅 Factory 非空且注册面含 mulix 条目
+// 时由 start() 调用。
+func (c *Controller) startSubagentCallback(mgr subagentOps) *subagentCallbackServer {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		c.publish(event.NoticeEvent{Seq: c.nextSeq(), Level: "warning", IsMeta: true,
+			Content: "子代理回调监听失败（mulix_spawn 降级为 fail-closed deny）: " + err.Error()})
+		return nil
+	}
+	var token [16]byte
+	if _, err := rand.Read(token[:]); err != nil {
+		_ = l.Close()
+		c.publish(event.NoticeEvent{Seq: c.nextSeq(), Level: "warning", IsMeta: true,
+			Content: "子代理回调 token 生成失败（mulix_spawn 降级为 fail-closed deny）: " + err.Error()})
+		return nil
+	}
+	scs := &subagentCallbackServer{
+		ctrl:  c,
+		mgr:   mgr,
+		token: hex.EncodeToString(token[:]),
+	}
+	scs.addr = "http://" + l.Addr().String() + "/" + scs.token
+	mux := http.NewServeMux()
+	// 精确路径（工具 POST 的 env 值）+ 子树（token 前缀下的操作路径）——
+	// 同一 handler：op 由 body 的 op 字段区分，路径后缀不参与路由。
+	mux.HandleFunc("/"+scs.token, scs.handle)
+	mux.HandleFunc("/"+scs.token+"/", scs.handle)
+	scs.srv = &http.Server{Handler: mux}
+	go func() { _ = scs.srv.Serve(l) }()
+	return scs
+}
+
+// handle 处理一次子代理操作回调：body {op:"spawn"|"poll"|"cancel",
+// task?, sub_session_id?, parent_id?, depth?} → Manager → 应答 JSON
+// {ok, sub_session_id?, status?, error?}。错误路径 = 200 + {ok:false}
+// （工具侧原样透传给引擎——业务错误与协议层解耦，权限回调同款语义）；
+// 非 POST = 405（工具侧非 200 → fail-closed）。
+func (s *subagentCallbackServer) handle(w http.ResponseWriter, r *http.Request) {
+	s.ctrl.mu.Lock()
+	closed := s.ctrl.closed
+	s.ctrl.mu.Unlock()
+	if closed || s.srv == nil { // 会话已收口——不再编排子代理
+		writeOpResult(w, map[string]any{"ok": false, "error": "session closed"})
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	var op struct {
+		Op       string `json:"op"`
+		Task     string `json:"task"`
+		SubID    string `json:"sub_session_id"`
+		ParentID string `json:"parent_id"`
+		Depth    int    `json:"depth"`
+	}
+	body := http.MaxBytesReader(w, r.Body, 1<<20) // 1 MiB 上限（工具入参远小于此）
+	if err := json.NewDecoder(body).Decode(&op); err != nil || op.Op == "" {
+		writeOpResult(w, map[string]any{"ok": false, "error": "malformed subagent callback body"})
+		return
+	}
+	switch op.Op {
+	case "spawn":
+		parentID := op.ParentID
+		if parentID == "" {
+			parentID = s.ctrl.sessionID // 顶层工具调用缺省挂主会话
+		}
+		subID, err := s.mgr.Spawn(op.Task, parentID, op.Depth)
+		if err != nil {
+			writeOpResult(w, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+		writeOpResult(w, map[string]any{"ok": true, "sub_session_id": subID})
+	case "poll":
+		status, err := s.mgr.Poll(op.SubID)
+		if err != nil {
+			writeOpResult(w, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+		writeOpResult(w, map[string]any{"ok": true, "sub_session_id": op.SubID, "status": string(status)})
+	case "cancel":
+		if err := s.mgr.Cancel(op.SubID, "requested via mulix_cancel"); err != nil {
+			writeOpResult(w, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+		writeOpResult(w, map[string]any{"ok": true, "sub_session_id": op.SubID})
+	default:
+		writeOpResult(w, map[string]any{"ok": false, "error": "unsupported op: " + op.Op})
+	}
+}
+
+// writeOpResult 写子代理操作应答 JSON（回调应答的统一出口）。
+func writeOpResult(w http.ResponseWriter, result map[string]any) {
+	raw, _ := json.Marshal(result)
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(raw)
+}
+
+// close 收口子代理回调监听（会话关闭时调用；幂等）。closed 判据是
+// ctrl.closed（Close 先置位再收口）——挂起请求得 {ok:false,"closed"}。
+func (s *subagentCallbackServer) close() {
+	if s == nil || s.srv == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = s.srv.Shutdown(ctx)
+}
+
 // composeBoot 组装引擎拉起参数（P1 固定集）。registry 由 cli 注入
 // （Options.Registry；nil = 空面）。注入面含 mulix 服务器时同步钉
 // --permission-prompt-tool=mcp__mulix__permission——mcp-config 里没有该
@@ -619,7 +815,11 @@ func (c *Controller) Close(ctx context.Context) error {
 	c.closed = true
 	host := c.host
 	cb := c.permCallback
+	scs := c.subCallback
 	c.mu.Unlock()
+	if scs != nil {
+		scs.close() // 子代理回调监听收口——serve 子进程的挂起操作得 {ok:false,"closed"}
+	}
 	if cb != nil {
 		cb.close() // 先收口回调监听——serve 子进程的挂起审批快速失败（deny）
 	}
