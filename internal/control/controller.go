@@ -143,11 +143,11 @@ type Controller struct {
 	lastTurnTokens cache.TurnUsage
 	sessionID      string // mulix 会话 id（构造期读一次 meta，避免快照路径磁盘 I/O）
 
-	turnDones map[int64]chan struct{}    // 回合收口通道（泵唯一关闭方）
-	resolved  map[string]gateRuling      // 已裁决权限请求（引擎 tool_use_id → 裁决；重发信封直接应答，人只裁决一次）
-	inflight  map[string]chan gateRuling // 裁决单飞（终评审 Important-3：并发传输同 id 只评估一次）
-	approveMu sync.Mutex                 // SetAlias+Evaluate 原子化（别名配对不被并发传输交错；P1 审批串行语义）
-	pubMu     sync.Mutex                 // 发布串行化（镜像 Append 互斥；见 publish 注）
+	turnDones map[int64]chan struct{}  // 回合收口通道（泵唯一关闭方）
+	resolved  map[string]gateRuling    // 已裁决权限请求（引擎 tool_use_id → 裁决；重发信封直接应答，人只裁决一次）
+	inflight  map[string]chan struct{} // 裁决单飞（终评审 Important-3：并发传输同 id 只评估一次；leader close 广播收口）
+	approveMu sync.Mutex               // SetAlias+Evaluate 原子化（别名配对不被并发传输交错；P1 审批串行语义）
+	pubMu     sync.Mutex               // 发布串行化（镜像 Append 互斥；见 publish 注）
 
 	permCallback *permissionCallbackServer // 权限回路跨进程桥（真实引擎 --permission-prompt-tool 传输）
 	subCallback  *subagentCallbackServer   // 子代理操作跨进程桥（M12：serve 子进程工具 → Manager）
@@ -187,7 +187,7 @@ func NewController(opts Options) (*Controller, error) {
 		sessionID: sessionID,
 		turnDones: map[int64]chan struct{}{},
 		resolved:  map[string]gateRuling{},
-		inflight:  map[string]chan gateRuling{},
+		inflight:  map[string]chan struct{}{},
 		pumpDone:  make(chan struct{}),
 		initSeen:  make(chan struct{}),
 		now:       time.Now,
@@ -1449,31 +1449,47 @@ func (c *Controller) handleControlRequest(cr *engine.ControlRequest) engine.Cont
 // 起点）→ Gate 裁决（审批桥别名关联引擎 tool_use_id）→ 缓存裁决 → 镜像
 // approval_resolved → MCP result。同 tool_use_id 的重发信封直接取缓存
 // 裁决（人只裁决一次；裁决词汇映射：Gate deny/timeout → 镜像 timeout）。
+// resolved 仅由单飞 leader 发布（P1 复审 N4：并发重复投递恰一次 resolved）。
 func (c *Controller) evaluateCanUseTool(requestID, toolUseID, tool string, input, mcpID json.RawMessage) engine.ControlResponse {
-	ruling := c.rulingFor(toolUseID, tool, input)
+	ruling, leader := c.rulingFor(toolUseID, tool, input)
 	evDecision, evSource := ruling.decision, ruling.source
 	if evDecision == string(guard.DecisionDeny) && evSource == string(guard.SourceTimeout) {
 		evDecision, evSource = "timeout", "timeout" // 词表：非人为 fail-closed
 	}
-	c.publish(event.ApprovalResolvedEvent{Seq: c.nextSeq(), ToolUseID: toolUseID,
-		Decision: evDecision, Source: evSource, ResolvedBy: ruling.resolvedBy})
+	if leader { // 等待方/缓存命中方跳过——审计计数恰一次（P1 复审 N4）
+		c.publish(event.ApprovalResolvedEvent{Seq: c.nextSeq(), ToolUseID: toolUseID,
+			Decision: evDecision, Source: evSource, ResolvedBy: ruling.resolvedBy})
+	}
 	return c.mcpBehaviorResponse(requestID, mcpID, ruling, input)
 }
 
 // rulingFor 是裁决的单飞入口（终评审 Important-3）：回调桥（HTTP handler
 // goroutine）与泵（onControlRequest）并发进入——同 tool_use_id 的并发/重发
 // 请求只评估一次（其余等待复用），人只裁决一次；resolved 缓存命中直接返回。
-func (c *Controller) rulingFor(toolUseID, tool string, input json.RawMessage) gateRuling {
+// 返回 (裁决, leader)：仅单飞 leader 为 true，approval_resolved 的镜像发布
+// 由 evaluateCanUseTool 按 leader 门控（P1 复审 N4：并发重复投递恰一次）。
+// 等待方经 inflight 通道的 close 广播唤醒（P1 复审 N5 并发钉暴露：容量 1 的
+// send 只能唤醒一个等待方，其余在 <-ch 永久悬挂）；裁决本体在 resolved 缓存
+// ——leader 在同一 c.mu 临界区内先写缓存后 close，等待方唤醒后读取。
+func (c *Controller) rulingFor(toolUseID, tool string, input json.RawMessage) (gateRuling, bool) {
 	c.mu.Lock()
 	if r, cached := c.resolved[toolUseID]; cached {
 		c.mu.Unlock()
-		return r
+		return r, false // 已裁决且已发布——重发信封只取裁决
 	}
 	if ch, inFlight := c.inflight[toolUseID]; inFlight {
 		c.mu.Unlock()
-		return <-ch // 首个评估进行中——等待并复用（发布面照旧：与重发信封同义）
+		<-ch // leader 收口即 close：广播唤醒全部等待方
+		c.mu.Lock()
+		r, ok := c.resolved[toolUseID]
+		c.mu.Unlock()
+		if !ok { // 防御：leader 约定先写缓存再 close（违背即 fail-closed 兜底）
+			r = gateRuling{decision: string(guard.DecisionDeny),
+				source: string(guard.SourceTimeout), resolvedBy: "singleflight: ruling missing"}
+		}
+		return r, false // 首个评估进行中——等待并复用（发布由 leader 承担）
 	}
-	ch := make(chan gateRuling, 1)
+	ch := make(chan struct{})
 	c.inflight[toolUseID] = ch
 	c.mu.Unlock()
 
@@ -1498,11 +1514,11 @@ func (c *Controller) rulingFor(toolUseID, tool string, input json.RawMessage) ga
 	c.mu.Lock()
 	c.resolved[toolUseID] = ruling
 	if c.inflight[toolUseID] == ch {
-		ch <- ruling
+		close(ch) // 广播：close 唤醒全部等待方（send 只能喂饱一个——P1 复审 N5）
 		delete(c.inflight, toolUseID)
 	}
 	c.mu.Unlock()
-	return ruling
+	return ruling, true
 }
 
 // mcpBehaviorResponse 组 MCP tools/call 应答：content[0].text = behavior JSON

@@ -237,9 +237,9 @@ func (h *ClaudeHost) Start(ctx context.Context, cfg BootConfig) error {
 		if ctx.Err() == nil {
 			startFail = errors.New("engine: handshake deadline already expired")
 		}
-		h.signalStart(startFail)
+		startErr := h.signalStart(startFail)
 		h.killTree()
-		return h.startErr
+		return startErr
 	}
 	select {
 	case <-h.startDone:
@@ -255,8 +255,14 @@ func (h *ClaudeHost) Start(ctx context.Context, cfg BootConfig) error {
 		// 引擎 + 拒绝原因合成 exit 事件，fail-closed 保留）。
 		select {
 		case <-h.exited:
-			// 进程在窗口内退出（monitor 已 signalStart「exited during
-			// handshake」）——按启动失败收口。
+			// 进程在窗口内退出——按启动失败收口。startErr 必须经 startDone
+			// 快照读取（P1 复审 N2：monitor 先 close(exited)（Wait 返回）后
+			// 才 signalStart，字段直读是未同步读、且可能抢在写入前读到 nil
+			// 把失败启动放行）：等收口完成再读——写 startErr → close(startDone)
+			// → receive → read 建立 happens-before。ready 已立时 startDone 已由
+			// acceptHandshake 关闭（此处不卡死）；!ready 时 monitor 必然
+			// signalStart「exited during handshake」（route 的 pump 错误路径同）。
+			<-h.startDone
 			h.killTree()
 			return h.startErr
 		case <-h.startDone:
@@ -275,9 +281,9 @@ func (h *ClaudeHost) Start(ctx context.Context, cfg BootConfig) error {
 		h.signalStart(nil)
 		return nil
 	case <-ctx.Done():
-		h.signalStart(fmt.Errorf("engine: start cancelled: %w", ctx.Err()))
+		startErr := h.signalStart(fmt.Errorf("engine: start cancelled: %w", ctx.Err()))
 		h.killTree()
-		return h.startErr
+		return startErr
 	}
 }
 
@@ -592,11 +598,16 @@ func (h *ClaudeHost) killTree() {
 	_ = h.cmd.Process.Kill()
 }
 
-func (h *ClaudeHost) signalStart(err error) {
+// signalStart 收口启动结果（Once 单次：写 startErr 后关 startDone）。返回
+// 收口后的 startErr 快照：Once.Do 返回即 f 完成后（Go 内存模型——f 的完成
+// happens-before 任何 Do 的返回），调用方由此同步读取，替代跨 goroutine
+// 竞态的字段直读（P1 复审 N2）。
+func (h *ClaudeHost) signalStart(err error) error {
 	h.startOnce.Do(func() {
 		h.startErr = err
 		close(h.startDone)
 	})
+	return h.startErr
 }
 
 func (h *ClaudeHost) markDone() {
