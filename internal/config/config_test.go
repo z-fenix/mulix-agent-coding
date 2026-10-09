@@ -435,6 +435,63 @@ PORT = 123
 	}
 }
 
+// TestHooksCustomDefaultsAndLayering pins（P2 Global Constraints：新配置键进
+// 默认值与分层加载测试）：[hooks.custom] rules 默认空；[[hooks.custom.rules]]
+// 数组解析 event/command/timeout_ms（design 002 §7）；缺省键保零值
+// （timeout_ms 0 = 消费侧解释默认）；跨层整组替换（数组语义，非拼接，
+// TestMCPConfigDefaultsAndLayering 同款裁定）。取值校验（event ∈ P1 四时点、
+// command 非空、timeout ≤30000）在 guard.NewScriptConsumer 构造期收口
+// （启动拒绝 fail-fast）——config 只负责分层解析，与 [mcp.servers] 的
+// 「Compose 侧校验」同款分工。
+func TestHooksCustomDefaultsAndLayering(t *testing.T) {
+	cfg, _, err := NewLoader().Load(Flags{}, Paths{})
+	if err != nil {
+		t.Fatalf("load defaults: %v", err)
+	}
+	if len(cfg.Hooks.Custom.Rules) != 0 {
+		t.Fatalf("default hooks rules must be empty: %+v", cfg.Hooks.Custom.Rules)
+	}
+	project := writeTOML(t, `
+[[hooks.custom.rules]]
+event = "PreToolUse"
+command = ["python", "scripts/hook.py"]
+timeout_ms = 5000
+
+[[hooks.custom.rules]]
+event = "Stop"
+command = ["go", "run", "./scripts/notify"]
+`)
+	cfg2, _, err := NewLoader().Load(Flags{}, Paths{Project: project})
+	if err != nil {
+		t.Fatalf("load project layer: %v", err)
+	}
+	if len(cfg2.Hooks.Custom.Rules) != 2 {
+		t.Fatalf("project layer rules = %+v, want 2 declarations", cfg2.Hooks.Custom.Rules)
+	}
+	pre := cfg2.Hooks.Custom.Rules[0]
+	if pre.Event != "PreToolUse" ||
+		!reflect.DeepEqual(pre.Command, []string{"python", "scripts/hook.py"}) ||
+		pre.TimeoutMS != 5000 {
+		t.Fatalf("pre rule = %+v", pre)
+	}
+	// 缺省键保零值：未写 timeout_ms 的规则不误取默认（消费侧解释）
+	stop := cfg2.Hooks.Custom.Rules[1]
+	if stop.Event != "Stop" ||
+		!reflect.DeepEqual(stop.Command, []string{"go", "run", "./scripts/notify"}) ||
+		stop.TimeoutMS != 0 {
+		t.Fatalf("stop rule = %+v", stop)
+	}
+	// 数组跨层整组替换：项目层 rules 覆盖用户层（不拼接）
+	user := writeTOML(t, "[[hooks.custom.rules]]\nevent = \"SessionStart\"\ncommand = [\"u\"]\n")
+	cfg3, _, err := NewLoader().Load(Flags{}, Paths{User: user, Project: project})
+	if err != nil {
+		t.Fatalf("load user+project layers: %v", err)
+	}
+	if len(cfg3.Hooks.Custom.Rules) != 2 || cfg3.Hooks.Custom.Rules[0].Event != "PreToolUse" {
+		t.Fatalf("project layer must replace the user rules array: %+v", cfg3.Hooks.Custom.Rules)
+	}
+}
+
 func warnMentions(warnings []string, key string) bool {
 	for _, w := range warnings {
 		if strings.Contains(w, key) {

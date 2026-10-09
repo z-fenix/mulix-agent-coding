@@ -21,6 +21,7 @@ type Config struct {
 	Memory       MemoryConfig      `toml:"memory"`
 	Subagent     SubagentConfig    `toml:"subagent"`
 	MCP          MCPConfig         `toml:"mcp"`
+	Hooks        HooksConfig       `toml:"hooks"`
 }
 
 // CacheConfig 是缓存三层可观测性相关配置。
@@ -78,6 +79,27 @@ type MCPServerDecl struct {
 	Command   []string          `toml:"command"`
 	Env       map[string]string `toml:"env"`
 	TimeoutMS int               `toml:"timeout_ms"`
+}
+
+// HooksConfig 是用户自定义钩子声明面（P2/M16；design 002 §7）。
+type HooksConfig struct {
+	Custom HooksCustomConfig `toml:"custom"`
+}
+
+// HooksCustomConfig 是 [hooks.custom] 组。
+type HooksCustomConfig struct {
+	Rules []HookRule `toml:"rules"`
+}
+
+// HookRule 是单个自定义钩子规则（[[hooks.custom.rules]] 数组元素）。取值
+// 校验（event ∈ P1 四时点、command 非空、0 ≤ timeout_ms ≤ 30000）在
+// guard.NewScriptConsumer 构造期收口（启动拒绝 fail-fast，FR-111）——config
+// 只负责分层解析，与 [mcp.servers] 的「Compose 侧校验」同款分工；TimeoutMS
+// 缺省 0 = 消费侧解释为默认超时（M14 缺省语义同款）。
+type HookRule struct {
+	Event     string   `toml:"event"`
+	Command   []string `toml:"command"`
+	TimeoutMS int      `toml:"timeout_ms"`
 }
 
 func defaultConfig() Config {
