@@ -94,21 +94,42 @@ func TestDelegationEventsRoundTrip(t *testing.T) {
 - [ ] **Step 4: 验证 GREEN** — 同命令；Expected: PASS（全部既有测试不回归）。
 - [ ] **Step 5: Commit** — `git commit -m "feat(event): 委派链事件类型与 codec 扩展（M12/T12.1）"`。
 
-## Task 2: subagent.Manager 状态机与限额（M12）
+## Task 2: kernel（Go 版 cordis 模式）+ subagent.Manager 状态机与限额（M12）
 
 **Files:**
+- Create: `internal/kernel/kernel.go`
+- Test: `internal/kernel/kernel_test.go`
 - Create: `internal/subagent/subagent.go`
 - Test: `internal/subagent/subagent_test.go`
 
 **Interfaces:**
-- Consumes: Task 1 事件；`sessionx.Create(root string, opts Options) (*Store, error)`（P1 签名，子会话镜像建库）。注：子代理不做恢复判断（P1 的 RecoveryRequired 在 control 包，subagent 禁止 import control；子会话若发现损坏镜像按引擎退出路径收口）。
+- Consumes: Task 1 事件（`event.Delegation*Event`）；设计 002 §2.1/§3.0（用户指令：cordis 架构模式——引擎只是插件）。
 - Produces（后续任务依赖的精确签名）:
+
+```go
+package kernel
+
+// Context 是层级作用域：子作用域继承父注入（查找沿祖先链），Dispose 先子后父。
+type Context struct{ /* parent, services, disposables, children, mu */ }
+func NewContext(parent *Context) *Context // 根 = NewContext(nil)
+func (c *Context) Provide(name string, svc any) error // 同作用域重复注册 → error
+func (c *Context) Service(name string) (any, bool)    // 自身 → 祖先链
+func (c *Context) OnDispose(fn func())                // LIFO 清理注册
+func (c *Context) Mount(p Plugin) error               // p.Mount(c)；失败即整体回滚（已注册服务移除）
+func (c *Context) Dispose()                           // 先子后父：children LIFO → 自身 disposables LIFO（幂等）
+func (c *Context) Parent() *Context
+type Plugin interface {
+	Name() string
+	Mount(c *Context) error
+}
+```
 
 ```go
 package subagent
 
-// SessionFactory 由 cli（组合根）注入：为子代理组装一个完整会话句柄。
-// subagent 包不 import control（防 import 环）——工厂闭包在 cli 侧实现。
+// SessionFactory 由 cli（组合根）注入：为子代理挂载插件集（store/meter/gate/
+// engine provider——引擎只是插件之一）并返回会话句柄。subagent 包不 import
+// control（防 import 环）——工厂闭包在 cli 侧实现（Task 4）。
 type SessionHandle interface {
 	ID() string
 	Done() <-chan struct{}     // 回合收口（TurnDone 或引擎退出）时关闭
@@ -145,7 +166,10 @@ const (
 )
 ```
 
-- [ ] **Step 1: 写失败测试**（状态机 + 限额 + 判环 + 级联取消，工厂用 stub）:
+kernel 与 Manager 的关系：Manager 每个 spawn 创建子 Context 并把返回的 SessionHandle 注册进它（`OnDispose(handle.Close)`）；Cancel = handle.Cancel + 终态记录 + 子 Context.Dispose()；Close = 逐子 Cancel（kernel Dispose 语义保证先子后父）。注意：kernel 不 import 任何 internal 包（leaf 级）；Manager 的 stub 测试不经过 kernel 也能跑（kernel 行为由 kernel_test 独立钉死）——两层解耦。
+
+- [ ] **Step 0: kernel 的 TDD 循环（Part A）**——写 `internal/kernel/kernel_test.go`：①Provide/Service 注入与祖先回溯（子作用域读到父服务、同名子覆盖父）②重复注册报错 ③Dispose 先子后父（记录调用序断言）④Dispose 幂等 ⑤Mount 成功贡献服务、Mount 失败回滚（部分注册被撤销）。验证 RED（包不存在）→ 最小实现 → 验证 GREEN。
+- [ ] **Step 1: Manager 的失败测试**（状态机 + 限额 + 判环 + 级联取消，工厂用 stub——与 kernel 解耦，不经 kernel 也能跑）:
 
 ```go
 package subagent
@@ -312,10 +336,10 @@ func TestCloseCancelsAllRunning(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: 验证 RED** — `go test ./internal/subagent/ -count=1`；Expected: FAIL（package 不存在）。
-- [ ] **Step 3: 最小实现**——Manager：`map[subID]*subEntry{handle, parentID, task, depth, status}`；Spawn 判深度（沿 parentID 链查 List）与并发（running 计数）；goroutine `go func(){ <-h.Done(); 记录终态; Publish(对应事件) }()`；Cancel = handle.Cancel + 终态记录 + 发布；Close 遍历 running。
-- [ ] **Step 4: 验证 GREEN** — Expected: PASS。
-- [ ] **Step 5: Commit** — `git commit -m "feat(subagent): 编排器状态机与限额判环（M12/T12.2）"`。
+- [ ] **Step 2: 验证 RED** — `go test ./internal/kernel/ ./internal/subagent/ -count=1`；Expected: FAIL（两个包均不存在）。
+- [ ] **Step 3: 最小实现**——kernel（Context/Provide/Service/OnDispose/Mount/Dispose，零 internal 依赖）+ Manager（`map[subID]*subEntry{handle, parentID, task, depth, status, childCtx}`；Spawn 判深度（沿 parentID 链查 List）与并发（running 计数）→ Factory → 子 Context 注册 OnDispose(handle.Close)；goroutine `go func(){ <-h.Done(); 记录终态; Publish(对应事件); childCtx.Dispose() }()`；Cancel = handle.Cancel + 终态记录 + 发布 + childCtx.Dispose()；Close 遍历 running）。
+- [ ] **Step 4: 验证 GREEN** — Expected: PASS（kernel + subagent 两包）。
+- [ ] **Step 5: Commit** — `git commit -m "feat(kernel,subagent): cordis 模式内核与编排器状态机限额（M12/T12.2）"`。
 
 ## Task 3: mulix_spawn/poll/cancel 工具 + 回调桥（M12）
 
@@ -421,7 +445,7 @@ func TestSubagentCallbackBridge(t *testing.T) {
 
 **Interfaces:**
 - Consumes: Task 2/3 全部签名。
-- Produces: control Options 的 `SubagentFactory subagent.SessionFactory` 由 cli 在 buildComponents 组装时以闭包注入；`func (c *Controller) Subagent() *subagent.Manager`（窄 getter，TUI 面板消费；未启用时返回 nil）；SessionFactory 闭包内部调 `assembleSession`——从 buildComponents 抽取的共用组装函数（签名 `assembleSession(hostFactory, root, workspace, cfg, approvals, attended bool, task string) (SessionHandle-like, error)`，避免组装序复制；子会话 store 的 ID = 父 id 派生如 `<parent>-sub-<n>`，meta 记 parent_id）。
+- Produces: control Options 的 `SubagentFactory subagent.SessionFactory` 由 cli 在 buildComponents 组装时以闭包注入；`func (c *Controller) Subagent() *subagent.Manager`（窄 getter，TUI 面板消费；未启用时返回 nil）；SessionFactory 闭包内部调 `assembleSession`——从 buildComponents 抽取的共用组装函数（签名 `assembleSession(hostFactory, root, workspace, cfg, approvals, attended bool, task string) (SessionHandle-like, error)`，避免组装序复制；**组装 = kernel 挂载**：子 Context + 依次 Mount store/meter/gate/engine 插件（engine provider 由 hostFactory 决定——claude 或 FakeHost 都只是插件，设计 002 §2.1）；子会话 store 的 ID = 父 id 派生如 `<parent>-sub-<n>`，meta 记 parent_id）。
 
 - [ ] **Step 1: 写失败测试**（wiring + config 默认值）:
 

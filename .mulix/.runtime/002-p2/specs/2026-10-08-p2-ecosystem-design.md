@@ -36,7 +36,26 @@
 2. **外部 MCP server = 配置透传**：mulix 只声明、引擎原生托管；mulix 不代理外部 server 协议。
 3. **记忆库 = 项目级**：工作区 `.mulix/memory/`，随仓库可选入库。
 
-## 3. 子代理编排（internal/subagent）
+## 2.1 设计修订（2026-10-08，构建期用户指令）
+
+**用户指令**：「参考 DeepSeek Harness 采用 cordis 架构进行编排——当前项目的 agent 编排方式，claude code 只是项目下的一个插件。」
+
+**解读与落点**：DeepSeek Harness 自身的编排内核是 `@deepseek-ai/cordis`（Koishi 系：Context 层级、Service 注入、插件生命周期 mount/dispose、fiber 隔离）。mulix 采用同一**架构模式**的 Go 实现（cordis 本体是 TS，不引入依赖、不违反零新依赖约束），核心主张：
+
+- **引擎是插件，不是中心**：claude 引擎宿主（P1 ClaudeHost）与测试宿主（FakeHost）都是向会话上下文提供「engine.hostfactory」服务的 provider——P1 的 `control.Options.HostFactory` 缝隙正式升格为内核级模式；未来接入其它引擎 = 再写一个 provider 插件。
+- **子代理会话 = 子作用域（child context）**：spawn = 创建子 Context + 挂载插件集（store/meter/gate/engine）+ 启动；cancel/收口 = dispose 子作用域（级联先子后父）——「镜像无孤儿回合」由 dispose 语义统一保证。
+- **不造第二个事件总线**：事件面仍走 P1 红线路径（sessionx 先持久化后发布）；kernel 只管生命周期与服务注入，不做第二条发布通道（与 repolint「第二 system prompt 路径」同一纪律）。
+
+**对组件的影响**：新增 `internal/kernel`（Go 版 cordis 模式：Context/Provide/Service/Mount/Dispose，零依赖）；`internal/subagent` 重构为「kernel 之上的子代理 fiber 管理器」；Task 3 工具面/回调桥、Task 4 组装根（assembleSession = 挂载点）语义不变。规格 FR-101..113 与成功标准不变——只改 HOW。
+
+## 3. 子代理编排（internal/subagent，kernel 之上）
+
+### 3.0 kernel 模式（internal/kernel，Go 版 cordis 要素）
+
+- `Context`：层级作用域。`NewContext(parent)`（根为 nil parent）；服务查找沿祖先链回溯（子作用域继承父注入，可覆盖）；`Provide(name, svc)` 同作用域重复注册报错。
+- `Plugin`：`{ Name() string; Mount(c *Context) error }`——挂载时贡献服务与清理函数（`c.OnDispose(fn)`）。
+- `Dispose()`：先子后父——先 dispose 全部子 Context（LIFO），再执行自身 disposables（LIFO）。子代理取消/收口的资源级联收口（引擎进程、监听器、ticker）统一走这里。
+- kernel 零第三方依赖、不 import 任何 internal 包（leaf 级）；subagent 是它的唯一 P2 消费者，cli 是组合根。
 
 ### 3.1 生命周期与状态机
 
@@ -47,15 +66,15 @@ spawn ──→ running ──→ completed
              └─────→ timeout（不实现——整体时长上限属 P3 预算控制，见 Out of Scope 语义边界）
 ```
 
-- `Spawn(parentSession, task, opts)`：为子代理创建独立 sessionx Store（`.mulix/sessions/` 同池，meta 记 `parent_id` 与 `delegation_task`）、构造子 Controller（复用 `buildComponents` 的组装序：store → meter → policy/gate → controller，attended 语义 = 继承父会话的审批桥）、`NewSession` 后 Submit(task)。
+- `Spawn(parentSession, task, opts)`：为子代理创建子 Context（kernel.NewContext(父作用域)）→ 挂载插件集：sessionx Store（`.mulix/sessions/` 同池，meta 记 `parent_id` 与 `delegation_task`）、meter、policy/gate（继承父会话审批桥）、engine provider（claude 或 fake——引擎只是插件）；`NewSession` 后 Submit(task)。Manager 的 SessionFactory 缝隙保留（cli 组合根实现为「挂载插件集」的闭包），kernel 语义 beneath 它。
 - 子代理引擎进程与主代理引擎进程**相互独立**（各自 claude 子进程、各自 mcp-config 副本——BootComposer 面一致，Fingerprint 一致性由字节稳定护栏保证）。
 - **结果回收**：子代理回合收口（TurnDone）后，`mulix_poll` 返回最终 assistant 文本 + 退出原因 + usage（复用 `cache.ReadUsageReport` 权威口径）；主会话镜像记一条 `DelegationCompleted` 事件（含子会话 id、任务摘要、usage 摘要）。
 
 ### 3.2 委派链与限额
 
 - 委派链 = 有向无环：每个子会话 meta 记 `parent_id`；spawn 时沿链回溯判环，深度 >3 → `mulix_spawn` 返回错误应答（引擎侧收错误，不悬挂）；并发 >4 → 排队拒绝（立即错误，明确文案）。
-- 取消：`mulix_cancel` 或 TUI `/agents` → 子 Controller.Cancel()（P1 语义：CancelAll + Interrupt）→ 镜像无孤儿回合（resume_reconciled 同款收口保障）→ usage 已发生的部分照常入账。
-- 主会话关闭时：所有运行中子代理级联取消（Close 序：先子后父，防悬挂进程）。
+- 取消：`mulix_cancel` 或 TUI `/agents` → dispose 子 Context（kernel 级联：子代理的引擎进程/监听器/ticker disposables 先子后父收口；P1 Controller.Cancel 语义——CancelAll + Interrupt——由引擎插件的 dispose 实现调用）→ 镜像无孤儿回合（resume_reconciled 同款收口保障）→ usage 已发生的部分照常入账。
+- 主会话关闭时：dispose 父 Context → 全部运行中子代理级联收口（kernel Dispose 序天然先子后父，防悬挂进程）。
 
 ### 3.3 权限治理与审批路由
 
