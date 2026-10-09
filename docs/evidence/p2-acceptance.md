@@ -31,7 +31,9 @@
     depth 0 落主镜像）；
   - 多步编码任务真实完成并提交：**git commit `9f71090` "smoke: subagent
     add subtract"**（calc.py 增 subtract、test_calc.py 断言经 python 执行
-    通过——本轮产物复验 exit 0）；
+    通过——本轮产物复验 exit 0；如实记录：该多步任务由主引擎会话内建
+    Agent 子代理执行完成，mulix spawn 桥创建的子会话因引擎流断未跑完
+    自身回合——见 p2-smoke.md 冒烟 A2）；
   - **子代理工具治理同回路实证**：冒烟 A1（spawn 未入 allow 清单）时
     spawn 被无人值守 fail-closed 拒绝（`denied by policy: unattended`），
     主代理未绕过、如实汇报——FR-101 审批/策略回路在真实引擎下工作。
@@ -150,6 +152,25 @@
 - **事件类型与 codec（Task 1）**：`internal/event` 全包绿（本会话运行）——
   委派链四事件（delegation_started/completed/cancelled/failed）JSON 往返
   稳定，`eventKindOf` 全 case（Append 打标必经）。
+- **自定义钩子事件（spec SC-006 事件组之一，FR-111/112/113）**：钩子
+  事件复用 P1 `notice` kind（`internal/event/event.go` 无专用 hook
+  kind——诚实记录：1:1 机制、持久化通路与 codec 与 P1 全量共享，P2 未
+  为钩子新增 kind），降级/告警以 NoticeEvent（warning）走镜像先行发布。
+  测试钉（全部 grep 核验 + 本会话运行 PASS，评审修复轮 1 复跑）：
+  guard 面 `TestHookHelperProcess`（自重执行钩子脚本 stub 基座——
+  sleep/stdout/argv+stdin 观察/指定退出码四行为参数化）、
+  `TestScriptConsumerJSONResponseAccepted`（exit 0 + JSON 输出
+  → 按语义接受、零告警）、`TestScriptConsumerFanOutWithBuiltin`（脚本
+  消费者与内置消费者同一次 Dispatch 分发——一条事件全部消费者）、
+  `TestScriptConsumerTimeoutDegrades` / `TestScriptConsumerCrashDegrades`
+  （超时/崩溃 → 降级 + OnWarning 告警，错误带失败模式与退出码线索，
+  主流程不悬挂 fail-open）；组合根面（cli）`TestHookWiringHelperProcess`
+  （自重执行 stub 基座）、`TestHookWiringMountsConsumerAndTriggers`
+  （挂载 + PreToolUse 触发 + stdin 携带完整事件 JSON）、
+  `TestHookWiringTimeoutDegradesWithMirrorNotice`（**FR-113 审计性组合根
+  实证：降级告警经 `store.Replay()` 从镜像读回钉死「走了发布通道」而非
+  直写 sink**，回合照常收口）。其余三组（委派链/召回注入/外部工具）的
+  镜像审计证据分别在 SC-001/002/004 与下方冒烟实证条目。
 - **镜像 1:1 + 孤儿回合对账**：`TestSubagentWiringEndToEnd` ③（cancel/
   级联/父 Close 三路径 → 子镜像成对 + 1:1 + RecoveryRequired 放行——
   `mirrorReconciled` 用控制层同款恢复门判定）；`TestE2ECrashRecoveryResume`
@@ -202,13 +223,14 @@
 | 标准 | 结论 | 主证据（测试均经 grep 核验 + 本会话运行） |
 |---|---|---|
 | SC-001 | ✅ | TestSubagentWiringEndToEnd（depth 链/孤儿对账/MaxDepth）+ 真实引擎 spawn→子镜像→`9f71090` 真实提交 + fail-closed 治理实证；「结果回收」全链自动化已钉、真实引擎面受 2.1.296 形状限制（诚实记录，限制①） |
-| SC-002 | ✅ | TestMemoryRecallDisabledZeroDelta/InjectedAtTurnTail 等 6 测 + 字节护栏 5 测 + **真实引擎开启冒烟（召回块命中 + 镜像 notice）** |
+| SC-002 | ✅ | TestMemoryRecallDisabledZeroDelta/InjectedAtTurnTail 等 6 测 + 字节护栏 6 测 + **真实引擎开启冒烟（召回块命中 + 镜像 notice）** |
 | SC-003 | ✅ | 真实二进制 lint layers exit 0 + 违规注入 exit 1（file:line + 规则名）+ revert 复跑 exit 0 + lint 15 测/cli 4 测 |
 | SC-004 | ✅ | Compose 矩阵 8 测 + 接线 3 测 + **真实 echo server 冒烟（spawn/命名空间调用/policy allow/`echo: mulix-p2-smoke-echo-12345` 往返）** |
 | SC-005 | ✅ | watcher 6 测（touch 静默/变更/删除/收口/接线）+ `mulix instructions` 真实输出（sha256/摘要/预览） |
-| SC-006 | ✅ | event codec 全绿 + TestE2ECrashRecoveryResume + 孤儿回合对账 + **真实冒烟镜像审计（主 10 事件/子 5 事件，崩溃路径收口）** |
+| SC-006 | ✅ | event codec 全绿 + 自定义钩子事件审计（guard 4 测 + cli 组合根 3 测，Replay 钉镜像面——见 SC-006 条目）+ TestE2ECrashRecoveryResume + 孤儿回合对账 + **真实冒烟镜像审计（主 10 事件/子 5 事件，崩溃路径收口）** |
 
-**验证命令（M18 出口）**：`go test ./... -count=1` 全绿（20 包：18 ok +
-2 无测试文件）+ `go vet ./...` 干净 + `gofmt -l internal cmd` 空 +
+**验证命令（M18 出口）**：`go test ./... -count=1` 全绿（21 包：19 ok +
+2 无测试文件——评审修复轮 1 实测复核）+ `go vet ./...` 干净 +
+`gofmt -l internal cmd` 空 +
 `mulix lint layers` 0 违规 + GOOS=windows/linux/darwin（GOARCH=amd64）
 `go build ./...` 三平台全过（本机 Windows host 实测）。
