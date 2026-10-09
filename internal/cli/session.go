@@ -4,15 +4,21 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"mulix/internal/cache"
 	"mulix/internal/config"
 	"mulix/internal/control"
 	"mulix/internal/engine"
+	"mulix/internal/event"
 	"mulix/internal/guard"
 	"mulix/internal/registry"
 	"mulix/internal/sessionx"
+	"mulix/internal/subagent"
+	"mulix/internal/tools/mulixsubagent"
 )
 
 // errOpenTurn 是恢复引导错误（外层可识别后转退出码）。
@@ -111,12 +117,25 @@ func effectiveConfig(o Options) (config.Config, error) {
 }
 
 // buildComponents 组装会话组件（attended 与 unattended 共用；差异由参数表达）。
-// 接线序（T22 评审定式）：bridge → Gate{Approver} → Options{Gate, Approvals}。
+// 接线序（T22 评审定式）：bridge → Gate{Approver} → Options{Gate, Approvals}
+// ——组装序收敛于 assembleController（M12/T12.4 起与子代理子会话共用同一
+// 组装核，防止接线分叉）。
 func buildComponents(o Options, store *sessionx.Store, meter *cache.Meter, sink control.Sink, attended bool) (*control.Controller, *control.UserApprovalBridge, error) {
 	cfg, err := effectiveConfig(o)
 	if err != nil {
 		return nil, nil, err
 	}
+	return o.assembleController(cfg, store, meter, sink, nil, !attended)
+}
+
+// assembleController 是会话组装核（M12/T12.4 从 buildComponents 抽取的共用
+// 组装函数）：显式规则集 → policy → gate（approvals 非空继承为 Approver；
+// attended 主会话无继承时新建审批桥）→ control.Options（含子代理工厂闭包与
+// 限额）。store/meter 由调用方备妥（主会话含 resume 语义，子会话按父 id
+// 派生新建）。组装 = kernel 挂载语义：依次挂载 policy/gate/engine 插件
+// （engine provider 由 hostFactory 决定——claude 与 FakeHost 都只是插件，
+// design 002 §2.1）。
+func (o Options) assembleController(cfg config.Config, store *sessionx.Store, meter *cache.Meter, sink control.Sink, approvals *control.UserApprovalBridge, unattended bool) (*control.Controller, *control.UserApprovalBridge, error) {
 	// 显式规则集（终评冒烟发现：此前恒为 nil——config 的 allow/deny 清单
 	// 从未生效，无人值守下写操作全被 fail-closed 拒绝，引擎空转 deny 循环）。
 	// 口径：deny 清单 → DecisionDeny；allow 清单 → DecisionAllow；预设兜底
@@ -146,10 +165,12 @@ func buildComponents(o Options, store *sessionx.Store, meter *cache.Meter, sink 
 	if err != nil {
 		return nil, nil, err
 	}
+	bridge := approvals // 子会话：继承父审批桥（无人值守时 nil = fail-closed）
+	if !unattended && bridge == nil {
+		bridge = control.NewUserApprovalBridge() // attended 主会话：新建审批桥
+	}
 	gateOpts := guard.GateOptions{Policy: policy}
-	var bridge *control.UserApprovalBridge
-	if attended {
-		bridge = control.NewUserApprovalBridge()
+	if bridge != nil {
 		gateOpts.Approver = bridge
 	}
 	gate, err := guard.NewGate(gateOpts)
@@ -160,6 +181,16 @@ func buildComponents(o Options, store *sessionx.Store, meter *cache.Meter, sink 
 	if hostFactory == nil {
 		hostFactory = productionHostFactory(o)
 	}
+	// 子代理工厂（M12/T12.4）：本会话作为父——子会话继承本会话审批桥；
+	// mulix stdio 条目不可产出（selfCommand 失败）时不接线（工厂 nil =
+	// 子代理禁用，Boot 面与 P1 逐字节一致）。
+	var subFactory subagent.SessionFactory
+	if _, selfErr := selfCommand(); selfErr == nil {
+		subFactory = o.subagentSessionFactory(storeID(store), bridge, cfg, hostFactory, !unattended)
+	}
+	// 子代理工具面条件注册（组合根职责）：注册期冻结（newRegistryServer 的
+	// NewServer）之前调用；Once 语义——进程内首次调用定型（配置进程内不变）。
+	mulixsubagent.RegisterConditional(nil, subFactory != nil)
 	c, err := control.NewController(control.Options{
 		HostFactory:      hostFactory,
 		Sink:             sink,
@@ -169,9 +200,14 @@ func buildComponents(o Options, store *sessionx.Store, meter *cache.Meter, sink 
 		Approvals:        bridge,
 		Config:           cfg,
 		Workspace:        o.Workspace,
-		Unattended:       !attended,
+		Unattended:       unattended,
 		Registry:         newRegistryServer(),
 		AllowEngineDrift: o.driftAllowed(),
+		SubagentFactory:  subFactory,
+		SubagentLimits: control.SubagentLimits{
+			MaxDepth:      cfg.Subagent.MaxDepth,
+			MaxConcurrent: cfg.Subagent.MaxConcurrent,
+		},
 	})
 	if err != nil {
 		return nil, nil, err
@@ -200,6 +236,212 @@ func newRegistryServer() *registry.Server {
 	return registry.NewServer(registry.Options{
 		Name: "mulix", Version: Version, SelfCommand: selfCmd,
 	})
+}
+
+// ---- 子代理会话工厂（M12/T12.4：组合根的 SessionFactory 实现） ----
+
+// subagentSessionFactory 返回本会话的子代理会话工厂闭包：每个 spawn 经
+// assembleSession 组装真实镜像子会话（store id = <parentID>-sub-<n>、meta
+// 记 parent_id、policy/gate 继承父 Approver），再 Submit(task) 驱动回合。
+// 会话序号 per-parent（每闭包一枚计数器——与「父 id 派生」的编号口径一致）。
+// 子会话组装复用同一 hostFactory（生产 = claude，测试 = FakeHost——引擎只是
+// 插件之一，design 002 §2.1）。
+func (o Options) subagentSessionFactory(parentID string, approvals *control.UserApprovalBridge, cfg config.Config, hostFactory func(engine.BootConfig) (engine.Host, error), attended bool) subagent.SessionFactory {
+	var seq atomic.Int64
+	return func(ctx context.Context, task string) (subagent.SessionHandle, error) {
+		childID := fmt.Sprintf("%s-sub-%d", parentID, seq.Add(1))
+		return assembleSession(o, assembleSessionSpec{
+			HostFactory: hostFactory,
+			Root:        o.SessionsRoot,
+			UsageRoot:   o.UsageRoot,
+			Workspace:   o.Workspace,
+			Cfg:         cfg,
+			Approvals:   approvals,
+			Attended:    attended,
+			ParentID:    parentID,
+			SessionID:   childID,
+			Task:        task,
+			Ctx:         ctx,
+		})
+	}
+}
+
+// assembleSessionSpec 是一次子会话组装的参数（brief 签名 assembleSession(
+// hostFactory, root, workspace, cfg, approvals, attended, task) 的承载结构：
+// 组装另需父 id（镜像派生与 meta.parent_id）、派生会话 id 与记账根——打包
+// 成结构避免超长参数表）。
+type assembleSessionSpec struct {
+	HostFactory func(engine.BootConfig) (engine.Host, error)
+	Root        string // sessions 根（子镜像与主会话同池）
+	UsageRoot   string // 记账根（子会话独立 usage 文件）
+	Workspace   string
+	Cfg         config.Config
+	Approvals   *control.UserApprovalBridge // 继承父审批桥（nil = 无人值守 fail-closed）
+	Attended    bool                        // 父会话模式（子镜像 Unattended 标注跟随）
+	ParentID    string                      // 父会话 id（meta.parent_id）
+	SessionID   string                      // 派生 id（<parentID>-sub-<n>）
+	Task        string                      // 委派任务（子会话首回合输入）
+	Ctx         context.Context             // spawn ctx（Submit 等待与收口消费）
+}
+
+// assembleSession 组装一个子代理子会话（与 buildComponents 同一组装核——
+// assembleController；brief：避免组装序复制）：store.Create（父 id 派生 +
+// meta.parent_id）→ meter → policy/gate（继承父 Approver）→ controller
+// （捕获式 no-op sink——事件落子镜像）→ NewSession → Submit(task)。返回
+// SessionHandle 形状的句柄（subagentSession）。
+func assembleSession(o Options, spec assembleSessionSpec) (subagent.SessionHandle, error) {
+	store, err := sessionx.Create(spec.Root, sessionx.Options{
+		ID: spec.SessionID, Workspace: spec.Workspace, Unattended: !spec.Attended,
+	})
+	if err != nil {
+		return nil, err
+	}
+	// 失败路径统一回滚（已开组件逐层收口——镜像与 usage 句柄不泄漏）。
+	rollback := func(err error) (subagent.SessionHandle, error) {
+		_ = store.Close()
+		return nil, err
+	}
+	if err := store.SetParentID(spec.ParentID); err != nil {
+		return rollback(fmt.Errorf("subagent: seed parent_id: %w", err))
+	}
+	meter, err := cache.NewMeter(cache.MeterOptions{
+		Root: spec.UsageRoot, SessionID: spec.SessionID,
+		Pricing: cache.Pricing{InputPerMTok: 3, OutputPerMTok: 15},
+	})
+	if err != nil {
+		return rollback(fmt.Errorf("subagent: child meter: %w", err))
+	}
+	cap := &capturingSink{}
+	ctrl, _, err := o.assembleController(spec.Cfg, store, meter, cap, spec.Approvals, !spec.Attended)
+	if err != nil {
+		_ = meter.Close()
+		return rollback(err)
+	}
+	h := &subagentSession{
+		id: spec.SessionID, ctrl: ctrl, meter: meter, store: store, cap: cap,
+		done: make(chan struct{}),
+	}
+	if err := ctrl.NewSession(spec.Ctx); err != nil {
+		_ = h.Close(spec.Ctx)
+		return rollback(fmt.Errorf("subagent: child session: %w", err))
+	}
+	// 委派回合：Submit 阻塞至回合收口（TurnDone/引擎退出）——句柄 Done 即
+	// 其完成面；Err 为收口错误（nil = 正常完成）。
+	go func() {
+		err := ctrl.Submit(spec.Ctx, spec.Task)
+		h.mu.Lock()
+		h.err = err
+		h.mu.Unlock()
+		close(h.done)
+	}()
+	return h, nil
+}
+
+// capturingSink 是子会话的捕获式 no-op sink（Task 4）：事件落子镜像（镜像
+// 先行红线由 control 保证），本 sink 只捕获句柄消费的字段——最终 assistant
+// 文本（FR-102 最终消息回收 → Summary）与用量汇总（DelegationCompleted 的
+// usage 摘要）。
+type capturingSink struct {
+	mu       sync.Mutex
+	lastText string // 末段 assistant 文本
+	lastRes  string // 末次回合收口文本（TurnDone.ResultText）
+	tokens   int64  // UsageEvent 各 token 计数累计
+	costUSD  float64
+}
+
+func (s *capturingSink) Publish(ev any) {
+	switch e := ev.(type) {
+	case event.AssistantTextEvent:
+		s.mu.Lock()
+		s.lastText = e.Text
+		s.mu.Unlock()
+	case event.TurnDoneEvent:
+		s.mu.Lock()
+		s.lastRes = e.ResultText
+		s.mu.Unlock()
+	case event.UsageEvent:
+		s.mu.Lock()
+		s.tokens += e.UncachedInputTokens + e.WriteTokens + e.ReadTokens +
+			e.OutputTokens + e.ThinkingTokens
+		s.costUSD += e.CostUSD
+		s.mu.Unlock()
+	}
+}
+
+// Summary 返回最终 assistant 文本（FR-102）：优先回合收口文本，无则末段
+// assistant 文本。
+func (s *capturingSink) Summary() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lastRes != "" {
+		return s.lastRes
+	}
+	return s.lastText
+}
+
+// subagentSession 是 subagent.SessionHandle 的 cli 适配：包装 assembleSession
+// 产出的 controller/meter/store/capture sink。
+type subagentSession struct {
+	id        string
+	ctrl      *control.Controller
+	meter     *cache.Meter
+	store     *sessionx.Store
+	cap       *capturingSink
+	done      chan struct{}
+	closeOnce sync.Once
+	mu        sync.Mutex
+	err       error
+}
+
+var _ subagent.SessionHandle = (*subagentSession)(nil)
+
+func (h *subagentSession) ID() string            { return h.id }
+func (h *subagentSession) Done() <-chan struct{} { return h.done }
+
+func (h *subagentSession) Err() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.err
+}
+
+func (h *subagentSession) Summary() string { return h.cap.Summary() }
+
+func (h *subagentSession) TotalTokens() int64 { return h.cap.totalTokens() }
+
+func (h *subagentSession) CostUSDCents() int64 { return h.cap.costCents() }
+
+// Cancel 中断子会话当前回合（引擎 interrupt + 待审请求 fail-closed 拒绝）。
+// 镜像收口由随后的 Close 完成（泵 engine_closed 合成 TurnDone——无孤儿回合）。
+func (h *subagentSession) Cancel(ctx context.Context) error { return h.ctrl.Cancel(ctx) }
+
+// Close 有界收口子会话（幂等）：controller（泵收口/级联孙代）→ meter →
+// store（Windows TempDir 清理依赖句柄归还）。
+func (h *subagentSession) Close(ctx context.Context) error {
+	var err error
+	h.closeOnce.Do(func() {
+		if h.ctrl != nil {
+			err = h.ctrl.Close(ctx)
+		}
+		if h.meter != nil {
+			_ = h.meter.Close()
+		}
+		if h.store != nil {
+			_ = h.store.Close()
+		}
+	})
+	return err
+}
+
+func (s *capturingSink) totalTokens() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tokens
+}
+
+func (s *capturingSink) costCents() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return int64(math.Round(s.costUSD * 100))
 }
 
 // sessionHandle 是一次会话的组件集合（TUI /new /resume 换绑与 RunPrompt

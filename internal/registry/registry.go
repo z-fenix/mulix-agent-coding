@@ -108,6 +108,19 @@ func Registered() []string {
 	return names
 }
 
+// Lookup 按名取回一个已注册工具（只读快照——调用方可直接 Execute；未注册
+// → (nil, false)）。组合根 e2e 与诊断消费（M12/T12.4：经工具面驱动子代理
+// 回调桥，钉 RegisterConditional 的组合根接线）。
+func Lookup(name string) (Tool, bool) {
+	regMu.RLock()
+	defer regMu.RUnlock()
+	t, ok := registry[name]
+	if !ok {
+		return nil, false
+	}
+	return t, true
+}
+
 // Server 是进程内 MCP 服务器框架（官方 go-sdk 承载）：启动时从全局注册表
 // 冻结工具面。cache.Registry 对齐——SelfCommand 配置后，BootComposer 的
 // --mcp-config 生成 mulix stdio 自 spawn 条目（design §7.2：引擎经 stdio

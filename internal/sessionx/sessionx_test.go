@@ -293,6 +293,48 @@ func TestSetEngineIDPinsMetaRMW(t *testing.T) {
 	}
 }
 
+// TestSetParentIDPinsMetaRMW pins（P2 Task 4：子代理子镜像的委派链落痕）——
+// SetParentID 写 meta.parent_id 且兄弟键在 RMW 中保留（与 SetEngineID 同款
+// read-modify-write 语义）；重复设置取后值。control 的委派链深度回溯与 e2e
+// 的 meta.parent_id 断言都消费该键。
+func TestSetParentIDPinsMetaRMW(t *testing.T) {
+	s, dir := newTestStore(t)
+	defer s.Close()
+	if err := s.SetParentID("s-parent"); err != nil {
+		t.Fatalf("set parent id: %v", err)
+	}
+	meta, err := s.ReadMeta()
+	if err != nil {
+		t.Fatalf("read meta: %v", err)
+	}
+	if meta["parent_id"] != "s-parent" {
+		t.Fatalf("parent_id = %v, want s-parent", meta["parent_id"])
+	}
+	// 兄弟键保留
+	if meta["id"] != "s-20261006-01" || meta["workspace"] == "" {
+		t.Fatalf("sibling meta keys lost: %v", meta)
+	}
+	// 原始文件同一口径
+	raw, err := os.ReadFile(filepath.Join(dir, "meta.json"))
+	if err != nil {
+		t.Fatalf("read raw: %v", err)
+	}
+	var back map[string]any
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatalf("raw meta not json: %v", err)
+	}
+	if back["parent_id"] != "s-parent" {
+		t.Fatalf("raw parent_id = %v", back["parent_id"])
+	}
+	// 覆写取后值
+	if err := s.SetParentID("s-grand"); err != nil {
+		t.Fatalf("re-set parent id: %v", err)
+	}
+	if meta, _ = s.ReadMeta(); meta["parent_id"] != "s-grand" {
+		t.Fatalf("parent_id overwrite = %v, want s-grand", meta["parent_id"])
+	}
+}
+
 // TestReadCacheRoundTripAndAbsent pins ReadCache: nil,nil when absent; the
 // written projection read back verbatim.
 func TestReadCacheRoundTripAndAbsent(t *testing.T) {

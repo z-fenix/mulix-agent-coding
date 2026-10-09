@@ -186,6 +186,18 @@ func (s *Store) SetEngineID(engineID string) error {
 	return writeJSONFile(filepath.Join(s.dir, "meta.json"), meta)
 }
 
+// SetParentID 落委派链痕迹（P2 Task 4：子代理子镜像的 meta.parent_id——
+// control 的委派链深度回溯与恢复审计消费）。与 SetEngineID 同款
+// read-modify-write：兄弟键保留、原子替换（writeJSONFile）。
+func (s *Store) SetParentID(parentID string) error {
+	meta, err := s.ReadMeta()
+	if err != nil {
+		return err
+	}
+	meta["parent_id"] = parentID
+	return writeJSONFile(filepath.Join(s.dir, "meta.json"), meta)
+}
+
 // Dir 返回会话目录路径。
 func (s *Store) Dir() string { return s.dir }
 

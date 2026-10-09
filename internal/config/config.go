@@ -18,6 +18,7 @@ type Config struct {
 	Permissions  PermissionsConfig `toml:"permissions"`
 	Engine       EngineConfig      `toml:"engine"`
 	Tools        ToolsConfig       `toml:"tools"`
+	Subagent     SubagentConfig    `toml:"subagent"`
 }
 
 // CacheConfig 是缓存三层可观测性相关配置。
@@ -47,6 +48,12 @@ type ToolsConfig struct {
 	MemorySearch bool `toml:"memory_search"` // P2
 }
 
+// SubagentConfig 是子代理编排限额（P2/M12；design 002 §3：默认深度 3、并发 4）。
+type SubagentConfig struct {
+	MaxDepth      int `toml:"max_depth"`      // 委派链最大深度
+	MaxConcurrent int `toml:"max_concurrent"` // 同时运行的子代理上限
+}
+
 func defaultConfig() Config {
 	return Config{
 		DefaultModel: "claude-sonnet-4-5",
@@ -54,6 +61,7 @@ func defaultConfig() Config {
 		Permissions:  PermissionsConfig{Preset: "default"},
 		Engine:       EngineConfig{AllowDrift: false, Path: "claude"},
 		Tools:        ToolsConfig{MemorySearch: false},
+		Subagent:     SubagentConfig{MaxDepth: 3, MaxConcurrent: 4},
 	}
 }
 

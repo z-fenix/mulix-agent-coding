@@ -12,6 +12,7 @@ import (
 	"mulix/internal/cache"
 	"mulix/internal/control"
 	"mulix/internal/event"
+	"mulix/internal/subagent"
 )
 
 // channelSink 把事件通道包装回 control.Sink（换绑时复用通道）。
@@ -26,6 +27,9 @@ type sessionController interface {
 	Approve(toolUseID string, allow bool, resolvedBy string) error
 	ApproveSession(toolUseID, resolvedBy string) error
 	Snapshot() control.Snapshot
+	// Subagent 是子代理编排器的窄消费面（M12/T12.4 /agents 面板）；
+	// nil = 子代理未启用（工厂未接线）。
+	Subagent() *subagent.Manager
 }
 
 // ---- 事件适配（control Sink → tea.Msg） ----
@@ -80,6 +84,9 @@ type tuiModel struct {
 	approval *approvalCard // 非 nil = 审批态（与渲染态互斥：composer 冻结）
 	status   control.Snapshot
 	running  bool // 回合进行中（异步 Submit/换绑——Update 循环保持响应）
+	// /agents 面板（M12/T12.4）：列表态独占 composer；agentsSel 是选中行。
+	agentsOpen bool
+	agentsSel  int
 	// testMode：单测形态——Update 不回挂阻塞型重挂命令（waitForEvent/Tick，
 	// 单测直接以消息驱动）；submitCmd 仍正常返回（由测试辅助同步执行）。
 	testMode bool
@@ -166,6 +173,13 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.appendLine(l)
 		}
 		return m, nil
+	case agentsCancelDoneMsg:
+		// /agents 面板取消回执（异步）：失败留痕；成功状态由列表刷新呈现
+		//（mgr.List() 以 cancelled 终态渲染）。
+		if msg.err != nil {
+			m.appendLine("[agents] 取消失败: " + msg.err.Error())
+		}
+		return m, nil
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	case typedInput:
@@ -229,6 +243,9 @@ func (m *tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.resolve(m.approval.toolUseID, false, false)
 		}
 		return m, nil
+	}
+	if m.agentsOpen { // /agents 列表态独占 composer（与审批态同级互斥）
+		return m.handleAgentsKey(msg)
 	}
 	switch {
 	case msg.Code == tea.KeyEnter:
@@ -319,6 +336,8 @@ func (m *tuiModel) slash(line string) tea.Cmd {
 		return m.doctorCmd()
 	case "/rewind":
 		m.appendLine("[rewind] 引擎 checkpoint 透传随 T32 真实引擎联调落地")
+	case "/agents":
+		return m.openAgentsPanel()
 	case "/new":
 		return m.swapSession("")
 	case "/resume":
@@ -328,9 +347,105 @@ func (m *tuiModel) slash(line string) tea.Cmd {
 		}
 		return m.swapSession(fields[1])
 	default:
-		m.appendLine("[命令] 未知命令 " + fields[0] + "（可用：/new /resume /cache /doctor /rewind /quit）")
+		m.appendLine("[命令] 未知命令 " + fields[0] + "（可用：/new /resume /cache /doctor /agents /rewind /quit）")
 	}
 	return nil
+}
+
+// ---- /agents 面板（M12/T12.4：子代理列表视图 + c 取消） ----
+
+// openAgentsPanel 打开 /agents 面板：子会话 id/状态/任务/深度 列表视图。
+// 编排器未接线（ctrl.Subagent() == nil）→ 命令提示未启用，不进入面板态。
+func (m *tuiModel) openAgentsPanel() tea.Cmd {
+	if m.ctrl == nil {
+		m.appendLine("[agents] 子代理未启用")
+		return nil
+	}
+	if m.ctrl.Subagent() == nil {
+		m.appendLine("[agents] 子代理未启用（会话未接线子代理工厂）")
+		return nil
+	}
+	m.agentsOpen = true
+	m.agentsSel = 0
+	return nil
+}
+
+// handleAgentsKey /agents 面板键位（列表态独占 composer）：↑/↓ 选择、c 取消
+// 选中运行中子代理（异步——T28 Critical-1 同款，Update 内不阻塞）、esc/q
+// 关闭。审批卡仍优先（handleKey 前置分支）。
+func (m *tuiModel) handleAgentsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case msg.Code == tea.KeyEscape || msg.Code == 'q':
+		m.agentsOpen = false
+		return m, nil
+	case msg.Code == tea.KeyUp:
+		if m.agentsSel > 0 {
+			m.agentsSel--
+		}
+	case msg.Code == tea.KeyDown:
+		m.agentsSel++
+	case msg.Code == 'c':
+		mgr := m.ctrl.Subagent()
+		if mgr == nil { // 面板打开期间编排器不会消失；防御性收口
+			m.agentsOpen = false
+			return m, nil
+		}
+		infos := mgr.List()
+		if len(infos) == 0 {
+			return m, nil
+		}
+		if m.agentsSel >= len(infos) {
+			m.agentsSel = len(infos) - 1
+		}
+		sel := infos[m.agentsSel]
+		if sel.Status != subagent.StatusRunning {
+			m.appendLine("[agents] 仅运行中的子代理可取消（当前 " + string(sel.Status) + "）")
+			return m, nil
+		}
+		return m, agentsCancelCmd(mgr, sel.SubSessionID)
+	}
+	return m, nil
+}
+
+// agentsCancelDoneMsg 是 /agents 面板的取消回执（异步；成功态由列表刷新呈现）。
+type agentsCancelDoneMsg struct{ err error }
+
+// agentsCancelCmd 异步取消一个子代理（用户经面板触发）。
+func agentsCancelCmd(mgr *subagent.Manager, subID string) tea.Cmd {
+	return func() tea.Msg {
+		return agentsCancelDoneMsg{err: mgr.Cancel(context.Background(), subID, "user:/agents")}
+	}
+}
+
+// agentsPanelView 渲染 /agents 面板（列表：id | 状态 | 任务 | 深度；选中行
+// 标记；无子代理给空态）。数据源 = mgr.List() 实时快照。
+func (m *tuiModel) agentsPanelView() string {
+	var b strings.Builder
+	mgr := m.ctrl.Subagent()
+	if mgr == nil {
+		return "子代理未启用\n[esc] 关闭\n"
+	}
+	infos := mgr.List()
+	if len(infos) == 0 {
+		return "暂无子代理\n[↑/↓] 选择  [c] 取消  [esc] 关闭\n"
+	}
+	if m.agentsSel >= len(infos) {
+		m.agentsSel = len(infos) - 1
+	}
+	if m.agentsSel < 0 {
+		m.agentsSel = 0
+	}
+	b.WriteString("子代理（ID | 状态 | 任务 | 深度）\n")
+	for i, in := range infos {
+		marker := "  "
+		if i == m.agentsSel {
+			marker = "▸ "
+		}
+		b.WriteString(fmt.Sprintf("%s%-14s | %-9s | %s | 深度 %d\n",
+			marker, shortID(in.SubSessionID), string(in.Status), in.Task, in.Depth))
+	}
+	b.WriteString("[↑/↓] 选择  [c] 取消选中  [esc] 关闭\n")
+	return b.String()
 }
 
 // doctorCmd 异步执行 doctor 检查（T29 评审 I-1）——回执 doctorDoneMsg。
@@ -390,6 +505,9 @@ func (m *tuiModel) View() tea.View {
 	if m.approval != nil {
 		maxLines -= 4 // 审批卡高度
 	}
+	if m.agentsOpen {
+		maxLines -= 4 // /agents 面板头尾（列表行随 transcript 裁剪让位）
+	}
 	if maxLines < 1 {
 		maxLines = 1
 	}
@@ -405,6 +523,9 @@ func (m *tuiModel) View() tea.View {
 		card := fmt.Sprintf("工具 %s（%s）等待授权\n[a] 本次允许  [s] 本会话允许  [d] 拒绝",
 			m.approval.tool, shortID(m.approval.toolUseID))
 		b.WriteString(styleCard.Render(card))
+		b.WriteString("\n")
+	} else if m.agentsOpen {
+		b.WriteString(styleCard.Render(m.agentsPanelView()))
 		b.WriteString("\n")
 	} else {
 		b.WriteString("> " + m.input)

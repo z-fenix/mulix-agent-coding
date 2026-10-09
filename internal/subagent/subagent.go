@@ -229,6 +229,24 @@ func (m *Manager) Poll(ctx context.Context, subID string) (Status, error) {
 	return e.status, nil
 }
 
+// Summary 返回已收口子代理的最终 assistant 文本（FR-102 最终消息回收；
+// poll 应答 summary 的来源——Task 3 裁定）。completed/failed 终态 →
+// (handle.Summary(), true)；running/未知 id → ("", false)。
+func (m *Manager) Summary(subID string) (string, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e, ok := m.subs[subID]
+	if !ok {
+		return "", false
+	}
+	switch e.status {
+	case StatusCompleted, StatusFailed:
+		return e.handle.Summary(), true
+	default:
+		return "", false
+	}
+}
+
 // Cancel 取消一个运行中的子代理：终态记为 cancelled（首个终态获胜）、调用
 // handle.Cancel、发布 DelegationCancelled、Dispose 子 Context（handle.Close 随
 // 级联执行）。仅 running 可取消；未知/已终态 → 错误。

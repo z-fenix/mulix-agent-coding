@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -467,6 +468,9 @@ type subagentOps interface {
 	Spawn(task, parentID string, depth int) (string, error)
 	Poll(subID string) (subagent.Status, error)
 	Cancel(subID, reason string) error
+	// Summary 是已收口子代理的最终 assistant 文本（Task 3 裁定/Task 4 接线：
+	// poll 应答的 summary 来源，FR-102 最终消息回收；running/未知 → ("", false)）。
+	Summary(subID string) (string, bool)
 }
 
 // managerOps 把 *subagent.Manager 适配为 subagentOps：注入 Background ctx
@@ -484,6 +488,8 @@ func (a managerOps) Poll(subID string) (subagent.Status, error) {
 func (a managerOps) Cancel(subID, reason string) error {
 	return a.m.Cancel(context.Background(), subID, reason)
 }
+
+func (a managerOps) Summary(subID string) (string, bool) { return a.m.Summary(subID) }
 
 // subagentCallbackServer 是子代理操作的跨进程桥（M12/Task 3）：serve 子进程
 // 上的 mulix_spawn/poll/cancel 工具把 {op,...} POST 到本服务器，转发给前台
@@ -550,9 +556,11 @@ func (s *subagentCallbackServer) handle(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var op struct {
-		Op       string `json:"op"`
-		Task     string `json:"task"`
-		SubID    string `json:"sub_session_id"`
+		Op    string `json:"op"`
+		Task  string `json:"task"`
+		SubID string `json:"sub_session_id"`
+		// ParentID/Depth 仅解码留痕（协议形状完整）：wire 值不可信——spawn 的
+		// 真实 parent/depth 由前台按本会话镜像链计算（Task 3 评审移交，见下）。
 		ParentID string `json:"parent_id"`
 		Depth    int    `json:"depth"`
 	}
@@ -563,11 +571,12 @@ func (s *subagentCallbackServer) handle(w http.ResponseWriter, r *http.Request) 
 	}
 	switch op.Op {
 	case "spawn":
-		parentID := op.ParentID
-		if parentID == "" {
-			parentID = s.ctrl.sessionID // 顶层工具调用缺省挂主会话
-		}
-		subID, err := s.mgr.Spawn(op.Task, parentID, op.Depth)
+		// Task 3 评审移交（M12/Task 4 落实）：wire 的 parent_id/depth 不可信
+		//（工具契约无 depth 字段，桥恒收 0）——真实委派链状态由前台按本会话
+		// 镜像的 parent_id 链计算：parent = 本会话 id（本进程内 spawn 一律挂
+		// 本会话），depth = 镜像链祖先数（主会话直生子代理 0，每深一层 +1）
+		// ——MaxDepth 限额因此可达（e2e 钉死第三层 spawn 被拒）。
+		subID, err := s.mgr.Spawn(op.Task, s.ctrl.sessionID, s.ctrl.delegationDepth())
 		if err != nil {
 			writeOpResult(w, map[string]any{"ok": false, "error": err.Error()})
 			return
@@ -579,7 +588,13 @@ func (s *subagentCallbackServer) handle(w http.ResponseWriter, r *http.Request) 
 			writeOpResult(w, map[string]any{"ok": false, "error": err.Error()})
 			return
 		}
-		writeOpResult(w, map[string]any{"ok": true, "sub_session_id": op.SubID, "status": string(status)})
+		resp := map[string]any{"ok": true, "sub_session_id": op.SubID, "status": string(status)}
+		// FR-102 最终消息回收（Task 3 裁定）：completed/failed 终态应答携带
+		// summary（Manager.Summary 的来源；running 不携带该键）。
+		if summary, ok := s.mgr.Summary(op.SubID); ok {
+			resp["summary"] = summary
+		}
+		writeOpResult(w, resp)
 	case "cancel":
 		if err := s.mgr.Cancel(op.SubID, "requested via mulix_cancel"); err != nil {
 			writeOpResult(w, map[string]any{"ok": false, "error": err.Error()})
@@ -596,6 +611,39 @@ func writeOpResult(w http.ResponseWriter, result map[string]any) {
 	raw, _ := json.Marshal(result)
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(raw)
+}
+
+// delegationDepth 计算本会话在委派链中的深度（Task 3 评审移交：MaxDepth 的
+// 真实深度来源）。链路数据 = sessions 根下各镜像 meta.json 的 parent_id
+// （子代理组装时由 cli 工厂写入——Task 4）：沿 parent_id 逐层回溯，祖先数即
+// 本会话子代理的 spawn 深度。父目录缺失/损坏按链尽处理（保守降为浅层）；
+// 迭代上限 64 防御畸形环链不致死循环。
+func (c *Controller) delegationDepth() int {
+	root := filepath.Dir(c.opts.Store.Dir())
+	cur := c.sessionID
+	for depth := 0; depth < 64; depth++ {
+		parent, ok := parentIDOf(sessionx.SessionDir(root, cur))
+		if !ok || parent == "" {
+			return depth
+		}
+		cur = parent
+	}
+	return 64
+}
+
+// parentIDOf 读一个会话镜像 meta.json 的 parent_id（无该键/不可读 → ("", false)）。
+// 直读文件而非 OpenStore：链回溯是只读检查，不取镜像写句柄。
+func parentIDOf(dir string) (string, bool) {
+	raw, err := os.ReadFile(filepath.Join(dir, "meta.json"))
+	if err != nil {
+		return "", false
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return "", false
+	}
+	p, _ := meta["parent_id"].(string)
+	return p, true
 }
 
 // close 收口子代理回调监听（会话关闭时调用；幂等）。closed 判据是
@@ -770,6 +818,14 @@ func (c *Controller) HasPendingApproval(toolUseID string) bool {
 // Mirror 返回权威镜像（TUI/测试读取事件流与投影；写入仍归 control）。
 func (c *Controller) Mirror() *sessionx.Store { return c.opts.Store }
 
+// Subagent 返回子代理编排器（Task 4：TUI /agents 面板消费的窄 getter）。
+// 未启用（Factory 为 nil、注册面无 mulix 条目或组装失败）时返回 nil。
+func (c *Controller) Subagent() *subagent.Manager {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.subMgr
+}
+
 // Meter 返回记账器。**并发红线**：Meter 单写者（泵），跨 goroutine 只读
 // Report 会与 Observe 竞态——外部读取一律走 Snapshot()（泵侧更新的
 // lastReport 快照），不得直接调 Meter.Report()。
@@ -816,7 +872,14 @@ func (c *Controller) Close(ctx context.Context) error {
 	host := c.host
 	cb := c.permCallback
 	scs := c.subCallback
+	mgr := c.subMgr
 	c.mu.Unlock()
+	if mgr != nil {
+		// 级联取消全部运行中子代理（Review Focus 孤儿回合钉：父会话收口时
+		// 子镜像必须无孤儿回合——各子 ctrl.Close 的泵收口合成 TurnDone，随后
+		// 才收本侧监听/引擎； grandchildren 经同一接线逐层递归）。
+		mgr.Close(ctx)
+	}
 	if scs != nil {
 		scs.close() // 子代理回调监听收口——serve 子进程的挂起操作得 {ok:false,"closed"}
 	}

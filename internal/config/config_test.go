@@ -53,6 +53,36 @@ func TestDefaultsWithoutFiles(t *testing.T) {
 	}
 }
 
+// TestSubagentConfigDefaultsAndLayering pins（P2 Global Constraints：新配置键
+// 进默认值与分层加载测试）：[subagent] max_depth/max_concurrent 内置默认
+// 3/4（design 002 §3），项目层可覆盖（user 层优先级更高，锁定面不含此键）。
+func TestSubagentConfigDefaultsAndLayering(t *testing.T) {
+	cfg, _, err := NewLoader().Load(Flags{}, Paths{})
+	if err != nil {
+		t.Fatalf("load defaults: %v", err)
+	}
+	if cfg.Subagent.MaxDepth != 3 || cfg.Subagent.MaxConcurrent != 4 {
+		t.Fatalf("subagent defaults = %+v, want max_depth 3 / max_concurrent 4", cfg.Subagent)
+	}
+	project := writeTOML(t, "[subagent]\nmax_depth = 1\nmax_concurrent = 2\n")
+	cfg2, _, err := NewLoader().Load(Flags{}, Paths{Project: project})
+	if err != nil {
+		t.Fatalf("load project layer: %v", err)
+	}
+	if cfg2.Subagent.MaxDepth != 1 || cfg2.Subagent.MaxConcurrent != 2 {
+		t.Fatalf("project layer subagent = %+v, want max_depth 1 / max_concurrent 2", cfg2.Subagent)
+	}
+	// 项目层只写一个键 → 另一个键保默认（BurntSushi 解码保底值语义）
+	partial := writeTOML(t, "[subagent]\nmax_depth = 5\n")
+	cfg3, _, err := NewLoader().Load(Flags{}, Paths{Project: partial})
+	if err != nil {
+		t.Fatalf("load partial layer: %v", err)
+	}
+	if cfg3.Subagent.MaxDepth != 5 || cfg3.Subagent.MaxConcurrent != 4 {
+		t.Fatalf("partial layer subagent = %+v, want 5/4", cfg3.Subagent)
+	}
+}
+
 // TestPriorityMatrix pins flag > project > user > default (design §12).
 func TestPriorityMatrix(t *testing.T) {
 	user := writeTOML(t, "default_model = \"user-model\"\n\n[cache]\nhit_rate_floor = 0.5\n")

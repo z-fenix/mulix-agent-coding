@@ -14,6 +14,7 @@ import (
 	"mulix/internal/control"
 	"mulix/internal/engine"
 	"mulix/internal/event"
+	"mulix/internal/subagent"
 )
 
 // ---- 测试替身 ----
@@ -25,7 +26,10 @@ type stubController struct {
 	sessionGrants [][2]string // id, by
 	snap          control.Snapshot
 	failSubmit    bool
+	sub           *subagent.Manager // /agents 面板数据源（nil = 未启用）
 }
+
+func (s *stubController) Subagent() *subagent.Manager { return s.sub }
 
 func (s *stubController) Submit(_ context.Context, text string) error {
 	if s.failSubmit {
@@ -73,11 +77,14 @@ func update(t *testing.T, m *tuiModel, msg tea.Msg) *tuiModel {
 	t.Helper()
 	next, cmd := m.Update(msg)
 	if cmd != nil {
-		// 同步执行命令（testMode 下仅 submit/swap cmd 会返回）——回执续一拍。
+		// 同步执行命令（testMode 下仅 submit/swap/agents-cancel cmd 会返回）
+		//——回执续一拍。
 		switch done := cmd().(type) {
 		case submitDoneMsg:
 			next, _ = next.Update(done)
 		case swapDoneMsg:
+			next, _ = next.Update(done)
+		case agentsCancelDoneMsg:
 			next, _ = next.Update(done)
 		}
 	}

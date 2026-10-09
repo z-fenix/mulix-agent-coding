@@ -243,6 +243,29 @@ func TestReadOnlyAnnotation(t *testing.T) {
 	}
 }
 
+// TestLookup pins（Task 4）：按名取回已注册工具（只读快照——Execute 可直调，
+// cli e2e 经它驱动 mulix_spawn 的工具面）；未注册名 → (nil, false)。
+func TestLookup(t *testing.T) {
+	resetRegistry(t)
+	if _, ok := Lookup("ghost_tool"); ok {
+		t.Fatal("unknown name must miss")
+	}
+	st := &stubTool{name: "named_tool", schema: `{"type":"object"}`}
+	Register(st)
+	got, ok := Lookup("named_tool")
+	if !ok || got == nil {
+		t.Fatalf("Lookup = (%v, %v), want tool", got, ok)
+	}
+	if got.Name() != "named_tool" {
+		t.Fatalf("Lookup name = %q", got.Name())
+	}
+	// 快照可执行（与注册表内同源）
+	out, err := got.Execute(context.Background(), json.RawMessage(`{"x":1}`))
+	if err != nil || !strings.Contains(out, `"x":1`) {
+		t.Fatalf("Lookup execute = (%q, %v)", out, err)
+	}
+}
+
 // TestMCPServersSelfCommand pins：cache.Registry 对齐——SelfCommand 配置时
 // 返回 mulix stdio 自 spawn 条目（Boot mcp-config 生成对接）；未配置 → nil。
 // 编译期钉接口实现。

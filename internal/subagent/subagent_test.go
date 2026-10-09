@@ -403,6 +403,51 @@ func TestSpawnConcurrentLimitUnderParallelSpawns(t *testing.T) {
 	}
 }
 
+// TestManagerSummaryAccessor 钉 Summary 访问器（Task 3 裁定：poll 应答
+// summary 的来源，FR-102 最终消息回收）：completed/failed 终态 →
+// (handle.Summary(), true)；running → ("", false)；unknown id → ("", false)。
+func TestManagerSummaryAccessor(t *testing.T) {
+	h := &stubHandle{id: "sub-ok", done: make(chan struct{}), summary: "最终结论"}
+	fh := &stubHandle{id: "sub-fail", done: make(chan struct{}), summary: "半程产出", err: fmt.Errorf("boom")}
+	i := 0
+	m := newTestManager(t, func(ctx context.Context, task string) (SessionHandle, error) {
+		i++
+		if i == 1 {
+			return h, nil
+		}
+		return fh, nil
+	}, func(any) {})
+	for _, id := range []string{"sub-ok", "sub-fail"} {
+		if _, err := m.Spawn(context.Background(), "p", "task", 0); err != nil {
+			t.Fatalf("spawn %s: %v", id, err)
+		}
+	}
+	// running → ("", false)
+	if s, ok := m.Summary("sub-ok"); ok || s != "" {
+		t.Fatalf("running summary = (%q, %v), want (\"\", false)", s, ok)
+	}
+	// unknown id → ("", false)
+	if s, ok := m.Summary("ghost"); ok || s != "" {
+		t.Fatalf("unknown summary = (%q, %v), want (\"\", false)", s, ok)
+	}
+	// completed → (summary, true)
+	close(h.done)
+	if st, err := m.Poll(context.Background(), "sub-ok"); err != nil || st != StatusCompleted {
+		t.Fatalf("poll completed: %v %v", st, err)
+	}
+	if s, ok := m.Summary("sub-ok"); !ok || s != "最终结论" {
+		t.Fatalf("completed summary = (%q, %v), want (最终结论, true)", s, ok)
+	}
+	// failed → (summary, true)——终态同样回收最终消息
+	close(fh.done)
+	if st, err := m.Poll(context.Background(), "sub-fail"); err != nil || st != StatusFailed {
+		t.Fatalf("poll failed: %v %v", st, err)
+	}
+	if s, ok := m.Summary("sub-fail"); !ok || s != "半程产出" {
+		t.Fatalf("failed summary = (%q, %v), want (半程产出, true)", s, ok)
+	}
+}
+
 // 自环拒绝（评审修复轮 1，可达判环路径）：工厂返回的句柄 id == parentID 即委派环，
 // 必须在登记前拒绝；被拒的 spawn 不得留下登记项、不得泄漏并发名额（随后仍可
 // 正常 Spawn 到默认限额 4，第 5 个被 "concurrent" 拒绝）。
