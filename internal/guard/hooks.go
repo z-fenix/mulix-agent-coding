@@ -103,7 +103,9 @@ func (h *Hooks) reportPanic(ev HookEvent, idx int, r any) {
 
 // defaultHookTimeoutMS 是规则 timeout_ms 缺省（0）时的生效超时——M14 的
 // 「缺省 0 = 消费侧解释默认」同款语义（上限 hookMaxTimeoutMS 在构造期收口）。
-const defaultHookTimeoutMS = 10000
+// 包级 var 是测试缝（TestScriptConsumerDefaultTimeoutEffective 收缩后走
+// 生效默认路径实测；非配置面——生产不改写）。
+var defaultHookTimeoutMS = 10000
 
 // hookMaxTimeoutMS 是单条自定义钩子规则的超时上限（30s，design 002 §7）。
 const hookMaxTimeoutMS = 30000
@@ -148,9 +150,11 @@ type scriptRule struct {
 }
 
 // NewScriptConsumer 构造自定义钩子消费者——启动期校验的唯一收口（FR-111
-// fail-fast）：event 必须 ∈ P1 四时点、command 非空、0 ≤ timeout_ms ≤ 30000
-// （0 = 缺省 defaultHookTimeoutMS）。任何规则非法即报错拒绝启动，错误点名
-// 规则序与违规字段；空规则集合法（no-op 消费者）。
+// fail-fast）：event 必须 ∈ P1 四时点、command 非空且 argv[0] 非空串（空
+// 串可执行 = 每次执行必启动失败 → 循环降级+告警；argv[0] 之后的空串参数
+// 合法——字面量传参）、0 ≤ timeout_ms ≤ 30000（0 = 缺省 defaultHookTimeoutMS）。
+// 任何规则非法即报错拒绝启动，错误点名规则序与违规字段；空规则集合法
+// （no-op 消费者）。
 func NewScriptConsumer(rules []config.HookRule) (HookConsumer, error) {
 	c := &ScriptConsumer{rules: map[HookEvent][]scriptRule{}}
 	for i, r := range rules {
@@ -159,14 +163,14 @@ func NewScriptConsumer(rules []config.HookRule) (HookConsumer, error) {
 		case ev != HookSessionStart && ev != HookPreToolUse &&
 			ev != HookPostToolUse && ev != HookStop:
 			return nil, fmt.Errorf("guard: hook rule %d: event %q must be one of SessionStart|PreToolUse|PostToolUse|Stop", i, r.Event)
-		case len(r.Command) == 0:
+		case len(r.Command) == 0 || r.Command[0] == "":
 			return nil, fmt.Errorf("guard: hook rule %d (%s): command must not be empty", i, r.Event)
 		case r.TimeoutMS < 0 || r.TimeoutMS > hookMaxTimeoutMS:
 			return nil, fmt.Errorf("guard: hook rule %d (%s): timeout_ms %d must be 0 (default) or in 1..%d", i, r.Event, r.TimeoutMS, hookMaxTimeoutMS)
 		}
 		timeout := time.Duration(r.TimeoutMS) * time.Millisecond
 		if r.TimeoutMS == 0 {
-			timeout = defaultHookTimeoutMS * time.Millisecond
+			timeout = time.Duration(defaultHookTimeoutMS) * time.Millisecond
 		}
 		c.rules[ev] = append(c.rules[ev], scriptRule{decl: r, timeout: timeout, index: i})
 	}

@@ -93,6 +93,15 @@ type Options struct {
 	// cli 组装根注入 *memory.Store（进程内每会话树恰一实例；Task 5 移交：
 	// <workspace>/.mulix/memory 的拼装在组合根）。
 	Memory MemoryRecall
+
+	// HookConsumers 是追加的自定义钩子消费者（M16/FR-111；cli 组合根注入
+	// guard.NewScriptConsumer 产物；空 = 无自定义钩子——不构造分发器，行为
+	// 与本字段引入前逐字节一致）。非空时构造期在四时点各挂适配回调
+	//（HookFunc 内调 Handle，注册期冻结；Handle 对非匹配事件 no-op——全时点
+	// 注册即声明面语义），Handle 错误（规则超时/崩溃降级）落为 NoticeEvent
+	//（warning、IsMeta，镜像先行红线）——适配层是唯一告警出口：HookFunc 无
+	// 错误返回面，control 持有唯一合规发布通道（不造第二条事件总线）。
+	HookConsumers []guard.HookConsumer
 }
 
 // MemoryRecall 是记忆召回的检索缝（M13/T13.2）：Submit turn-tail 注入的唯一
@@ -173,7 +182,7 @@ func NewController(opts Options) (*Controller, error) {
 	if meta, err := opts.Store.ReadMeta(); err == nil {
 		sessionID, _ = meta["id"].(string)
 	}
-	return &Controller{
+	c := &Controller{
 		opts:      opts,
 		sessionID: sessionID,
 		turnDones: map[int64]chan struct{}{},
@@ -182,7 +191,41 @@ func NewController(opts Options) (*Controller, error) {
 		pumpDone:  make(chan struct{}),
 		initSeen:  make(chan struct{}),
 		now:       time.Now,
-	}, nil
+	}
+	mountHookConsumers(c)
+	return c, nil
+}
+
+// hookConsumerEvents 是自定义钩子消费者的挂载时点全表（P1 四时点；consumer
+// 的 Handle 对无规则事件 no-op——全时点注册即声明面语义，与分发器「按事件
+// 顺序分发」的快照读一致）。
+var hookConsumerEvents = []guard.HookEvent{
+	guard.HookSessionStart, guard.HookPreToolUse, guard.HookPostToolUse, guard.HookStop,
+}
+
+// mountHookConsumers 把 Options.HookConsumers 挂进钩子分发器（M16/FR-111，
+// 构造期一次性）：无分发器则新建；每消费者 × 每时点各挂一个适配回调
+// （HookFunc 内调 Handle——错误丢弃即 P1 既定 fail-open，FR-017），降级错误
+// 落为 NoticeEvent（warning、IsMeta）走 publish（镜像先行红线）。注册全部
+// 发生在 NewSession 之前（P1 串行分发、注册期冻结）。
+func mountHookConsumers(c *Controller) {
+	if len(c.opts.HookConsumers) == 0 {
+		return
+	}
+	if c.opts.Hooks == nil {
+		c.opts.Hooks = guard.NewHooks()
+	}
+	for _, hc := range c.opts.HookConsumers {
+		for _, ev := range hookConsumerEvents {
+			hc, ev := hc, ev
+			c.opts.Hooks.On(ev, func(ctx context.Context, p guard.HookPayload) {
+				if err := hc.Handle(ctx, p); err != nil {
+					c.publish(event.NoticeEvent{Seq: c.nextSeq(), Level: "warning", IsMeta: true,
+						Content: fmt.Sprintf("自定义钩子降级（%s）: %v", p.Event, err)})
+				}
+			})
+		}
+	}
 }
 
 // NewSession 拉起引擎（Boot 组装 → HostFactory → Start → 事件泵 → 等首个

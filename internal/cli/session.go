@@ -191,6 +191,20 @@ func (o Options) assembleController(cfg config.Config, store *sessionx.Store, me
 	if err != nil {
 		return nil, nil, err
 	}
+	// 自定义钩子消费者（M16/FR-111 组合根接线）：[[hooks.custom.rules]] 非空
+	// → 构造脚本消费者（声明校验失败 = 配置错误 → 拒绝启动 fail-closed，
+	// 与 permissions 规则解析失败同款；构造期即启动期——组装在 NewSession
+	// 之前）；空 → 零接线（不构造消费者，行为与本节引入前逐字节一致）。
+	// 挂载与降级告警由 control 持有（HookConsumers 缝——镜像先行的唯一
+	// 合规发布通道，cli 不旁路）。
+	var hookConsumers []guard.HookConsumer
+	if len(cfg.Hooks.Custom.Rules) > 0 {
+		consumer, herr := guard.NewScriptConsumer(cfg.Hooks.Custom.Rules)
+		if herr != nil {
+			return nil, nil, fmt.Errorf("hooks.custom.rules: %w", herr)
+		}
+		hookConsumers = append(hookConsumers, consumer)
+	}
 	// 子代理工厂（M12/T12.4）：本会话作为父——子会话继承本会话审批桥与
 	// 记忆库实例；mulix stdio 条目不可产出（selfCommand 失败）时不接线
 	//（工厂 nil = 子代理禁用，Boot 面与 P1 逐字节一致）。
@@ -228,7 +242,8 @@ func (o Options) assembleController(cfg config.Config, store *sessionx.Store, me
 			MaxDepth:      cfg.Subagent.MaxDepth,
 			MaxConcurrent: cfg.Subagent.MaxConcurrent,
 		},
-		Memory: memRecall,
+		Memory:        memRecall,
+		HookConsumers: hookConsumers,
 	})
 	if err != nil {
 		return nil, nil, err

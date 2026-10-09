@@ -101,14 +101,18 @@ type hookWarning struct {
 
 // TestNewScriptConsumerValidation pins ①（启动拒绝矩阵，FR-111 fail-fast）：
 // 合法声明构建成功（四时点各一；timeout 上限边界 30000 与缺省 0 均合法；
-// 空规则集 = no-op 消费者）；event 不在 P1 四时点、command 空、timeout 越界
-// （>30000 或负数）→ NewScriptConsumer 报错拒绝，错误点名违规字段。
+// 空规则集 = no-op 消费者；空串参数位（index>0）合法——只有 argv[0] 空
+// 串必拒，否则该规则每次执行都启动失败→循环降级+告警）；event 不在 P1
+// 四时点、command 空/argv[0] 空串、timeout 越界（>30000 或负数）→
+// NewScriptConsumer 报错拒绝，错误点名违规字段。
 func TestNewScriptConsumerValidation(t *testing.T) {
 	legal := []config.HookRule{
 		{Event: "SessionStart", Command: []string{"true"}},
 		{Event: "PreToolUse", Command: []string{"python", "-c", "print(1)"}, TimeoutMS: 5000},
 		{Event: "PostToolUse", Command: []string{"x"}, TimeoutMS: 30000},
 		{Event: "Stop", Command: []string{"y"}, TimeoutMS: 0},
+		// 评审修复轮 1 F2 反向钉：argv[0] 之后的空串参数合法（字面量传参）
+		{Event: "PreToolUse", Command: []string{"printf", "%s", ""}},
 	}
 	if _, err := NewScriptConsumer(legal); err != nil {
 		t.Fatalf("legal declarations must build: %v", err)
@@ -125,6 +129,7 @@ func TestNewScriptConsumerValidation(t *testing.T) {
 		{"empty event", []config.HookRule{{Event: "", Command: []string{"x"}}}, "event"},
 		{"empty command", []config.HookRule{{Event: "PreToolUse", Command: []string{}}}, "command"},
 		{"nil command", []config.HookRule{{Event: "PreToolUse"}}, "command"},
+		{"argv0 empty string", []config.HookRule{{Event: "PreToolUse", Command: []string{""}}}, "command"},
 		{"timeout over cap", []config.HookRule{{Event: "PreToolUse", Command: []string{"x"}, TimeoutMS: 30001}}, "timeout"},
 		{"negative timeout", []config.HookRule{{Event: "PreToolUse", Command: []string{"x"}, TimeoutMS: -1}}, "timeout"},
 	} {
@@ -297,6 +302,34 @@ func TestScriptConsumerStdinOptionalNoRead(t *testing.T) {
 	}
 	if err := c.Handle(context.Background(), HookPayload{Event: HookPreToolUse, HookID: "h-6"}); err != nil {
 		t.Fatalf("exit-0 script that never reads stdin must not fail: %v", err)
+	}
+}
+
+// TestScriptConsumerDefaultTimeoutEffective pins（评审修复轮 1 F3）：缺省
+// timeout_ms=0 的生效值是 defaultHookTimeoutMS（包级 var 缝——10s 墙钟不可
+// 测，测试收缩后走生效默认路径实测）。双钉：①缺省值本身不被顺手改动；
+// ②TimeoutMS=0 的规则按缺省值生效（收缩为 80ms + 睡眠 helper → 超时错误
+// 带收缩值——证明 0 映射到缺省值而非「无限时」）。
+func TestScriptConsumerDefaultTimeoutEffective(t *testing.T) {
+	if defaultHookTimeoutMS != 10000 {
+		t.Fatalf("default timeout drift: %d, want 10000", defaultHookTimeoutMS)
+	}
+	t.Setenv(hookHelperEnv, "1")
+	t.Setenv("MULIX_HOOK_HELPER_SLEEP_MS", "30000")
+	defaultHookTimeoutMS = 80 // 收缩缺省值（defer 恢复）
+	defer func() { defaultHookTimeoutMS = 10000 }()
+	c, err := NewScriptConsumer([]config.HookRule{
+		{Event: "PreToolUse", Command: hookHelperCommand(t)}, // TimeoutMS 缺省 0
+	})
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	err = c.Handle(context.Background(), HookPayload{Event: HookPreToolUse, HookID: "h-7"})
+	if err == nil || !strings.Contains(err.Error(), "timeout") {
+		t.Fatalf("rule without explicit timeout must hit the effective default: %v", err)
+	}
+	if !strings.Contains(err.Error(), "80ms") {
+		t.Fatalf("timeout error must carry the effective default duration: %v", err)
 	}
 }
 
