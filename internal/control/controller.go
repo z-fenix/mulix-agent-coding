@@ -704,6 +704,11 @@ func (c *Controller) composeBoot(base engine.BootConfig) (engine.BootConfig, err
 	base.AllowedTools = artifact.AllowedTools
 	base.DisallowedTools = artifact.DisallowedTools
 	base.PermissionMode = artifact.PermissionMode
+	// 外部 MCP 工具超时（M14/评审修复轮 1 接线）：Compose 以全组最小生效
+	// timeout_ms 算出的引擎 env 并入 Boot Env 通道（与回调地址同面；绝不入
+	// mcp-config 字节——SC-003 同款裁定）。无外部声明时 EngineEnv 为 nil →
+	// append 为 no-op，P1-only boot.Env 零 delta。
+	base.Env = append(base.Env, artifact.EngineEnv...)
 	base.SettingSources = []string{"user"} // 实测红线：必须显式含 user
 	base.Workspace = c.opts.Workspace
 	base.Model = c.opts.Config.DefaultModel

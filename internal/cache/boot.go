@@ -35,10 +35,12 @@ type BootArtifact struct {
 	DisallowedTools    []string // --disallowedTools（config deny 清单，显式顺序去重）
 	PermissionMode     string   // --permission-mode（引擎侧映射值）
 	// EngineEnv 是引擎进程 env 追加面（Boot Env 通道——与回调地址同款的
-	// "KEY=VALUE" 串，由 control 并入 boot.Env）。M14 唯一条目
-	// MCP_TOOL_TIMEOUT（R1：外部工具超时由引擎原生读取，mulix 不代理协议；
-	// 多外部 server 取最小 timeout_ms，缺省 60000）。config 派生、启动期
-	// 冻结 → 与逐次变化的回调地址不同面，可入指纹。
+	// "KEY=VALUE" 串，由 control 并入 boot.Env）。M14 条目 MCP_TOOL_TIMEOUT
+	//（R1：外部工具超时由引擎原生读取，mulix 不代理协议；全组取最小生效
+	// timeout_ms，60000 仅为 per-server 缺省兜底）。**无外部声明 → nil**
+	//（评审修复轮 1 F3：P1-only boot.Env 零 delta；空面形状 = nil，与
+	// AllowedTools 空面 nil 同约定）。config 派生、启动期冻结 → 与逐次变化
+	// 的回调地址不同面，可入指纹。
 	EngineEnv   []string // "KEY=VALUE" 串（Boot Env 通道；绝不入 mcp-config 字节）
 	Fingerprint string   // 启动面 sha256 前 16 hex（同输入同指纹）
 }
@@ -112,16 +114,19 @@ const reservedBuiltinName = "mulix"
 // M14 合并：内置条目（registry）先并入、外部声明（[mcp.servers]）按声明序
 // 后并入——输出仍由 map 序列化按名排序，输入序不影响字节（SC-003 逐字节
 // 稳定沿用，不实现自定义顺序序列化）。外部 env 静态透传（不做运行期注入）；
-// 外部 timeout_ms 取全组最小值（缺省 60000）作为引擎 env MCP_TOOL_TIMEOUT
-// 返回（Boot Env 通道，绝不入 mcp-config 字节——与回调地址同一裁定）。
+// 外部 timeout_ms 在全部外部 server 的生效值里取**真实最小值**作为引擎 env
+// MCP_TOOL_TIMEOUT 返回（Boot Env 通道，绝不入 mcp-config 字节——与回调地址
+// 同一裁定；60000 只是 per-server 缺省兜底，不是封顶——评审修复轮 1
+// Important-1），无外部声明时返回 nil（F3：P1-only boot.Env 零 delta）。
 // 校验（P1 名校验原样保留 + 外部保留名）：空名、空 command、重名、外部条目
 // 占用内置保留名 → error（fail-closed boot，绝不静默覆盖）。
 func composeMCPConfig(reg Registry, external []config.MCPServerDecl) (string, []string, error) {
-	timeoutMS := defaultMCPToolTimeoutMS
 	normalized := make([]MCPServer, 0)
 	if reg != nil {
 		normalized = append(normalized, reg.MCPServers()...)
 	}
+	var timeoutMS int    // 0 = 尚无外部 server 生效值（生效值恒 > 0，0 作哨兵）
+	haveTimeout := false // 显式哨兵：min 只在生效值集合内取，不以默认值为种子
 	for _, d := range external {
 		if d.Name == reservedBuiltinName {
 			return "", nil, fmt.Errorf("cache: mcp server name %q is reserved for the built-in mulix entry", d.Name)
@@ -131,8 +136,9 @@ func composeMCPConfig(reg Registry, external []config.MCPServerDecl) (string, []
 		if effective <= 0 {
 			effective = defaultMCPToolTimeoutMS
 		}
-		if effective < timeoutMS {
+		if !haveTimeout || effective < timeoutMS {
 			timeoutMS = effective
+			haveTimeout = true
 		}
 	}
 	sort.Slice(normalized, func(i, j int) bool { return normalized[i].Name < normalized[j].Name })
@@ -165,7 +171,10 @@ func composeMCPConfig(reg Registry, external []config.MCPServerDecl) (string, []
 	if err != nil {
 		return "", nil, fmt.Errorf("cache: marshal mcp-config: %w", err)
 	}
-	env := []string{fmt.Sprintf("MCP_TOOL_TIMEOUT=%d", timeoutMS)}
+	var env []string
+	if haveTimeout {
+		env = []string{fmt.Sprintf("MCP_TOOL_TIMEOUT=%d", timeoutMS)}
+	}
 	return string(payload), env, nil
 }
 

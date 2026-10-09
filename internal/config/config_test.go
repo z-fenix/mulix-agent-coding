@@ -407,6 +407,34 @@ command = ["npx", "-y", "@modelcontextprotocol/server-fs"]
 	}
 }
 
+// TestMCPServersEnvTypeMismatchRecovers 钉 F4b（评审要求的 pin，R-T7-3 机制
+// 在 [mcp.servers] 本节的实证）：env 值非字符串 → 层按损坏处理（skip +
+// warning 命名层），默认值与其余层存活——config.Loader「永远返回可用配置」
+// 契约不变。
+func TestMCPServersEnvTypeMismatchRecovers(t *testing.T) {
+	bad := writeTOML(t, `
+[[mcp.servers]]
+name = "x"
+command = ["c"]
+
+[mcp.servers.env]
+PORT = 123
+`)
+	cfg, warnings, err := NewLoader().Load(Flags{}, Paths{Project: bad})
+	if err != nil {
+		t.Fatalf("type mismatch must not hard-fail: %v", err)
+	}
+	if len(cfg.MCP.Servers) != 0 {
+		t.Fatalf("type-mismatched layer must be skipped: %+v", cfg.MCP.Servers)
+	}
+	if !warnMentions(warnings, "project") {
+		t.Fatalf("damaged layer must warn naming the layer: %v", warnings)
+	}
+	if cfg.DefaultModel != "claude-sonnet-4-5" {
+		t.Fatalf("defaults must survive the skipped layer: %q", cfg.DefaultModel)
+	}
+}
+
 func warnMentions(warnings []string, key string) bool {
 	for _, w := range warnings {
 		if strings.Contains(w, key) {

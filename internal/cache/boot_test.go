@@ -457,3 +457,67 @@ func TestComposeExternalEnvStaticPassthrough(t *testing.T) {
 		t.Fatalf("decl without env must not carry an env key: %v", e)
 	}
 }
+
+// TestComposeMCPToolTimeoutRespectsLargeDeclaredValues 钉评审修复轮 1
+// Important-1：60000 是 per-server 缺省兜底，**不是封顶**——最小值在全部外部
+// server 的生效值里取真实 min（修复前 min 以 60000 为种子只减不增，把更大的
+// 声明值钳回 60000，违反 brief ④「单 server 用其声明值」）。
+func TestComposeMCPToolTimeoutRespectsLargeDeclaredValues(t *testing.T) {
+	solo := baseCfg()
+	solo.MCP.Servers = []config.MCPServerDecl{{Name: "solo", Command: []string{"x"}, TimeoutMS: 120000}}
+	art, err := Compose(solo, "w", fakeRegistry{})
+	if err != nil {
+		t.Fatalf("compose single large: %v", err)
+	}
+	if want := []string{"MCP_TOOL_TIMEOUT=120000"}; !reflect.DeepEqual(art.EngineEnv, want) {
+		t.Fatalf("EngineEnv = %v, want %v (single declared value above default)", art.EngineEnv, want)
+	}
+	both := baseCfg()
+	both.MCP.Servers = []config.MCPServerDecl{
+		{Name: "a", Command: []string{"a"}, TimeoutMS: 90000},
+		{Name: "b", Command: []string{"b"}, TimeoutMS: 120000},
+	}
+	art2, err := Compose(both, "w", fakeRegistry{})
+	if err != nil {
+		t.Fatalf("compose multi large: %v", err)
+	}
+	if want := []string{"MCP_TOOL_TIMEOUT=90000"}; !reflect.DeepEqual(art2.EngineEnv, want) {
+		t.Fatalf("EngineEnv = %v, want %v (true min of declared values)", art2.EngineEnv, want)
+	}
+}
+
+// TestComposeNoExternalServersEngineEnvEmpty 钉评审修复轮 1 F3（控制器裁定，
+// 撤销 R-T7-1 的「恒透出默认」）：无外部声明 → EngineEnv 为 nil——P1-only
+// boot.Env 零 delta；空面形状 = nil（与 AllowedTools 空面 nil 的既有指纹
+// canonical 约定一致，此处钉死）。内置 mulix 条目单独在场也不透出（超时是
+// 外部声明面的属性）。
+func TestComposeNoExternalServersEngineEnvEmpty(t *testing.T) {
+	empty, err := Compose(baseCfg(), "w", fakeRegistry{})
+	if err != nil {
+		t.Fatalf("compose empty registry: %v", err)
+	}
+	if empty.EngineEnv != nil {
+		t.Fatalf("EngineEnv = %v, want nil (no external servers = zero boot env delta)", empty.EngineEnv)
+	}
+	builtinOnly := fakeRegistry{servers: []MCPServer{{Name: "mulix", Command: []string{"mulix", "mcp", "serve"}}}}
+	art, err := Compose(baseCfg(), "w", builtinOnly)
+	if err != nil {
+		t.Fatalf("compose builtin only: %v", err)
+	}
+	if art.EngineEnv != nil {
+		t.Fatalf("EngineEnv = %v, want nil (built-in entry alone must not emit MCP_TOOL_TIMEOUT)", art.EngineEnv)
+	}
+}
+
+// TestComposeRejectsDuplicateExternalNames 钉 F4a（评审要求的回归 pin——行为
+// 已由 P1 共享校验循环保证，评审裁定补钉防回归）：两个同名外部条目 → error。
+func TestComposeRejectsDuplicateExternalNames(t *testing.T) {
+	cfg := baseCfg()
+	cfg.MCP.Servers = []config.MCPServerDecl{
+		{Name: "dup", Command: []string{"a"}},
+		{Name: "dup", Command: []string{"b"}},
+	}
+	if _, err := Compose(cfg, "w", fakeRegistry{}); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("duplicate external names must fail compose, got %v", err)
+	}
+}
