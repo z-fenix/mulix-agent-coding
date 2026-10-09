@@ -583,7 +583,7 @@ func (s *Store) IsolateReport() []string              // 损坏段报告（测�
 ## Task 10: 分层检查工具 mulix lint（M17）
 
 **Files:**
-- Create: `internal/lint/lint.go`（规则引擎）、`internal/lint/rules.go`（分层规则——**含 design 002 §1 新增面**：subagent 可 import engine/sessionx/cache/guard/memory 但不得 import control；tools/mulixmemory 可 import memory；tools/mulixsubagent 不得 import 任何 internal 包；cli 与 cmd 为组合根可 import tools 子包）、`internal/lint/lint_test.go`
+- Create: `internal/lint/lint.go`（规则引擎）、`internal/lint/rules.go`（分层规则——**含 design 002 §1 新增面，按 T6/C3 裁定修订为与已交付代码一致**：subagent 可 import event/kernel/engine/sessionx/cache/guard/memory 但不得 import control；tools/mulixmemory 可 import memory 与 registry；tools/mulixsubagent 不得 import 内核 internal 包——registry 除外（RegisterConditional 契约签名所需）；cli 与 cmd 为组合根可 import tools 子包）、`internal/lint/lint_test.go`
 - Create: `internal/cli/lint.go`（`mulix lint layers` 子命令：exit 0/1 + 违规报告——cli/lint.go 不存在，新建）
 - Modify: `.github/workflows/ci.yml`（lint job 步骤 `go run ./cmd/mulix lint layers`）
 - Create: `docs/lint/ratchet.json`（首轮基线生成）
