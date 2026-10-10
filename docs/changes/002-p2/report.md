@@ -87,6 +87,7 @@
 ## 6. 诚实限制
 
 1. **引擎 2.1.296 漂移（P3 第一项）**：本机 claude CLI 2.1.296 ≠ 主仓 engine.lock pin 2.1.291；2.1.296 的 tool_result user message `.content` 由字符串改为块数组 → mulix 解码器（events.go ToolResultBlock.Content string）整流 fail-closed。触发=MCP 工具成功结果回流（spawn 确认截断；echo 往返引擎侧成功后回合截断）；不触发=内置 Read 回流、审批拒绝回流。行为面 fail-closed 正确且冒烟实况验证（回合 error 收口 → 子代理级联 manager_closed → exit 1 非悬挂，1:1 完好）。**verify 判定不受阻**：全部门禁在 pin 代码上绿；主仓 pin 2.1.291 使 doctor 先行挡漂移启动（第二层 fail-closed）；临时缓解=本机 CLI 降回 2.1.291。
+   > **P3 已关闭（003-p3-2-1-296）**：解码器两形状容忍 + engine.lock 重钉 2.1.296 + 真实复冒烟通过（委派链 + 外部工具回合全部正常收口，断流签名零命中），见 `docs/evidence/p3-smoke.md`；本限制条目关闭。
 2. **SC-001 真实引擎面部分**：多步工作由主引擎会话内建 Agent 子代理完成；mulix spawn 桥子会话因流断未跑完自身回合——回收/恢复链由自动化 TestSubagentWiringEndToEnd 完整钉死。
 3. **SC-005 真实会话提醒复测项（T12-⑤）**：watcher 真实会话 notice 未被观测到；机制未定论（时间戳复检显示原解释与 D 轮时间线矛盾——编辑时刻早于引擎收消息 ~30s，watcher 本应命中）；矩阵 6 测已钉，复测并入 P3①重钉后执行，随后修正 p2-smoke.md 限制 #3。
 4. `/agents` 真实 TTY 面板交互同 P1 限制（自动化钉 TUI 构造面）。

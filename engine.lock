@@ -5,7 +5,7 @@
   },
   "pinned_at": "2026-10-10",
   "baseline": {
-    "cache_hit_rate": 0.0,
-    "note": "P3 基准建立后回填"
+    "cache_hit_rate": 0.953,
+    "note": "2026-10-10 真实冒烟实测(单次会话 f59d66c2,委派任务,session_hit 加权口径;见 docs/evidence/p3-smoke.md)"
   }
 }
