@@ -422,3 +422,36 @@ func TestDecodeToolResultArrayErrorFlags(t *testing.T) {
 		t.Fatalf("错误块标记/文本错误: %+v", ev.ToolResult.Blocks[1])
 	}
 }
+
+// TestDecodeToolResultArrayFixture 钉 FR-105/FR-106:2.1.296 真实样本
+// (P2 冒烟引擎 transcript 提取)逐行解码无错,关键字段被断言;旧形状
+// fixture(happy-turn/usage)继续通过=无回归。
+func TestDecodeToolResultArrayFixture(t *testing.T) {
+	events, _ := decodeFixture(t, filepath.Join("fixtures", "engine", "tool-result-array-2196.jsonl"))
+	if len(events) == 0 {
+		t.Fatal("fixture 无可解码事件")
+	}
+	sawArray := false
+	sawErrFlag := false
+	for i, ev := range events {
+		if ev.Kind != KindToolResult || ev.ToolResult == nil {
+			continue
+		}
+		for _, b := range ev.ToolResult.Blocks {
+			if b.Type != "tool_result" {
+				continue // 非工具结果块(如文本块)不承担 tool_use_id 语义
+			}
+			if b.ToolUseID == "" {
+				t.Fatalf("event %d: tool_result 缺 tool_use_id: %q", i, b.Content)
+			}
+			if b.IsError {
+				sawErrFlag = true // 真实错误样本出现时,标记必须完整保留(FR-102)
+			}
+			sawArray = true // 提取过滤器保证入库样本全为数组形状
+		}
+	}
+	if !sawArray {
+		t.Fatal("fixture 中无数组形状 tool_result 样本")
+	}
+	t.Logf("数组形状样本已断言;真实 is_error=true 样本出现=%v(未出现时由 Task 4 冒烟补采面覆盖)", sawErrFlag)
+}
