@@ -1,7 +1,10 @@
 package engine
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
+	"strings"
 )
 
 // EventKind 是归一化后的引擎事件类（decoder 按顶层 type[/subtype] 归一；
@@ -104,6 +107,60 @@ type ToolResultBlock struct {
 	ToolUseID string `json:"tool_use_id"`
 	Content   string `json:"content"`
 	IsError   bool   `json:"is_error,omitempty"`
+}
+
+// UnmarshalJSON 解码 tool_result 块：content 接受两种形状（spec 003
+// FR-101/FR-103）——单字符串（2.1.291 及之前）与文本块数组（2.1.296 及
+// 之后），等价解读为同一段文本；null/缺失 → 空文本。数组元素只认
+// {type:"text"} 文本块（多块按 \n 拼接，全空块 → 空文本）；出现未建模的
+// 非文本块、畸形元素或原始类型 → 返回错误（流损坏 fail-closed，与
+// 「非法 JSON」同类——容忍的是已建模的两种形状，不是任意数据）。
+func (b *ToolResultBlock) UnmarshalJSON(data []byte) error {
+	type alias struct {
+		Type      string          `json:"type"`
+		ToolUseID string          `json:"tool_use_id"`
+		Content   json.RawMessage `json:"content"`
+		IsError   bool            `json:"is_error"`
+	}
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	b.Type, b.ToolUseID, b.IsError = a.Type, a.ToolUseID, a.IsError
+	raw := bytes.TrimSpace(a.Content)
+	switch {
+	case len(raw) == 0 || bytes.Equal(raw, []byte("null")):
+		b.Content = ""
+	case raw[0] == '"':
+		return json.Unmarshal(raw, &b.Content)
+	case raw[0] == '[':
+		var blocks []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal(raw, &blocks); err != nil {
+			return fmt.Errorf("engine: tool_result content array: %w", err)
+		}
+		parts := make([]string, 0, len(blocks))
+		allEmpty := true
+		for i, blk := range blocks {
+			if blk.Type != "text" {
+				return fmt.Errorf("engine: tool_result content[%d]: unknown block type %q (fail-closed)", i, blk.Type)
+			}
+			if blk.Text != "" {
+				allEmpty = false
+			}
+			parts = append(parts, blk.Text)
+		}
+		if allEmpty {
+			b.Content = ""
+		} else {
+			b.Content = strings.Join(parts, "\n")
+		}
+	default:
+		return fmt.Errorf("engine: tool_result content: unknown shape (fail-closed)")
+	}
+	return nil
 }
 
 // ToolResultMsg 是 user 事件（工具结果回流）。

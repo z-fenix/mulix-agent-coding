@@ -2,6 +2,7 @@ package engine
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -341,5 +342,83 @@ func TestDecodePermissionDenied(t *testing.T) {
 	}
 	if ev.Denied.ToolName != "Bash" || ev.Denied.ToolUseID != "call_d1" || ev.Denied.Message != "需要审批" {
 		t.Fatalf("denied fields wrong: %+v", ev.Denied)
+	}
+}
+
+// TestDecodeToolResultContentTwoShapes 钉 FR-101/FR-103:content 两形状
+// 等价解读 + Q1 严格边界(非文本块/畸形元素 → 流损坏)。
+func TestDecodeToolResultContentTwoShapes(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string // message.content[0].content 的 JSON 值;"" 表示键缺失
+		want    string
+		wantErr bool
+	}{
+		{name: "字符串形状(2.1.291)", content: `"hello world"`, want: "hello world"},
+		{name: "数组单文本块(2.1.296)", content: `[{"type":"text","text":"hello world"}]`, want: "hello world"},
+		{name: "数组多个文本块按换行拼接", content: `[{"type":"text","text":"a"},{"type":"text","text":"b"}]`, want: "a\nb"},
+		{name: "空数组解读为空文本", content: `[]`, want: ""},
+		{name: "单空文本块解读为空文本", content: `[{"type":"text","text":""}]`, want: ""},
+		{name: "全空文本块解读为空文本", content: `[{"type":"text","text":""},{"type":"text","text":""}]`, want: ""},
+		{name: "null解读为空文本", content: `null`, want: ""},
+		{name: "content键缺失解读为空文本", content: "", want: ""},
+		{name: "数组含非文本块判流损坏", content: `[{"type":"image","source":{"x":1}}]`, wantErr: true},
+		{name: "数组含畸形元素判流损坏", content: `[42]`, wantErr: true},
+		{name: "数组含空对象元素判流损坏", content: `[{}]`, wantErr: true},
+		{name: "content为原始对象判流损坏", content: `{"text":"x"}`, wantErr: true},
+		{name: "数组含无type元素判流损坏", content: `[{"text":"x"}]`, wantErr: true},
+		{name: "content为原始数字判流损坏", content: `3`, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var blockJSON string
+			if tc.content == "" {
+				blockJSON = `{"type":"tool_result","tool_use_id":"call_1"}`
+			} else {
+				blockJSON = fmt.Sprintf(`{"type":"tool_result","tool_use_id":"call_1","content":%s}`, tc.content)
+			}
+			line := fmt.Sprintf(`{"type":"user","session_id":"s1","uuid":"u1","message":{"id":"m1","content":[%s]}}`, blockJSON)
+			ev, err := DecodeLine([]byte(line))
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("want stream-corruption error, got event %+v", ev)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("DecodeLine: %v", err)
+			}
+			if ev.Kind != KindToolResult || ev.ToolResult == nil || len(ev.ToolResult.Blocks) != 1 {
+				t.Fatalf("tool_result event wrong: %+v", ev)
+			}
+			b := ev.ToolResult.Blocks[0]
+			if b.ToolUseID != "call_1" {
+				t.Fatalf("tool_use_id wrong: %q", b.ToolUseID)
+			}
+			if b.Content != tc.want {
+				t.Fatalf("content = %q, want %q", b.Content, tc.want)
+			}
+		})
+	}
+}
+
+// TestDecodeToolResultArrayErrorFlags 钉 FR-102:新形状下 is_error 条件
+// 字段语义不变(成功缺省=false,出错=true)。
+func TestDecodeToolResultArrayErrorFlags(t *testing.T) {
+	line := `{"type":"user","session_id":"s1","uuid":"u1","message":{"id":"m1","content":[` +
+		`{"type":"tool_result","tool_use_id":"call_ok","content":[{"type":"text","text":"ok"}]},` +
+		`{"type":"tool_result","tool_use_id":"call_err","is_error":true,"content":[{"type":"text","text":"boom"}]}]}}`
+	ev, err := DecodeLine([]byte(line))
+	if err != nil {
+		t.Fatalf("DecodeLine: %v", err)
+	}
+	if ev.Kind != KindToolResult || ev.ToolResult == nil || len(ev.ToolResult.Blocks) != 2 {
+		t.Fatalf("tool_result event wrong: %+v", ev)
+	}
+	if ev.ToolResult.Blocks[0].IsError {
+		t.Fatalf("成功块 is_error 应缺省为假: %+v", ev.ToolResult.Blocks[0])
+	}
+	if !ev.ToolResult.Blocks[1].IsError || ev.ToolResult.Blocks[1].Content != "boom" {
+		t.Fatalf("错误块标记/文本错误: %+v", ev.ToolResult.Blocks[1])
 	}
 }

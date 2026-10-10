@@ -90,6 +90,7 @@ func DecodeLine(line []byte) (*Event, error) {
 		ev.Kind, ev.Assistant = KindAssistant, &msg
 		return ev, nil
 	case "user":
+		// content 形状容忍见 ToolResultBlock.UnmarshalJSON（字符串/文本块数组两形状;003 FR-101）。
 		var wrapper struct {
 			Message       ToolResultMsg   `json:"message"`
 			ToolUseResult json.RawMessage `json:"tool_use_result"`
