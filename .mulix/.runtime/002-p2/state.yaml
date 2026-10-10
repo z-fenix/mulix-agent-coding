@@ -1,0 +1,17 @@
+schema: mulix.state.v2
+change: 002-p2
+phase: archive
+spec_path: docs/specs/002-p2/spec.md
+tasks_path: docs/changes/002-p2/tasks.md
+report_path: docs/changes/002-p2/report.md
+clarify_skipped: true
+design_track: architectural
+design_path: .mulix/.runtime/002-p2/specs/2026-10-08-p2-ecosystem-design.md
+design_approved: true
+execution_method: subagent-driven
+verify_result: pass
+verify_failures: 0
+archive_confirmation: pending
+archived: false
+created_at: 2026-10-08T13:55:06.5326972Z
+updated_at: 2026-10-10T08:36:18.9198123Z
