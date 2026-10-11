@@ -364,3 +364,32 @@ func TestWatchWiredToStartSequence(t *testing.T) {
 		}
 	})
 }
+
+// TestCloseWaitsForWatcherDone 钉 T8-①(008 FR-104/105):控制器 Close
+// 有界等待 watcher goroutine 退出——Close 返回后 Done 已关闭(无在飞
+// publish 越过 Close 的窗口)。
+func TestCloseWaitsForWatcherDone(t *testing.T) {
+	ws := t.TempDir()
+	writeInstructionFile(t, ws, "CLAUDE.md", "# rules")
+	fake := engine.NewFakeHost(engine.FakeScript{})
+	c := newTestControllerCapturingBoot(t, fake, &recordingSink{}, &engine.BootConfig{}, func(o *Options) {
+		o.Workspace = ws
+	})
+	if err := c.NewSession(context.Background()); err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	c.mu.Lock()
+	iw := c.instrWatch
+	c.mu.Unlock()
+	if iw == nil {
+		t.Fatal("watcher must be started")
+	}
+	if err := c.Close(context.Background()); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	select {
+	case <-iw.Done():
+	default:
+		t.Fatal("Close returned but watcher goroutine still running (must wait for Done, bounded)")
+	}
+}

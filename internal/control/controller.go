@@ -1025,6 +1025,15 @@ func (c *Controller) Close(ctx context.Context) error {
 	c.mu.Unlock()
 	if iw != nil {
 		iw.Close() // 停止指令文件轮询（M15）——closed 先置位再收口（回调桥同纪律）
+		// T8-①(008 FR-104/105):有界等待 goroutine 退出——Close 返回后
+		// 不再有 watcher publish 越过(与泵「无 publish 越过 Close」纯度
+		// 一致)。nil/未启动句柄经上方判空 no-op;轮询周期工作量小(文件
+		// hash),2s 上界仅防御性。
+		select {
+		case <-iw.Done():
+		case <-time.After(2 * time.Second):
+			fmt.Fprintln(os.Stderr, "mulix: watcher goroutine did not exit within 2s")
+		}
 	}
 	if mgr != nil {
 		// 级联取消全部运行中子代理（Review Focus 孤儿回合钉：父会话收口时
