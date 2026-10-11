@@ -453,5 +453,18 @@ func TestDecodeToolResultArrayFixture(t *testing.T) {
 	if !sawArray {
 		t.Fatal("fixture 中无数组形状 tool_result 样本")
 	}
+	sawMarker := false
+	for _, ev := range events {
+		if ev.Kind == KindToolResult && ev.ToolResult != nil {
+			for _, b := range ev.ToolResult.Blocks {
+				if b.Type == "tool_result" && strings.Contains(b.Content, "sub_session_id") {
+					sawMarker = true
+				}
+			}
+		}
+	}
+	if !sawMarker {
+		t.Fatal("fixture must contain the known real marker sub_session_id (shape-gate hardening, 009 FR-107)")
+	}
 	t.Logf("数组形状样本已断言;真实 is_error=true 样本出现=%v(未出现时由 Task 4 冒烟补采面覆盖)", sawErrFlag)
 }

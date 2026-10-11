@@ -18,7 +18,15 @@
 |---|---|---|
 | t0 基线锚(turn_started 发布) | **2026-10-11 13:36:50.606** | `stat -c '%y' events.jsonl`(轮询命中时取) |
 | t1 编辑落盘 | **2026-10-11 13:36:54.043** | `stat -c '%y' CLAUDE.md` |
-| t2 notice 观测 | **t1 后首个 2s tick 内(≤13:36:56)** | 镜像事件序位:notice 为 **seq=2**(先于引擎首个 assistant_thinking);stdout 第 1 行即该 notice(观测于 run 结束时收集) |
+| t2 notice 观测 | **t1 后首个 2s tick 内(≤13:36:56,推断值——由 notice 事件序位 seq=2 先于引擎首事件推导)** | 镜像事件序位:notice 为 **seq=2**(先于引擎首个 assistant_thinking);stdout 第 1 行即该 notice(观测于 run 结束时收集) |
+
+## 原始事件行(粘贴,009 FR-105 补全)
+
+```
+{"ev":{"seq":1,"session_id":"90ca64b107f93d8df10508a224385364","engine_session_id":"","pinned_model":"claude-sonnet-4-5","unattended":true},"kind":"turn_started"}
+{"ev":{"seq":2,"level":"info","content":"指令文件变更: CLAUDE.md（快照保持，下会话生效）","is_meta":true},"kind":"notice"}
+```
+(来源:`~/.mulix/sessions/90ca64b107f93d8df10508a224385364/events.jsonl` 前 2 行,2026-10-11 提取;seq=1=turn_started、seq=2=watcher notice。)
 
 编辑时点锚验证:t1 − t0 ≈ **+3.4s**(编辑确在基线装载之后,≥1.5 个轮询周期)。
 

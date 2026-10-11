@@ -258,7 +258,7 @@ func (s *Store) replay() error {
 			return fmt.Errorf("memory: extract damaged tail: %w", err)
 		}
 		segments = append(segments, damagedSegment{
-			lineNo: len(lines) + 1, raw: half, reason: "damaged tail (half line)",
+			lineNo: len(lines) + len(dmg.Oversized) + 1, raw: half, reason: "damaged tail (half line)",
 		})
 	}
 	for _, seg := range dmg.Oversized {

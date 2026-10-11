@@ -924,7 +924,7 @@ type gateRuling struct {
 	decision   string // allow | deny
 	source     string // policy | session | user | timeout
 	resolvedBy string
-	turn       int64 // 裁决所属回合(收口回收口径;0=异常兜底未关联回合)
+	turn       int64 // 裁决所属回合(收口回收口径;0=未关联——防御兜底,不入缓存)
 }
 
 // Approve 对待审请求交付人工裁决（拒绝时 resolvedBy 即拒绝理由，随

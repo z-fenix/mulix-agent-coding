@@ -209,7 +209,7 @@ func OpenReader(path string) (*Reader, error) {
 	return &Reader{f: f}, nil
 }
 
-// ReadAll 返回当前全部完整行；检测到损坏尾部时返回错误且**不返回行**
+// ReadAll 返回当前全部完整行；检测到损坏段（尾部半行/超限行两类）时返回错误且**不返回行**
 // （损坏尾部不得静默降级为部分成功——需要部分行时用 ReadAllWithStatus）。
 func (r *Reader) ReadAll() ([][]byte, error) {
 	lines, dmg, err := r.ReadAllWithStatus()

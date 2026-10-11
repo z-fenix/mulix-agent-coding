@@ -3,7 +3,6 @@ package control
 import (
 	"context"
 	"encoding/json"
-	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -142,8 +141,6 @@ func TestLeaderPanicThenFreshRequest(t *testing.T) {
 		t.Fatalf("fresh ruling = %v, want allow (re-evaluation)", ans2["behavior"])
 	}
 }
-
-var _ = httptest.NewRecorder // 保留:closed-session 子测试同型参考(closed POST handler 直测)
 
 // TestResolvedBoundedAcrossTurns 钉 FR-103:裁决缓存表随回合收口回收——
 // 收口后条目数回落常数,不随历史工具调用数增长;进行中审批(收口前)不受影响。
