@@ -90,3 +90,30 @@ func TestPublishSubscribeRoundTrip(t *testing.T) {
 		t.Fatalf("stream persisted: %v", err)
 	}
 }
+
+// TestEmitAggregatesErrors 钉 FR-101 Emit 语义:持久发布 + 全订阅按序通知,
+// 错误聚合(声明校验错/发布错并列返回)。
+func TestEmitAggregatesErrors(t *testing.T) {
+	b, err := OpenBus(BusOptions{StoreDir: filepath.Join(t.TempDir(), "js")})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer b.Close()
+	if err := b.DeclareEvents("notify"); err != nil {
+		t.Fatalf("declare: %v", err)
+	}
+	order := make([]int, 0, 2)
+	unsub1, _ := b.Subscribe("notify", func([]byte) { order = append(order, 1) })
+	defer unsub1()
+	unsub2, _ := b.Subscribe("notify", func([]byte) { order = append(order, 2) })
+	defer unsub2()
+	if errs := b.Emit("notify", []byte("x")); len(errs) != 0 {
+		t.Fatalf("emit errors = %v, want none", errs)
+	}
+	if len(order) != 2 || order[0] != 1 || order[1] != 2 {
+		t.Fatalf("order = %v, want [1 2] (按注册序)", order)
+	}
+	if errs := b.Emit("undeclared.emit", []byte("x")); len(errs) == 0 {
+		t.Fatal("emit on undeclared must aggregate a fail-closed error")
+	}
+}
