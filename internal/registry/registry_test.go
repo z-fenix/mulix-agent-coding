@@ -305,3 +305,54 @@ func TestSnapshotFreezesAtCallTime(t *testing.T) {
 		t.Fatalf("snapshot 2 = %d tools, want 2 (当前态)", len(snap2))
 	}
 }
+
+// TestEngineVisibleFreezeIsSessionGranular 钉 011 FR-103 现状(会话粒度冻结,
+// 协议级黑盒——go-sdk InMemory transports + ListTools):NewServer 构造期
+// 冻结即引擎可见面——构造后注册新工具不影响已构造 Server 的 tools/list;
+// 新构造 Server 含新工具(会话粒度生效,防未来无意改变)。
+func TestEngineVisibleFreezeIsSessionGranular(t *testing.T) {
+	ctx := context.Background()
+	resetRegistry(t)
+	Register(&stubTool{name: "freeze-a", desc: "a", schema: `{"type":"object"}`})
+	s1 := NewServer(Options{Name: "mulix"}) // 快照时点 1:构造期冻结
+
+	listTools := func(s *Server) []string {
+		cT, sT := mcp.NewInMemoryTransports()
+		ss, err := s.mcpServer.Connect(ctx, sT, nil)
+		if err != nil {
+			t.Fatalf("server connect: %v", err)
+		}
+		defer ss.Close()
+		client := mcp.NewClient(&mcp.Implementation{Name: "probe", Version: "v0"}, nil)
+		cs, err := client.Connect(ctx, cT, nil)
+		if err != nil {
+			t.Fatalf("client connect: %v", err)
+		}
+		defer cs.Close()
+		res, err := cs.ListTools(ctx, nil)
+		if err != nil {
+			t.Fatalf("list tools: %v", err)
+		}
+		var names []string
+		for _, tl := range res.Tools {
+			names = append(names, tl.Name)
+		}
+		return names
+	}
+
+	got1 := listTools(s1)
+	if len(got1) != 1 || got1[0] != "freeze-a" {
+		t.Fatalf("s1 tools = %v, want [freeze-a]", got1)
+	}
+
+	// 构造后注册新工具:已构造 Server 的可见面不变(冻结);新构造 Server 含它。
+	Register(&stubTool{name: "freeze-b", desc: "b", schema: `{"type":"object"}`})
+	if got := listTools(s1); len(got) != 1 || got[0] != "freeze-a" {
+		t.Fatalf("s1 tools after late registration = %v, want unchanged (构造期冻结)", got)
+	}
+	s2 := NewServer(Options{Name: "mulix"}) // 快照时点 2
+	got2 := listTools(s2)
+	if len(got2) != 2 {
+		t.Fatalf("s2 tools = %v, want 2 (会话粒度生效)", got2)
+	}
+}
