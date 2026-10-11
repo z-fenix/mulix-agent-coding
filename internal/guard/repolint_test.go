@@ -19,20 +19,29 @@ import (
 //   - internal/engine/claudehost_test.go 透传钉
 //
 // 任何**新增**文件出现该字符串 = 出现第二条 system prompt 注入路径 → 红线。
+
+// repolintFlagAllowlist 是 --append-system-prompt 引用面的 P1 allowlist
+// (原 TestNoSecondSystemPromptPath 局部变量;T10-② 提取为包级供交叉断言
+// ——仅测试文件,零生产面)。P3 008:追加第 8 键 allowlist_cross_test.go
+// (交叉断言测试文件自身含 marker 字面量——P1 walk 扫 _test.go;P1 侧是
+// 超集,子集断言不受影响)。
+var repolintFlagAllowlist = map[string]bool{
+	"internal/cache/boot.go":                 true,
+	"internal/engine/host.go":                true,
+	"internal/engine/claudehost.go":          true,
+	"internal/engine/claudehost_test.go":     true,
+	"internal/guard/repolint_test.go":        true,
+	"internal/guard/allowlist_cross_test.go": true,
+	// M17（Task 10）：本规则并入 internal/lint（design 002 §6）——规则定义处
+	// 与其测试必然包含标记字面量（本注释既定程序：「如属合法消费面请先更新
+	// 本规则的 allowlist 并过评审」）。生产扫描仍由本测试与本工具双保险。
+	"internal/lint/rules.go":     true,
+	"internal/lint/lint_test.go": true,
+}
+
 func TestNoSecondSystemPromptPath(t *testing.T) {
 	const marker = "--append-system-prompt"
-	allowed := map[string]bool{
-		"internal/cache/boot.go":             true,
-		"internal/engine/host.go":            true,
-		"internal/engine/claudehost.go":      true,
-		"internal/engine/claudehost_test.go": true,
-		"internal/guard/repolint_test.go":    true,
-		// M17（Task 10）：本规则并入 internal/lint（design 002 §6）——规则定义处
-		// 与其测试必然包含标记字面量（本注释既定程序：「如属合法消费面请先更新
-		// 本规则的 allowlist 并过评审」）。生产扫描仍由本测试与本工具双保险。
-		"internal/lint/rules.go":     true,
-		"internal/lint/lint_test.go": true,
-	}
+	allowed := repolintFlagAllowlist
 
 	var offenders []string
 	root := "../.." // 测试进程 cwd = internal/guard → 仓库根

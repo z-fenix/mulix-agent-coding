@@ -147,3 +147,19 @@ func pkgAllowed(pkgPath, internalPkg string) bool {
 	}
 	return false
 }
+
+// FlagAllowlistFor 返回指定 marker 的 allowlist 集合副本（T10-② 交叉断言
+// 消费：guard 侧测试经此读取 lint 侧清单，双源单侧漂移在断言层暴露）。
+// 未知 marker 返回 nil。
+func FlagAllowlistFor(marker string) map[string]bool {
+	for _, rr := range refRules {
+		if rr.Marker == marker {
+			out := make(map[string]bool, len(rr.Allow))
+			for k, v := range rr.Allow {
+				out[k] = v
+			}
+			return out
+		}
+	}
+	return nil
+}
