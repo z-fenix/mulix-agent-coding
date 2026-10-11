@@ -15,6 +15,13 @@ func TestLintAllowlistSubsetOfP1Repolint(t *testing.T) {
 	if allow == nil {
 		t.Fatal("lint must define the shared marker --append-system-prompt")
 	}
+	assertLintAllowSubset(t, allow)
+}
+
+// assertLintAllowSubset 断言 allow ⊆ repolintFlagAllowlist(子集检查与
+// 越界报告;子集测试共用——009 FR-104 G2 helper 抽取)。
+func assertLintAllowSubset(t *testing.T, allow map[string]bool) {
+	t.Helper()
 	for f := range allow {
 		if !repolintFlagAllowlist[f] {
 			t.Errorf("lint allowlist 越界: %q 不在 P1 repolint 清单(双源漂移——按既定程序同步两侧并过评审)", f)

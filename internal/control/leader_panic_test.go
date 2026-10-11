@@ -252,3 +252,51 @@ func TestLeaderPanicDoesNotPoisonApproveMu(t *testing.T) {
 		t.Fatalf("ruling after recovered panic = %v, want allow", ans2["behavior"])
 	}
 }
+
+// noticePanicSink 包装 Sink:NoticeEvent 含 "leader panic" 时 Publish panic
+// (模拟「publish 自身 panic」的双重故障源——判别注入)。
+type noticePanicSink struct {
+	Sink
+	events []any
+}
+
+func (s *noticePanicSink) Publish(ev any) {
+	s.events = append(s.events, ev)
+	if n, ok := ev.(event.NoticeEvent); ok && strings.Contains(n.Content, "leader panic") {
+		panic("publish exploded (double-fault injection)")
+	}
+	s.Sink.Publish(ev)
+}
+
+// TestLeaderPanicDoubleFaultProtected 钉 009 FR-103(G2):原始 panic 源于
+// publish 自身时,收口路径的 Notice 发布(第二次 publish)被内层防护捕获
+// ——双重故障不得使 panic 逃出 defer(逃出 = goroutine 崩溃 = 测试二进制
+// 失败,RED)。判别形态:Sink 包装注入——Publish 在 NoticeEvent 含
+// "leader panic" 时 panic(首 panic 即此形态:兜底 Notice 是首次 Notice
+// 发布);修复前 panic 逃出 defer → RED;修复后内层 recover 捕获 → 绿。
+func TestLeaderPanicDoubleFaultProtected(t *testing.T) {
+	base := &recordingSink{}
+	sink := &noticePanicSink{Sink: base}
+	c := newTestControllerWithPolicyRules(t, nil, sink,
+		policyRuleIn{raw: "Write", effect: guard.DecisionAllow})
+	c.opts.EvaluateProbe = func(tool string, input json.RawMessage) {
+		panic("gate exploded (double-fault probe)")
+	}
+	pcs := c.startPermissionCallback()
+	if pcs == nil {
+		t.Fatal("callback server must start")
+	}
+	defer pcs.close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ans, err := postCallbackOnce(ctx, pcs.addr, "Write", `{"file_path":"x.txt"}`, "tu-double-fault")
+	if err != nil {
+		t.Fatalf("double-fault path must answer (panic must not escape): %v", err)
+	}
+	if ans["behavior"] != "deny" {
+		t.Fatalf("behavior = %v, want deny", ans["behavior"])
+	}
+	if len(base.events) == 0 {
+		t.Fatal("sink must record pre-panic events (panicking notice intentionally never forwarded)")
+	}
+}

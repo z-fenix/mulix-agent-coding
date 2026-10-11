@@ -1544,8 +1544,13 @@ func (c *Controller) evaluateRuling(toolUseID, tool string, input json.RawMessag
 			panicked = true
 			ruling = gateRuling{decision: string(guard.DecisionDeny),
 				source: string(guard.SourceTimeout), resolvedBy: "singleflight: leader panic", turn: turn}
-			c.publish(event.NoticeEvent{Seq: c.nextSeq(), Level: "warning",
-				Content: fmt.Sprintf("审批裁决 leader panic(fail-closed 兜底): %v", r)})
+			// 双重故障防护(009 FR-103):publish 自身 panic 时内层捕获——
+			// 不得使 panic 逃出 defer(NOTICE 是兜底路径上的第二次发布)。
+			func() {
+				defer func() { _ = recover() }()
+				c.publish(event.NoticeEvent{Seq: c.nextSeq(), Level: "warning",
+					Content: fmt.Sprintf("审批裁决 leader panic(fail-closed 兜底): %v", r)})
+			}()
 		}
 	}()
 	c.publish(event.ApprovalRequestEvent{Seq: c.nextSeq(), Turn: c.currentTurn(),

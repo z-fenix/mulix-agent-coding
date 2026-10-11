@@ -449,3 +449,33 @@ func TestWatcherKeySetFrozenAtStartup(t *testing.T) {
 		t.Fatal("existing key change must still be noticed (no regression)")
 	}
 }
+
+// TestCloseMirrorEventCountStable 钉 009 FR-104(G2):Close 后镜像事件
+// 计数稳定——无 publish 越过 Close(直接断言,008 时为传递承载)。
+func TestCloseMirrorEventCountStable(t *testing.T) {
+	ws := t.TempDir()
+	writeInstructionFile(t, ws, "CLAUDE.md", "# rules")
+	fake := engine.NewFakeHost(engine.FakeScript{})
+	c := newTestControllerCapturingBoot(t, fake, &recordingSink{}, &engine.BootConfig{}, func(o *Options) {
+		o.Workspace = ws
+	})
+	if err := c.NewSession(context.Background()); err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	if err := c.Close(context.Background()); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	mirror, err := c.Mirror().ReadAllEvents()
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	n1 := len(mirror)
+	time.Sleep(200 * time.Millisecond) // 越过窗口探测
+	mirror2, err := c.Mirror().ReadAllEvents()
+	if err != nil {
+		t.Fatalf("read2: %v", err)
+	}
+	if len(mirror2) != n1 {
+		t.Fatalf("mirror grew after Close: %d -> %d (publish crossed Close)", n1, len(mirror2))
+	}
+}
