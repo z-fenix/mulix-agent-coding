@@ -6,6 +6,8 @@ package eventbus
 
 import (
 	"fmt"
+	"strings"
+	"sync"
 
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
@@ -13,9 +15,11 @@ import (
 
 // Bus 是内嵌 NATS 事件骨干的句柄:server + 进程内连接 + JetStream 上下文。
 type Bus struct {
-	srv *server.Server
-	nc  *nats.Conn
-	js  nats.JetStreamContext
+	srv      *server.Server
+	nc       *nats.Conn
+	js       nats.JetStreamContext
+	mu       sync.RWMutex
+	declared map[string]bool
 }
 
 // BusOptions 是 OpenBus 的选项:StoreDir 为 JetStream FileStorage 目录。
@@ -50,7 +54,7 @@ func OpenBus(opts BusOptions) (*Bus, error) {
 		srv.Shutdown()
 		return nil, fmt.Errorf("eventbus: jetstream: %w", err)
 	}
-	return &Bus{srv: srv, nc: nc, js: js}, nil
+	return &Bus{srv: srv, nc: nc, js: js, declared: map[string]bool{}}, nil
 }
 
 // Conn 返回进程内连接(后续任务:发布与订阅)。
@@ -67,6 +71,51 @@ func (b *Bus) Close() error {
 	}
 	if b.srv != nil {
 		b.srv.Shutdown()
+	}
+	return nil
+}
+
+// DeclareEvents 幂等声明事件名:为 subject mulix.<name> 确保 JetStream Stream
+// (Storage=File,Retention=Limits——append-only 持久流);未声明名经
+// declared 校验拒绝(fail-closed,FR-101 类型化)。
+// Stream 布局 Ruling:每事件一 Stream(过渡形态;每会话一 Stream 属 P4b)。
+func (b *Bus) DeclareEvents(names ...string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, name := range names {
+		subject := "mulix." + name
+		if b.declared[subject] {
+			continue
+		}
+		stream := streamName(name)
+		if _, err := b.js.StreamInfo(stream); err == nil {
+			b.declared[subject] = true
+			continue
+		}
+		if _, err := b.js.AddStream(&nats.StreamConfig{
+			Name:      stream,
+			Subjects:  []string{subject},
+			Storage:   nats.FileStorage,
+			Retention: nats.LimitsPolicy,
+		}); err != nil {
+			return fmt.Errorf("eventbus: declare %q: %w", name, err)
+		}
+		b.declared[subject] = true
+	}
+	return nil
+}
+
+func streamName(event string) string {
+	// NATS Stream 名不允许点号:事件名的点净化为下划线(subject 保留原形)。
+	return "MULIX_" + strings.ReplaceAll(event, ".", "_")
+}
+
+// validateDeclared 校验 subject 已声明(fail-closed)。
+func (b *Bus) validateDeclared(subject string) error {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if !b.declared[subject] {
+		return fmt.Errorf("eventbus: subject %q not declared (fail-closed)", subject)
 	}
 	return nil
 }
