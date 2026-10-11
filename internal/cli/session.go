@@ -15,6 +15,7 @@ import (
 	"mulix/internal/engine"
 	"mulix/internal/event"
 	"mulix/internal/guard"
+	"mulix/internal/kernel"
 	"mulix/internal/memory"
 	"mulix/internal/registry"
 	"mulix/internal/sessionx"
@@ -225,7 +226,10 @@ func (o Options) assembleController(cfg config.Config, store *sessionx.Store, me
 	if memStore != nil {
 		memRecall = memStore
 	}
-	c, err := control.NewController(control.Options{
+	// 组合根 kernel 化(011 FR-101):装配产出的依赖以 kernel 服务键登记
+	// (每次装配一个根 Context——主会话与子会话装配各自持有);Options
+	// 字段经同源回填(键值=字段),NewController 消费回填结果——行为零变更。
+	root, opts, kerr := assembleKernelContext(control.Options{
 		HostFactory:      hostFactory,
 		Sink:             sink,
 		Store:            store,
@@ -245,10 +249,53 @@ func (o Options) assembleController(cfg config.Config, store *sessionx.Store, me
 		Memory:        memRecall,
 		HookConsumers: hookConsumers,
 	})
+	if kerr != nil {
+		return nil, nil, kerr
+	}
+	_ = root // 根 Context 就位(P4b-2 消费:agent loop/镜像桥经此接线)
+	c, err := control.NewController(opts)
 	if err != nil {
 		return nil, nil, err
 	}
 	return c, bridge, nil
+}
+
+// assembleKernelContext 把装配产出的依赖以 kernel 服务键登记(011 FR-101;
+// 每次装配一个根 Context——主会话与子会话装配各自持有)。可空依赖 nil 跳过
+// ——键不就位与「nil=功能关闭」语义一致。Options 同源回填(键值=字段;
+// 非键字段原样携带——空 Options 会死在 NewController 的 fail-closed 校验)。
+// hooks 键在装配期必不就位(Options.Hooks 由 NewController 内创建——
+// nil-skip 覆盖)。
+func assembleKernelContext(o control.Options) (*kernel.Context, control.Options, error) {
+	root := kernel.NewContext(nil)
+	provides := []struct {
+		key string
+		v   any
+	}{
+		{"sink", o.Sink}, {"store", o.Store}, {"meter", o.Meter},
+		{"gate", o.Gate}, {"config", o.Config},
+	}
+	for _, kv := range provides {
+		if err := root.Provide(kv.key, kv.v); err != nil {
+			return nil, control.Options{}, err
+		}
+	}
+	if o.Approvals != nil {
+		if err := root.Provide("approvals", o.Approvals); err != nil {
+			return nil, control.Options{}, err
+		}
+	}
+	if o.Memory != nil {
+		if err := root.Provide("memory", o.Memory); err != nil {
+			return nil, control.Options{}, err
+		}
+	}
+	if o.Registry != nil {
+		if err := root.Provide("registry", o.Registry); err != nil {
+			return nil, control.Options{}, err
+		}
+	}
+	return root, o, nil
 }
 
 // resolveMemoryStore 解析本会话树的记忆库实例（M13/T13.2；Task 5 移交：
