@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"mulix/internal/engine"
 	"mulix/internal/event"
 	"mulix/internal/guard"
 )
@@ -143,3 +144,67 @@ func TestLeaderPanicThenFreshRequest(t *testing.T) {
 }
 
 var _ = httptest.NewRecorder // 保留:closed-session 子测试同型参考(closed POST handler 直测)
+
+// TestResolvedBoundedAcrossTurns 钉 FR-103:裁决缓存表随回合收口回收——
+// 收口后条目数回落常数,不随历史工具调用数增长;进行中审批(收口前)不受影响。
+func TestResolvedBoundedAcrossTurns(t *testing.T) {
+	c := newTestControllerWithPolicyRules(t, nil, &recordingSink{},
+		policyRuleIn{raw: "Write", effect: guard.DecisionAllow})
+	// 白盒前置:回合 1 进行中(onResult 只消费 running 会话的 result)。
+	c.mu.Lock()
+	c.running = true
+	c.turn = 1
+	c.mu.Unlock()
+
+	// 回合 1:三次裁决(allow 规则命中,走正常 leader 路径)。
+	c.evaluateCanUseTool("r1", "tu-b1", "Write", json.RawMessage(`{"file_path":"x.txt"}`), json.RawMessage(`1`))
+	c.evaluateCanUseTool("r2", "tu-b2", "Write", json.RawMessage(`{"file_path":"x.txt"}`), json.RawMessage(`2`))
+	c.evaluateCanUseTool("r3", "tu-b3", "Write", json.RawMessage(`{"file_path":"x.txt"}`), json.RawMessage(`3`))
+
+	c.mu.Lock()
+	sizeAfterTurn1 := len(c.resolved)
+	c.mu.Unlock()
+	if sizeAfterTurn1 != 3 {
+		t.Fatalf("resolved size after 3 rulings = %d, want 3 (in-flight turn entries present)", sizeAfterTurn1)
+	}
+
+	// 回合 1 收口 → 条目回收。
+	c.onResult(engine.Event{Kind: engine.KindResult,
+		Result: &engine.ResultInfo{SubType: "success", IsError: false, NumTurns: 1}})
+	c.mu.Lock()
+	sizeAfterClose1 := len(c.resolved)
+	c.mu.Unlock()
+	if sizeAfterClose1 != 0 {
+		t.Fatalf("resolved size after turn close = %d, want 0 (bounded per FR-103)", sizeAfterClose1)
+	}
+
+	// 回合 2:panic 兜底裁决不入缓存(Task 1 设计)——只有正常裁决 tu-b4 在表;
+	// 收口后 0 条(兜底天然有界,无豁免问题)。
+	c.mu.Lock()
+	c.running = true // onResult 首轮已置 false;不置位则回合 2 收口被 running guard 忽略
+	c.turn = 2
+	c.mu.Unlock()
+	probeOn := true
+	c.opts.EvaluateProbe = func(tool string, input json.RawMessage) {
+		if probeOn {
+			panic("gate exploded (test injection)")
+		}
+	}
+	c.evaluateCanUseTool("r4", "tu-p1", "Write", json.RawMessage(`{"file_path":"x.txt"}`), json.RawMessage(`4`))
+	probeOn = false
+	c.evaluateCanUseTool("r5", "tu-b4", "Write", json.RawMessage(`{"file_path":"x.txt"}`), json.RawMessage(`5`))
+	c.mu.Lock()
+	sizeAfterTurn2 := len(c.resolved)
+	c.mu.Unlock()
+	if sizeAfterTurn2 != 1 {
+		t.Fatalf("resolved size in turn 2 = %d, want 1 (panic fallback never cached; normal entry present)", sizeAfterTurn2)
+	}
+	c.onResult(engine.Event{Kind: engine.KindResult,
+		Result: &engine.ResultInfo{SubType: "success", IsError: false, NumTurns: 2}})
+	c.mu.Lock()
+	sizeAfterClose2 := len(c.resolved)
+	c.mu.Unlock()
+	if sizeAfterClose2 != 0 {
+		t.Fatalf("resolved size after turn 2 close = %d, want 0 (fallback never cached, normal entry cleaned)", sizeAfterClose2)
+	}
+}

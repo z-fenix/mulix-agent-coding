@@ -1223,6 +1223,15 @@ func (c *Controller) onResult(ev engine.Event) {
 		return
 	}
 	turn := c.turn
+	// 裁决缓存表有界化(T11-① FR-103):本回合全部审批在收口时已裁决
+	// (引擎等许可后才执行工具),回合 ≤ 收口回合的条目不再被重发复用
+	// 需要——回收。inflight 不动(pending 唤醒语义独立于缓存回收);
+	// 收口后同 ID 重发按新请求重新评估(spec 假设:协议下不发生)。
+	for id, r := range c.resolved {
+		if r.turn <= turn {
+			delete(c.resolved, id)
+		}
+	}
 	ch := c.turnDoneChLocked(turn)
 	c.mu.Unlock()
 
