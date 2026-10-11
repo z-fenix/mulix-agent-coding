@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestOpenCloseBus 钉 FR-107/FR-108 骨架:内嵌 server + JetStream 可启停,
@@ -45,5 +46,47 @@ func TestDeclareEventsAndFailClosed(t *testing.T) {
 	}
 	if !strings.Contains(b.validateDeclared("mulix.undeclared.event").Error(), "not declared") {
 		t.Fatal("error must name the fail-closed reason")
+	}
+}
+
+// TestPublishSubscribeRoundTrip 钉 FR-108:发布持久化到 JetStream;进程内
+// 订阅收到相同 payload;unsub 后不再收到。
+func TestPublishSubscribeRoundTrip(t *testing.T) {
+	b, err := OpenBus(BusOptions{StoreDir: filepath.Join(t.TempDir(), "js")})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer b.Close()
+	if err := b.DeclareEvents("echo"); err != nil {
+		t.Fatalf("declare: %v", err)
+	}
+	got := make(chan []byte, 1)
+	unsub, err := b.Subscribe("echo", func(p []byte) { got <- p })
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	if err := b.Publish("echo", []byte(`{"k":1}`)); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	select {
+	case p := <-got:
+		if string(p) != `{"k":1}` {
+			t.Fatalf("payload = %s", p)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("subscriber did not receive payload")
+	}
+	unsub()
+	if err := b.Publish("echo", []byte(`{"k":2}`)); err != nil {
+		t.Fatalf("publish2: %v", err)
+	}
+	select {
+	case p := <-got:
+		t.Fatalf("unsubscribed still received: %s", p)
+	case <-time.After(200 * time.Millisecond):
+	}
+	// 持久化:JetStream 流存在(replay 断言属 P5)。
+	if _, err := b.JS().StreamInfo(streamName("echo")); err != nil {
+		t.Fatalf("stream persisted: %v", err)
 	}
 }

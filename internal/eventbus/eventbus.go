@@ -6,6 +6,7 @@ package eventbus
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 
@@ -20,6 +21,7 @@ type Bus struct {
 	js       nats.JetStreamContext
 	mu       sync.RWMutex
 	declared map[string]bool
+	handlers map[string][]func([]byte)
 }
 
 // BusOptions 是 OpenBus 的选项:StoreDir 为 JetStream FileStorage 目录。
@@ -54,7 +56,7 @@ func OpenBus(opts BusOptions) (*Bus, error) {
 		srv.Shutdown()
 		return nil, fmt.Errorf("eventbus: jetstream: %w", err)
 	}
-	return &Bus{srv: srv, nc: nc, js: js, declared: map[string]bool{}}, nil
+	return &Bus{srv: srv, nc: nc, js: js, declared: map[string]bool{}, handlers: map[string][]func([]byte){}}, nil
 }
 
 // Conn 返回进程内连接(后续任务:发布与订阅)。
@@ -118,4 +120,76 @@ func (b *Bus) validateDeclared(subject string) error {
 		return fmt.Errorf("eventbus: subject %q not declared (fail-closed)", subject)
 	}
 	return nil
+}
+
+// Publish 经 JetStream 发布(持久化)+ 进程内单轨投递(handlers 表);
+// 返回首个错误(全量聚合经 Emit)。裁定:持久化与投递同源于单轨,
+// 双通知/双轨问题 009 评审裁决排除。
+func (b *Bus) Publish(name string, payload []byte) error {
+	if errs := b.Emit(name, payload); len(errs) > 0 {
+		return errs[0]
+	}
+	return nil
+}
+
+// Emit 与 Publish 同源(持久化+单轨投递),返回全量错误聚合。FR-101。
+func (b *Bus) Emit(name string, payload []byte) (errs []error) {
+	subject := "mulix." + name
+	if err := b.validateDeclared(subject); err != nil {
+		return []error{err}
+	}
+	if _, err := b.js.Publish(subject, payload); err != nil {
+		errs = append(errs, fmt.Errorf("eventbus: publish %q: %w", name, err))
+	}
+	b.mu.RLock()
+	handlers := append([]func([]byte){}, b.handlers[subject]...)
+	b.mu.RUnlock()
+	for _, fn := range handlers {
+		if err := safeCall(fn, payload); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errs
+}
+
+// safeCall 隔离订阅 panic(不因单订阅 panic 中断通知序)。
+func safeCall(fn func([]byte), payload []byte) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("eventbus: subscriber panic: %v", r)
+		}
+	}()
+	fn(payload)
+	return nil
+}
+
+// Subscribe 建立进程内投递订阅(登记 handlers 表——进程内投递唯一路径,
+// 双轨重复投递问题 009 评审已裁决单轨);返回 unsub(成对移除)。
+// JetStream 持久由 Publish 侧承载(发布即持久);replay 订阅属 P5。
+// FR-102 集成:订阅可经调用方 ctx.Effect 登记(unsub 为 undo)→ Dispose
+// 自动退订(集成测试钉于 Task 10 Step 3b——Effect 于该任务落地)。
+func (b *Bus) Subscribe(name string, fn func(payload []byte)) (func(), error) {
+	subject := "mulix." + name
+	if err := b.validateDeclared(subject); err != nil {
+		return nil, err
+	}
+	b.mu.Lock()
+	b.handlers[subject] = append(b.handlers[subject], fn)
+	b.mu.Unlock()
+	return func() {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		hs := b.handlers[subject]
+		for i, h := range hs {
+			if sameFunc(h, fn) {
+				b.handlers[subject] = append(hs[:i], hs[i+1:]...)
+				break
+			}
+		}
+	}, nil
+}
+
+// sameFunc 以闭包代码指针比较(同字面量注册/注销配对)。
+func sameFunc(a, b any) bool {
+	return reflect.ValueOf(a).Pointer() == reflect.ValueOf(b).Pointer()
 }
