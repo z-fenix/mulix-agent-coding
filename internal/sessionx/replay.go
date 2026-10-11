@@ -42,29 +42,45 @@ func (s *Store) Replay() ([]any, []string, error) {
 	}
 
 	if dmg.Any() {
-		// 1) 半行字节转储（原样 + 换行；累计追加）
-		half, err := extractHalfLine(path)
-		if err != nil {
-			return nil, warnings, fmt.Errorf("sessionx: extract damaged tail: %w", err)
+		// 1) 损坏段转储（累计追加，保留隔离历史）：半行原样（既有）；
+		//    超限段有界头+元信息（全行不落盘，FR-106）。
+		if dmg.HalfTail {
+			half, err := extractHalfLine(path)
+			if err != nil {
+				return nil, warnings, fmt.Errorf("sessionx: extract damaged tail: %w", err)
+			}
+			if err := appendQuarantine(quarantine, half); err != nil {
+				return nil, warnings, err
+			}
 		}
-		f, err := os.OpenFile(quarantine, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-		if err != nil {
-			return nil, warnings, fmt.Errorf("sessionx: open %s: %w", quarantine, err)
+		for _, seg := range dmg.Oversized {
+			meta := fmt.Sprintf(`{"damaged":"oversized","line_no":%d,"total_bytes":%d,"head_bytes":%d}`,
+				seg.LineNo, seg.TotalLen, len(seg.Head))
+			// 元信息以 NUL 结尾（appendQuarantine 自动补换行）——隔离区是
+			// 字节转储历史（无解析契约），NUL 防止头字节与元信息粘连歧义。
+			if err := appendQuarantine(quarantine, append([]byte(meta), 0)); err != nil {
+				return nil, warnings, err
+			}
+			if err := appendQuarantine(quarantine, seg.Head); err != nil {
+				return nil, warnings, err
+			}
 		}
-		if _, err := f.Write(append(half, '\n')); err != nil {
-			f.Close()
-			return nil, warnings, fmt.Errorf("sessionx: quarantine: %w", err)
+		// 2) 物理处置：半行 → 截断修复（既有）；超限 → 原地压实（保留全部
+		//    完整行；恢复路径会话静止，独立 R/W 句柄合法）。压实同时移除
+		//    尾部半行（lines 已排除全部损坏段）。
+		if dmg.HalfTail {
+			if err := s.repairLocked(); err != nil {
+				return nil, warnings, fmt.Errorf("sessionx: repair: %w", err)
+			}
 		}
-		if err := f.Close(); err != nil {
-			return nil, warnings, fmt.Errorf("sessionx: quarantine: %w", err)
-		}
-		// 2) 主日志截断到最后一个完整行（jsonl.Writer.Repair 幂等，且
-		//    Store.writer 已知 damagedTail 状态——修复后恢复可追加）
-		if err := s.repairLocked(); err != nil {
-			return nil, warnings, fmt.Errorf("sessionx: repair: %w", err)
+		if len(dmg.Oversized) > 0 {
+			if err := compactEventsInPlace(path, lines); err != nil {
+				return nil, warnings, fmt.Errorf("sessionx: compact: %w", err)
+			}
 		}
 		warnings = append(warnings, fmt.Sprintf(
-			"sessionx: damaged tail isolated to %s; %d complete events kept", quarantine, len(lines)))
+			"sessionx: damaged segments isolated to %s (half_tail=%v oversized=%d); %d complete events kept",
+			quarantine, dmg.HalfTail, len(dmg.Oversized), len(lines)))
 	}
 
 	events := make([]any, 0, len(lines))
@@ -91,6 +107,53 @@ func (s *Store) repairLocked() error {
 		return fmt.Errorf("sessionx: store closed")
 	}
 	return s.writer.Repair()
+}
+
+// appendQuarantine 向隔离区文件追加字节块（无换行结尾时自动补换行；累计
+// 追加保留隔离历史——T5-① 复用既有约定）。
+func appendQuarantine(quarantine string, data []byte) error {
+	f, err := os.OpenFile(quarantine, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return fmt.Errorf("sessionx: open %s: %w", quarantine, err)
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return fmt.Errorf("sessionx: quarantine: %w", err)
+	}
+	if !bytes.HasSuffix(data, []byte("\n")) {
+		if _, err := f.Write([]byte("\n")); err != nil {
+			f.Close()
+			return fmt.Errorf("sessionx: quarantine: %w", err)
+		}
+	}
+	return f.Close()
+}
+
+// compactEventsInPlace 原地压实镜像日志：仅保留 keepLines（顺序不变），
+// 中部超限段被物理移除——压实后文件干净，不再反复触发恢复。恢复路径专用
+// （会话静止）；Go/Windows 打开文件默认全共享，独立 R/W 句柄与 Store 的
+// O_APPEND 写句柄可并存；写毕 Truncate 到新长度并 Sync。
+func compactEventsInPlace(path string, keep [][]byte) error {
+	f, err := os.OpenFile(path, os.O_RDWR, 0o644)
+	if err != nil {
+		return fmt.Errorf("sessionx: compact open: %w", err)
+	}
+	defer f.Close()
+	off := int64(0)
+	for _, l := range keep {
+		buf := make([]byte, 0, len(l)+1)
+		buf = append(buf, l...)
+		buf = append(buf, '\n')
+		n, err := f.WriteAt(buf, off)
+		if err != nil {
+			return fmt.Errorf("sessionx: compact write: %w", err)
+		}
+		off += int64(n)
+	}
+	if err := f.Truncate(off); err != nil {
+		return fmt.Errorf("sessionx: compact truncate: %w", err)
+	}
+	return f.Sync()
 }
 
 // extractHalfLine 返回文件末尾最后一个换行之后的半行字节（损坏尾部原样）。

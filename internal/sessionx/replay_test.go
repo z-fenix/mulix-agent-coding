@@ -1,6 +1,7 @@
 package sessionx
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"mulix/internal/event"
+	"mulix/internal/jsonl"
 )
 
 // seedSession creates a store and appends the given events, then closes it
@@ -318,5 +320,64 @@ func TestDelegationEventsRoundTrip(t *testing.T) {
 		if !reflect.DeepEqual(got[i], want) {
 			t.Fatalf("event %d mismatch: got %#v want %#v", i, got[i], want)
 		}
+	}
+}
+
+// TestReplayOversizedSegmentCompacted 钉 FR-104/106 + SC-001/003:中部超限行
+// 被隔离转储(有界头+元信息),主日志原地压实(好行全保留、超限段物理移除),
+// 压实后文件可再次正常加载(不反复触发恢复)。
+func TestReplayOversizedSegmentCompacted(t *testing.T) {
+	root := t.TempDir()
+	want := []any{
+		event.TurnStartedEvent{Seq: 1, SessionID: "s", EngineSessionID: "e", PinnedModel: "m"},
+		event.AssistantTextEvent{Seq: 2, Turn: 1, Text: "before"},
+		event.TurnDoneEvent{Seq: 3, Turn: 1, Subtype: "success"},
+		event.TurnStartedEvent{Seq: 4, SessionID: "s", EngineSessionID: "e", PinnedModel: "m"},
+	}
+	dir := seedSession(t, root, "s-oversize", want)
+	// 中部注入超限行(第 3 行,其后还有完整事件——压实不得吞它)。
+	f, err := os.OpenFile(filepath.Join(dir, "events.jsonl"), os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := f.Write(bytes.Repeat([]byte("z"), jsonl.MaxLineBytes+512)); err != nil {
+		t.Fatalf("inject: %v", err)
+	}
+	if _, err := f.WriteString("\n"); err != nil {
+		t.Fatalf("inject nl: %v", err)
+	}
+	f.Close()
+
+	s, err := OpenStore(dir)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer s.Close()
+	events, warnings, err := s.Replay()
+	if err != nil {
+		t.Fatalf("replay must not hard-fail on oversized segment: %v", err)
+	}
+	if len(events) != 4 {
+		t.Fatalf("events = %d, want 4 (all good events survive)", len(events))
+	}
+	joined := strings.Join(warnings, "\n")
+	if !strings.Contains(joined, "oversized") {
+		t.Fatalf("warnings must record oversized isolation, got: %s", joined)
+	}
+	// 隔离区有界转储:元信息 + 截断头(不写全量 17MB)。
+	q, err := os.ReadFile(filepath.Join(dir, "events.jsonl.damaged"))
+	if err != nil || !strings.Contains(string(q), `"damaged":"oversized"`) {
+		t.Fatalf("quarantine must contain oversized meta (FR-103/106): %v", err)
+	}
+	if len(q) > jsonl.MaxLineBytes/16 {
+		t.Fatalf("quarantine size = %d, must be bounded (FR-106)", len(q))
+	}
+	// 压实后再次加载无损坏(不反复触发);事件计数不变。
+	events2, err := s.ReadAllEvents()
+	if err != nil {
+		t.Fatalf("post-compaction load must be clean: %v", err)
+	}
+	if len(events2) != len(events) {
+		t.Fatalf("post-compaction events = %d, want %d", len(events2), len(events))
 	}
 }
