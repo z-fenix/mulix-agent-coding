@@ -1804,6 +1804,9 @@ func instructionNotice(path string) event.NoticeEvent {
 // 控制器（本任务只供 watcher 与 mulix instructions 消费——绝不改 Boot 面，
 // SC-003）；无指令文件 → 不起 watcher（轮询空集无意义）。与 Close 的竞态：
 // 存句柄前复查 closed，已收口则立即停掉刚起的 goroutine（无泄漏）。
+// 产品裁定(009 T8-②,裁定 A):监控键集 = 启动时快照——会话中新建的
+// 指令文件不纳入监控、不产生提醒(新文件下会话生效,与「快照保持」
+// 会话冻结哲学同构)。键集冻结语义由 TestWatcherKeySetFrozenAtStartup 钉。
 func (c *Controller) startInstructionWatcher() {
 	snaps := loadInstructionSnapshots(c.opts.Workspace)
 	c.mu.Lock()

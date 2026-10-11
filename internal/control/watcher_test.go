@@ -393,3 +393,59 @@ func TestCloseWaitsForWatcherDone(t *testing.T) {
 		t.Fatal("Close returned but watcher goroutine still running (must wait for Done, bounded)")
 	}
 }
+
+// TestWatcherKeySetFrozenAtStartup 钉 T8-② 裁定 A(009 FR-101):监控键集
+// = 启动时快照——会话中新建的指令文件不进入键集、不产生提醒;既有键变更
+// 照常提醒(快照保持,下会话生效——新文件属下个会话)。
+func TestWatcherKeySetFrozenAtStartup(t *testing.T) {
+	ws := t.TempDir()
+	writeInstructionFile(t, ws, "CLAUDE.md", "# rules")
+	fake := engine.NewFakeHost(engine.FakeScript{})
+	c := newTestControllerCapturingBoot(t, fake, &recordingSink{}, &engine.BootConfig{}, func(o *Options) {
+		o.Workspace = ws
+	})
+	if err := c.NewSession(context.Background()); err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	c.mu.Lock()
+	snaps, iw := c.instructionSnaps, c.instrWatch
+	c.mu.Unlock()
+	if iw == nil || len(snaps) != 1 {
+		t.Fatalf("baseline: snaps=%v iw=%v, want 1 key + watcher", snaps, iw)
+	}
+	// 会话中新建文件 B(不在基线键集)——等待 ≥2 个轮询周期。
+	writeInstructionFile(t, ws, "EXTRA.md", "# new file mid-session")
+	time.Sleep(5 * time.Second)
+	c.mu.Lock()
+	snaps2 := c.instructionSnaps
+	c.mu.Unlock()
+	if len(snaps2) != 1 {
+		t.Fatalf("key set must stay frozen at startup snapshot (裁定 A): %v", snaps2)
+	}
+	// 镜像无文件 B 相关 notice。
+	mirror, err := c.Mirror().ReadAllEvents()
+	if err != nil {
+		t.Fatalf("read mirror: %v", err)
+	}
+	for _, ev := range mirror {
+		if nEv, ok := ev.(event.NoticeEvent); ok && strings.Contains(nEv.Content, "EXTRA.md") {
+			t.Fatalf("new file must not be monitored (裁定 A): %s", nEv.Content)
+		}
+	}
+	// 既有键变更照常提醒(无回归)。
+	writeInstructionFile(t, ws, "CLAUDE.md", "# rules edited")
+	time.Sleep(5 * time.Second)
+	mirror2, err := c.Mirror().ReadAllEvents()
+	if err != nil {
+		t.Fatalf("read mirror: %v", err)
+	}
+	sawEdit := false
+	for _, ev := range mirror2 {
+		if nEv, ok := ev.(event.NoticeEvent); ok && strings.Contains(nEv.Content, "CLAUDE.md") {
+			sawEdit = true
+		}
+	}
+	if !sawEdit {
+		t.Fatal("existing key change must still be noticed (no regression)")
+	}
+}
