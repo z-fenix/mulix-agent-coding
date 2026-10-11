@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 )
 
@@ -171,6 +172,29 @@ func (w *Writer) Close() error {
 	return w.f.Close()
 }
 
+// MaxLineBytes 是单行字节上限（防护性设计：单事件协议面不应达到；超限行
+// 按损坏段隔离，不整体报错——T5-①）。数值与既有 Scanner 上限一致（16MB）。
+const MaxLineBytes = 16 * 1024 * 1024
+
+// headLimit 是超限行截断头的保留字节数（有界转储 FR-106；全行不缓冲）。
+const headLimit = 64 * 1024
+
+// OversizedSegment 是一条超限行的有界元信息（T5-①）。
+type OversizedSegment struct {
+	LineNo   int    // 1 起的行序（按文件物理行计）
+	TotalLen int64  // 原始总字节数（不含行尾换行）
+	Head     []byte // 前 headLimit 字节截断头（隔离转储用）
+}
+
+// Damage 是一次读取发现的损坏段汇总（两类来源可区分，FR-103）。
+type Damage struct {
+	HalfTail  bool               // 既有：尾部半行（崩溃残留，不计入完整行）
+	Oversized []OversizedSegment // T5-①：超限行（隔离，不吞后续）
+}
+
+// Any 报告是否存在任何损坏（与旧 damaged bool 语义等价）。
+func (d Damage) Any() bool { return d.HalfTail || len(d.Oversized) > 0 }
+
 // Reader 读取 JSONL 文件（增量读：重复 ReadAll 可见新追加的行）。
 type Reader struct {
 	f *os.File
@@ -188,50 +212,129 @@ func OpenReader(path string) (*Reader, error) {
 // ReadAll 返回当前全部完整行；检测到损坏尾部时返回错误且**不返回行**
 // （损坏尾部不得静默降级为部分成功——需要部分行时用 ReadAllWithStatus）。
 func (r *Reader) ReadAll() ([][]byte, error) {
-	lines, damaged, err := r.ReadAllWithStatus()
+	lines, dmg, err := r.ReadAllWithStatus()
 	if err != nil {
 		return nil, err
 	}
-	if damaged {
-		return nil, fmt.Errorf("jsonl: damaged tail detected")
+	if dmg.Any() {
+		return nil, fmt.Errorf("jsonl: damaged segments detected")
 	}
 	return lines, nil
 }
 
-// ReadAllWithStatus 返回当前全部完整行与损坏尾部标记：
-// damaged=true 表示文件尾部存在未完成的半行（崩溃残留），已完整行数以返回值为准。
-// 损坏尾部**不被静默丢弃**——由调用方决定修复或告警。
-func (r *Reader) ReadAllWithStatus() (lines [][]byte, damaged bool, err error) {
+// ReadAllWithStatus 返回当前全部完整行与损坏段汇总：
+// HalfTail=尾部半行（崩溃残留，既有语义）；Oversized=超限行（隔离为损坏段，
+// 不吞后续内容——T5-① FR-101/102/103）。损坏段不计入完整行、不被静默丢弃
+// ——由调用方决定修复或告警。
+func (r *Reader) ReadAllWithStatus() (lines [][]byte, dmg Damage, err error) {
 	if _, err := r.f.Seek(0, 0); err != nil {
-		return nil, false, fmt.Errorf("jsonl: seek: %w", err)
+		return nil, Damage{}, fmt.Errorf("jsonl: seek: %w", err)
 	}
-	sc := bufio.NewScanner(r.f)
-	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
-	for sc.Scan() {
-		b := sc.Bytes()
-		// Scanner 逐行扫描；最后一行无换行时 Scan 仍返回该行内容——
-		// 需要用底层状态区分「完整行」与「损坏尾部半行」。
-		lines = append(lines, append([]byte(nil), b...))
+	br := bufio.NewReaderSize(r.f, 64*1024)
+	lineNo := 0
+	tailOversized := false // 最后一行无换行且超限（已计超限，不重复计半行）
+	for {
+		line, total, tooLong, hadNewline, rerr := readBoundedLine(br, MaxLineBytes)
+		if rerr == io.EOF {
+			break
+		}
+		if rerr != nil {
+			return nil, Damage{}, fmt.Errorf("jsonl: read: %w", rerr)
+		}
+		lineNo++
+		if tooLong {
+			dmg.Oversized = append(dmg.Oversized,
+				OversizedSegment{LineNo: lineNo, TotalLen: total, Head: line})
+			tailOversized = !hadNewline
+			continue
+		}
+		tailOversized = false
+		lines = append(lines, line)
 	}
-	if err := sc.Err(); err != nil {
-		return nil, false, fmt.Errorf("jsonl: scan: %w", err)
-	}
-	// 尾部判定：文件非空且最后一个字节非换行 → 最后一行是半行。
+	// 尾部判定（既有）：文件非空且最后字节非换行 → 最后一行是半行；
+	// 若该尾行已按超限计（无换行超限），不重复计数、不误丢其前完整行。
 	info, err := r.f.Stat()
 	if err != nil {
-		return nil, false, fmt.Errorf("jsonl: stat: %w", err)
+		return nil, Damage{}, fmt.Errorf("jsonl: stat: %w", err)
 	}
-	if info.Size() > 0 {
+	if info.Size() > 0 && !tailOversized {
 		buf := make([]byte, 1)
 		if _, err := r.f.ReadAt(buf, info.Size()-1); err != nil {
-			return nil, false, fmt.Errorf("jsonl: read last byte: %w", err)
+			return nil, Damage{}, fmt.Errorf("jsonl: read last byte: %w", err)
 		}
 		if buf[0] != '\n' && len(lines) > 0 {
-			damaged = true
+			dmg.HalfTail = true
 			lines = lines[:len(lines)-1] // 半行不计入完整行
 		}
 	}
-	return lines, damaged, nil
+	return lines, dmg, nil
+}
+
+// readBoundedLine 读取一行（不含行尾换行）：字节总数 ≤ max 时正常返回
+// （完整行逐字节返回——正常大行不得被截断，终审修正）；超过 max 时
+// tooLong=true 且 line 为前 headLimit 字节截断头（超限段全行不缓冲），
+// 继续消费到行尾/EOF——后续行不受影响（不吞内容）。ScanLines 语义保持：
+// 剥离行尾 \r；空行返回空切片。EOF 且无任何字节 → io.EOF。
+func readBoundedLine(br *bufio.Reader, max int) (line []byte, total int64, tooLong bool, hadNewline bool, err error) {
+	// 双缓冲（终审修正）：buf 承载 ≤ max 的完整行（正常大行——大工具输出
+	// 现实存在——必须逐字节返回）；head 只服务超限段的有界转储。一旦累计
+	// 超过 max（over），buf 丢弃、仅 head 继续。
+	var buf []byte
+	var head []byte
+	over := false
+	absorb := func(chunk []byte) {
+		total += int64(len(chunk))
+		if !over {
+			if int64(len(buf))+int64(len(chunk)) > int64(max) {
+				over = true
+				buf = nil
+			} else {
+				buf = append(buf, chunk...)
+			}
+		}
+		if len(head) < headLimit {
+			take := headLimit - len(head)
+			if take > len(chunk) {
+				take = len(chunk)
+			}
+			head = append(head, chunk[:take]...)
+		}
+	}
+	for {
+		chunk, ferr := br.ReadSlice('\n')
+		if ferr == bufio.ErrBufferFull { // 缓冲满且未见换行：行继续
+			absorb(chunk)
+			continue
+		}
+		if ferr != nil {
+			if ferr == io.EOF {
+				if total == 0 && len(chunk) == 0 {
+					return nil, 0, false, false, io.EOF
+				}
+				absorb(chunk)
+				if !over && len(buf) > 0 && buf[len(buf)-1] == '\r' {
+					buf = buf[:len(buf)-1] // ScanLines：EOF 终止 token 同样剥 \r
+				}
+				return headOr(buf, head, over), total, over, false, nil
+			}
+			return nil, 0, false, false, ferr
+		}
+		// chunk 以 '\n' 结尾：行完成（剥离 \n；既有 ScanLines 语义剥 \r）
+		body := chunk[:len(chunk)-1]
+		absorb(body)
+		if !over && len(buf) > 0 && buf[len(buf)-1] == '\r' {
+			buf = buf[:len(buf)-1] // ScanLines：剥离行尾 \r
+		}
+		return headOr(buf, head, over), total, over, true, nil
+	}
+}
+
+// headOr 返回行字节：正常行=完整缓冲；超限行=截断头。
+func headOr(buf, head []byte, over bool) []byte {
+	if over {
+		return head
+	}
+	return buf
 }
 
 // Close 关闭读取器。

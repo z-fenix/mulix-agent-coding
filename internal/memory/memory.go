@@ -235,7 +235,7 @@ func (s *Store) replay() error {
 		}
 		return fmt.Errorf("memory: open %s: %w", s.path, err)
 	}
-	lines, damagedTail, err := r.ReadAllWithStatus()
+	lines, dmg, err := r.ReadAllWithStatus()
 	r.Close()
 	if err != nil {
 		return fmt.Errorf("memory: read %s: %w", s.path, err)
@@ -252,7 +252,7 @@ func (s *Store) replay() error {
 		s.applyRecord(rec)
 		good = append(good, line)
 	}
-	if damagedTail {
+	if dmg.HalfTail {
 		half, err := extractHalfLine(s.path)
 		if err != nil {
 			return fmt.Errorf("memory: extract damaged tail: %w", err)
@@ -260,6 +260,10 @@ func (s *Store) replay() error {
 		segments = append(segments, damagedSegment{
 			lineNo: len(lines) + 1, raw: half, reason: "damaged tail (half line)",
 		})
+	}
+	for _, seg := range dmg.Oversized {
+		segments = append(segments, damagedSegment{lineNo: seg.LineNo, raw: seg.Head,
+			reason: fmt.Sprintf("oversized line (%d bytes), head truncated to %d", seg.TotalLen, len(seg.Head))})
 	}
 	if len(segments) == 0 {
 		return nil

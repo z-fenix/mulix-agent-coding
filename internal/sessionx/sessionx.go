@@ -117,12 +117,12 @@ func (s *Store) ReadAllEvents() ([]any, error) {
 		return nil, fmt.Errorf("sessionx: open reader: %w", err)
 	}
 	defer r.Close()
-	lines, damaged, err := r.ReadAllWithStatus()
+	lines, dmg, err := r.ReadAllWithStatus()
 	if err != nil {
 		return nil, fmt.Errorf("sessionx: read: %w", err)
 	}
-	if damaged {
-		return nil, fmt.Errorf("sessionx: damaged tail in %s (recovery path handles repair)", s.dir)
+	if dmg.Any() {
+		return nil, fmt.Errorf("sessionx: damaged segments in %s (recovery path handles repair)", s.dir)
 	}
 	events := make([]any, 0, len(lines))
 	for i, line := range lines {

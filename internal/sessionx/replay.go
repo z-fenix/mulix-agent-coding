@@ -35,13 +35,13 @@ func (s *Store) Replay() ([]any, []string, error) {
 	if err != nil {
 		return nil, warnings, err
 	}
-	lines, damaged, err := r.ReadAllWithStatus()
+	lines, dmg, err := r.ReadAllWithStatus()
 	r.Close()
 	if err != nil {
 		return nil, warnings, fmt.Errorf("sessionx: read: %w", err)
 	}
 
-	if damaged {
+	if dmg.Any() {
 		// 1) 半行字节转储（原样 + 换行；累计追加）
 		half, err := extractHalfLine(path)
 		if err != nil {
