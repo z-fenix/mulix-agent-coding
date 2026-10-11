@@ -1,8 +1,15 @@
-// Package kernel 提供 Go 版 cordis 模式内核：层级 Context 作用域、服务注入、
-// 插件挂载生命周期与 dispose 级联（先子后父）。
+// Package kernel 提供 Go 版 cordis 模式内核：层级 Context 作用域、服务注入
+// (inject + Service 即插件)、插件挂载生命周期(MountAll 拓扑解析、Mount
+// 回滚补偿)、effect 可逆注册与类型化事件总线小接口。
 //
-// 红线（design 002 §3.0）：leaf 级包——不 import 任何 internal 包、零第三方依赖；
-// 不做事件发布（事件面仍走 sessionx 先持久化后发布的 P1 红线，kernel 不设第二条通道）。
+// 红线(修订来源:用户裁定 2026-10-11,变更 010——按 dsh 实现逻辑修订红线):
+//   - leaf 级包——不 import 任何 internal 包;除经批准的 NATS 例外
+//     (经 EventPublisher/EventSubscriber 小接口隔离,kernel 本体不 import NATS);
+//   - 事件总线为内存订阅+JetStream 持久骨干(实现 internal/eventbus);
+//     镜像 events.jsonl 是唯一持久审计真相源——持久化审计语义不经总线;
+//   - 双层注册:插件注册 effect 可逆(本包 Effect);引擎可见清单回合开始
+//     冻结快照(机制属 P4b);
+//   - dispose 级联(先子后父)与 Mount 回滚补偿(已执行 effect undo 逆序)。
 package kernel
 
 import (
@@ -264,4 +271,16 @@ func (c *Context) Effect(fn func() (undo func(), err error)) error {
 		c.OnDispose(undo)
 	}
 	return nil
+}
+
+// EventPublisher/EventSubscriber 是事件骨干的 kernel 侧小接口：kernel 及其
+// 插件经此消费事件能力而不依赖 NATS（实现=internal/eventbus；组合根 Provide
+// "events" 服务键）。FR-107。
+type EventPublisher interface {
+	DeclareEvents(names ...string) error
+	Publish(name string, payload []byte) error
+}
+
+type EventSubscriber interface {
+	Subscribe(name string, fn func(payload []byte)) (func(), error)
 }

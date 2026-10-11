@@ -6,7 +6,14 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"mulix/internal/kernel"
 )
+
+// 承重断言(010 FR-107):eventbus 实现 kernel 事件小接口——kernel 零 NATS
+// 依赖的隔离边界由编译期保证。
+var _ kernel.EventPublisher = (*Bus)(nil)
+var _ kernel.EventSubscriber = (*Bus)(nil)
 
 // TestOpenCloseBus 钉 FR-107/FR-108 骨架:内嵌 server + JetStream 可启停,
 // InProcess 连接可用,Close 后资源收口(不监听 TCP——仅内嵌连接)。

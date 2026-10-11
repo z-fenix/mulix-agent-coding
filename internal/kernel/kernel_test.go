@@ -308,3 +308,11 @@ func TestEffectDisposeLIFO(t *testing.T) {
 		t.Fatalf("order = %v, want [undo-2 undo-1] (LIFO)", order)
 	}
 }
+
+// TestEventInterfacesContract 钉 010 FR-107:kernel 侧事件小接口存在且契约
+// 形态正确(实现=internal/eventbus;承重断言 var _ kernel.Event* = *Bus 落
+// eventbus_test.go)。
+func TestEventInterfacesContract(t *testing.T) {
+	var _ EventPublisher = (EventPublisher)(nil)
+	var _ EventSubscriber = (EventSubscriber)(nil)
+}
