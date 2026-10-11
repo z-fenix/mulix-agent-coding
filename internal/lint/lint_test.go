@@ -424,6 +424,31 @@ func TestGenerateRatchetOnlyTightens(t *testing.T) {
 	}
 }
 
+// TestSplitLineCommentContract 直钉 splitLineComment 契约(009 修复轮:
+// 块注释跳过必须落在收尾之后——off-by-one 会让收尾的 / 泄漏进代码段,
+// 且整行块注释的 wholeComment 契约被破坏)。
+func TestSplitLineCommentContract(t *testing.T) {
+	cases := []struct {
+		name          string
+		line          string
+		code          string
+		wholeComment  bool
+	}{
+		{name: "整行块注释已终止", line: "	/* c */", code: "", wholeComment: true},
+		{name: "行内块注释终止后接代码", line: "/* c */ \"internal/x\"", code: " \"internal/x\"", wholeComment: false},
+		{name: "相邻块注释后接代码", line: "/*a*//*b*/ \"internal/x\"", code: " \"internal/x\"", wholeComment: false},
+		{name: "块注释未终止", line: "	/* 开启", code: "", wholeComment: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			code, whole := splitLineComment(tc.line)
+			if code != tc.code || whole != tc.wholeComment {
+				t.Fatalf("splitLineComment(%q) = (%q, %v), want (%q, %v)", tc.line, code, whole, tc.code, tc.wholeComment)
+			}
+		})
+	}
+}
+
 // TestScanImportsCommentEdges 钉 T10-①(008 FR-101):import 块内注释行
 // 既不假闭合也不假 import——扫描结果与剥离注释的等价文件完全一致。
 func TestScanImportsCommentEdges(t *testing.T) {
@@ -489,6 +514,13 @@ func TestScanImportsCommentEdges(t *testing.T) {
 				"package p", "import (", "	\"internal/cache\" /* 历史注 */ \"internal/y\"", ")", "var _ = 2",
 			},
 			want: []string{"internal/cache", "internal/y"},
+		},
+		{
+			name: "相邻块注释后接代码不假阴性",
+			lines: []string{
+				"package p", "import (", "	/*a*//*b*/ \"internal/x\"", ")", "var _ = 3",
+			},
+			want: []string{"internal/x"},
 		},
 		{
 			name: "整行块注释含引号串不假 import",

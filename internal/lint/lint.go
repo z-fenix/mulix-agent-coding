@@ -236,8 +236,7 @@ func splitLineComment(line string) (code string, wholeComment bool) {
 			if end < 0 {
 				return "", true // /* 开启且本行无收尾:调用方转多行状态
 			}
-			i = i + 2 + end // 越过 */;for 的 i++ 指向下一字节
-			inQuote = false // 块注释内引号不计数
+			i = i + 2 + end + 1 // 越过整个 */(落在收尾 / 上,循环 i++ 指向下一字节)
 		default:
 			b = append(b, line[i])
 		}
