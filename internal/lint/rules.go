@@ -42,13 +42,15 @@ var layerMatrix = map[string][]string{
 	},
 
 	// 内核层与 utility leaves（design 001 §5.3 第 3 条：禁止 import 任何内核包）。
-	"internal/kernel":   {},
-	"internal/eventbus": {"internal/kernel"},
-	"internal/engine":   {},
-	"internal/event":    {},
-	"internal/jsonl":    {},
-	"internal/textutil": {},
-	"internal/config":   {},
+	"internal/kernel":     {},
+	"internal/eventbus":   {"internal/kernel"},
+	"internal/llm":        {"internal/engine"},
+	"internal/llm/claude": {"internal/engine", "internal/llm"},
+	"internal/engine":     {},
+	"internal/event":      {},
+	"internal/jsonl":      {},
+	"internal/textutil":   {},
+	"internal/config":     {},
 
 	// 中间层（现况矩阵：与已交付代码逐包核对一致）。
 	"internal/memory":   {"internal/jsonl"},
