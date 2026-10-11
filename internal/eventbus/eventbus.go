@@ -16,13 +16,15 @@ import (
 
 // Bus 是内嵌 NATS 事件骨干的句柄:server + 进程内连接 + JetStream 上下文。
 type Bus struct {
-	srv        *server.Server
-	nc         *nats.Conn
-	js         nats.JetStreamContext
-	mu         sync.RWMutex
-	declared   map[string]bool
-	handlers   map[string][]func([]byte)
-	wfHandlers map[string][]WaterfallHandler
+	srv            *server.Server
+	nc             *nats.Conn
+	js             nats.JetStreamContext
+	mu             sync.RWMutex
+	declared       map[string]bool
+	handlers       map[string][]func([]byte)
+	wfHandlers     map[string][]WaterfallHandler
+	serialHandlers map[string][]func([]byte) error
+	bailHandlers   map[string][]func(any) any
 }
 
 // BusOptions 是 OpenBus 的选项:StoreDir 为 JetStream FileStorage 目录。
@@ -57,7 +59,7 @@ func OpenBus(opts BusOptions) (*Bus, error) {
 		srv.Shutdown()
 		return nil, fmt.Errorf("eventbus: jetstream: %w", err)
 	}
-	return &Bus{srv: srv, nc: nc, js: js, declared: map[string]bool{}, handlers: map[string][]func([]byte){}, wfHandlers: map[string][]WaterfallHandler{}}, nil
+	return &Bus{srv: srv, nc: nc, js: js, declared: map[string]bool{}, handlers: map[string][]func([]byte){}, wfHandlers: map[string][]WaterfallHandler{}, serialHandlers: map[string][]func([]byte) error{}, bailHandlers: map[string][]func(any) any{}}, nil
 }
 
 // Conn 返回进程内连接(后续任务:发布与订阅)。
@@ -271,4 +273,82 @@ func (b *Bus) Parallel(name string, payload []byte) (errs []error) {
 	}
 	wg.Wait()
 	return errs
+}
+
+// Serial 按注册序执行,首个非 nil error 停止并返回。FR-101。
+func (b *Bus) Serial(name string, payload []byte) error {
+	subject := "mulix." + name
+	if err := b.validateDeclared(subject); err != nil {
+		return err
+	}
+	b.mu.RLock()
+	handlers := append([]func([]byte) error{}, b.serialHandlers[subject]...)
+	b.mu.RUnlock()
+	for _, fn := range handlers {
+		if err := fn(payload); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SubscribeSerial 登记 serial 订阅(可逆;unsub 成对移除首匹配)。
+func (b *Bus) SubscribeSerial(name string, fn func([]byte) error) (func(), error) {
+	subject := "mulix." + name
+	if err := b.validateDeclared(subject); err != nil {
+		return nil, err
+	}
+	b.mu.Lock()
+	b.serialHandlers[subject] = append(b.serialHandlers[subject], fn)
+	b.mu.Unlock()
+	return func() {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		hs := b.serialHandlers[subject]
+		for i, h := range hs {
+			if sameFunc(h, fn) {
+				b.serialHandlers[subject] = append(hs[:i], hs[i+1:]...)
+				break
+			}
+		}
+	}, nil
+}
+
+// Bail 按注册序执行,首个非 nil 结果停并返回 (结果, true);全 nil → (nil, false)。FR-101。
+func (b *Bus) Bail(name string, payload any) (any, bool) {
+	subject := "mulix." + name
+	if err := b.validateDeclared(subject); err != nil {
+		return nil, false
+	}
+	b.mu.RLock()
+	handlers := append([]func(any) any{}, b.bailHandlers[subject]...)
+	b.mu.RUnlock()
+	for _, fn := range handlers {
+		if v := fn(payload); v != nil {
+			return v, true
+		}
+	}
+	return nil, false
+}
+
+// SubscribeBail 登记 bail 订阅(可逆;unsub 成对移除首匹配)。
+func (b *Bus) SubscribeBail(name string, fn func(any) any) (func(), error) {
+	subject := "mulix." + name
+	if err := b.validateDeclared(subject); err != nil {
+		return nil, err
+	}
+	b.mu.Lock()
+	b.bailHandlers[subject] = append(b.bailHandlers[subject], fn)
+	b.mu.Unlock()
+	return func() {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		hs := b.bailHandlers[subject]
+		for i, h := range hs {
+			if sameFunc(h, fn) {
+				b.bailHandlers[subject] = append(hs[:i], hs[i+1:]...)
+				break
+			}
+		}
+	}, nil
 }

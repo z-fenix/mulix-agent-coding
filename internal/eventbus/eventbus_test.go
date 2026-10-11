@@ -183,3 +183,48 @@ func TestParallelRunsAllAndAggregates(t *testing.T) {
 		t.Fatalf("errs = %v, want exactly the panic error", errs)
 	}
 }
+
+// TestSerialStopsOnFirstError 钉 FR-101 Serial:按注册序,首错停(后续不执行)。
+func TestSerialStopsOnFirstError(t *testing.T) {
+	b, err := OpenBus(BusOptions{StoreDir: filepath.Join(t.TempDir(), "js")})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer b.Close()
+	if err := b.DeclareEvents("ser"); err != nil {
+		t.Fatalf("declare: %v", err)
+	}
+	ran := []int{}
+	unsub1, _ := b.SubscribeSerial("ser", func([]byte) error { ran = append(ran, 1); return nil })
+	defer unsub1()
+	unsub2, _ := b.SubscribeSerial("ser", func([]byte) error { ran = append(ran, 2); return fmt.Errorf("boom") })
+	defer unsub2()
+	unsub3, _ := b.SubscribeSerial("ser", func([]byte) error { ran = append(ran, 3); return nil })
+	defer unsub3()
+	if err := b.Serial("ser", []byte("x")); err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("serial err = %v, want boom", err)
+	}
+	if len(ran) != 2 || ran[0] != 1 || ran[1] != 2 {
+		t.Fatalf("ran = %v, want [1 2] (首错停,后续不执行)", ran)
+	}
+}
+
+// TestBailStopsOnFirstNonNil 钉 FR-101 Bail:按序,首个非 nil 结果停;全 nil
+// 返回 (nil,false)。
+func TestBailStopsOnFirstNonNil(t *testing.T) {
+	b, err := OpenBus(BusOptions{StoreDir: filepath.Join(t.TempDir(), "js")})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer b.Close()
+	if err := b.DeclareEvents("bail"); err != nil {
+		t.Fatalf("declare: %v", err)
+	}
+	unsub1, _ := b.SubscribeBail("bail", func(any) any { return "first-hit" })
+	defer unsub1()
+	unsub2, _ := b.SubscribeBail("bail", func(any) any { return "never" })
+	defer unsub2()
+	if v, found := b.Bail("bail", nil); !found || v != "first-hit" {
+		t.Fatalf("bail = (%v,%v), want (first-hit,true)", v, found)
+	}
+}
