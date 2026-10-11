@@ -1,10 +1,13 @@
 package memory
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"mulix/internal/jsonl"
 	"time"
 )
 
@@ -406,5 +409,65 @@ func TestSearchBudgetCountsRunesNotBytes(t *testing.T) {
 	}
 	if hits := s.Search("中文", 5, 5); len(hits) != 0 {
 		t.Fatalf("budget 5 chars = %+v, want empty (6 runes > 5)", hits)
+	}
+}
+
+// TestOpenIsolatesOversizedLine 钉 FR-104/FR-106(SC-003/SC-004):记忆库
+// 文件中的超限行被隔离(有界头+reason 元信息),好记录照常应用,主文件
+// 收敛为好行,Add 继续可用,隔离区大小有界。构造复用既有
+// seedStore/damageMidFile 助手。
+func TestOpenIsolatesOversizedLine(t *testing.T) {
+	dir := seedStore(t, "good one", "good two")
+	damageMidFile(t, dir, strings.Repeat("x", jsonl.MaxLineBytes+256))
+
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatalf("open on oversized line must not fail: %v", err)
+	}
+	rep := s.IsolateReport()
+	if len(rep) == 0 || !strings.Contains(strings.Join(rep, "\n"), "oversized line") {
+		t.Fatalf("report %v should mention oversized line", rep)
+	}
+	entries, err := s.List()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(entries) != 2 || entries[0].Text != "good one" || entries[1].Text != "good two" {
+		t.Fatalf("good entries kept = %+v", entries)
+	}
+	// Add 继续可用:隔离重写已把主文件收敛,追加不被拒。
+	id, err := s.Add("after isolation", "sess-a")
+	if err != nil {
+		t.Fatalf("add after isolation: %v", err)
+	}
+	if id != "m3" {
+		t.Errorf("id = %q, want m3", id)
+	}
+	// 隔离历史:reason 进 IsolateReport;隔离区文件只落有界头字节
+	// (全量 17MB 不落盘,FR-106)。
+	qraw, err := os.ReadFile(filepath.Join(dir, fileName+".damaged"))
+	if err != nil {
+		t.Fatalf("read damaged: %v", err)
+	}
+	if len(qraw) > jsonl.MaxLineBytes/16 {
+		t.Errorf("quarantine size = %d, must be bounded (FR-106)", len(qraw))
+	}
+	if !bytes.Contains(qraw, bytes.Repeat([]byte("x"), 128)) {
+		t.Errorf("quarantine missing oversized head bytes")
+	}
+	// 主文件已收敛:重开无新报告,三条俱全。
+	s2, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if rep2 := s2.IsolateReport(); len(rep2) != 0 {
+		t.Errorf("reopen after isolation still reports: %v", rep2)
+	}
+	entries2, err := s2.List()
+	if err != nil {
+		t.Fatalf("list after reopen: %v", err)
+	}
+	if len(entries2) != 3 {
+		t.Errorf("entries after reopen = %d, want 3", len(entries2))
 	}
 }
