@@ -6,3 +6,9 @@ import "testing"
 func TestProviderInterfaceExists(t *testing.T) {
 	var _ Provider = (Provider)(nil)
 }
+
+// TestFakeProviderImplementsProvider 钉测试装配路径(FakeProvider 同为
+// seam-only 形态,Name()="fake";定义见 T2 Step 3 的 llm.go 追加段)。
+func TestFakeProviderImplementsProvider(t *testing.T) {
+	var _ Provider = NewFakeProvider()
+}
