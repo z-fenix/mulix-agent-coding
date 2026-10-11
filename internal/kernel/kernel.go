@@ -88,12 +88,21 @@ func (c *Context) Mount(p Plugin) error {
 
 	if err := p.Mount(c); err != nil {
 		c.mu.Lock()
+		added := append([]func(){}, c.disposables[disposablesBefore:]...)
+		c.disposables = c.disposables[:disposablesBefore]
+		c.mu.Unlock()
+		// 回滚补偿(009 FR-104 细化,010 FR-104 同语义):本次挂载期间登记的
+		// 清理(含 effect undo)逆序执行——注册是可逆副作用,回滚必须跑清理
+		// 而非丢弃;补偿先于服务删除(可能读取挂载期状态)。
+		for i := len(added) - 1; i >= 0; i-- {
+			added[i]()
+		}
+		c.mu.Lock()
 		for name := range c.services {
 			if _, was := existing[name]; !was {
 				delete(c.services, name)
 			}
 		}
-		c.disposables = c.disposables[:disposablesBefore]
 		c.mu.Unlock()
 		return fmt.Errorf("kernel: mount plugin %q: %w", p.Name(), err)
 	}
@@ -240,6 +249,19 @@ func (c *Context) MountAll(plugins ...Plugin) error {
 			}
 		}
 		return fmt.Errorf("kernel: dependency cycle among %v", names)
+	}
+	return nil
+}
+
+// Effect 登记可逆注册：fn 成功执行后，undo 进入 disposables（LIFO——Dispose
+// 逆序执行，FR-104）；fn 返回错误 → 原样上抛（Mount 期由回滚补偿机制处理）。
+func (c *Context) Effect(fn func() (undo func(), err error)) error {
+	undo, err := fn()
+	if err != nil {
+		return err
+	}
+	if undo != nil {
+		c.OnDispose(undo)
 	}
 	return nil
 }

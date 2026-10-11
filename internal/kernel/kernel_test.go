@@ -128,13 +128,17 @@ func TestMountProvidesServices(t *testing.T) {
 	}
 }
 
-// ⑤b Mount 失败整体回滚：挂载期注册的服务与清理函数全部撤销，挂载前注入不受影响。
+// ⑤b Mount 失败整体回滚：挂载期注册的服务全部撤销；挂载期登记的清理函数
+// （OnDispose/effect undo）按回滚补偿语义**逆序执行**（010 FR-104 行为细化
+// ——注册是可逆副作用,回滚必须跑清理而非丢弃;原「不得触发」断言按新事实
+// 修订,见台账 Task 10 Ruling）。
 func TestMountFailureRollsBack(t *testing.T) {
 	root := NewContext(nil)
 	if err := root.Provide("pre", "keep"); err != nil {
 		t.Fatalf("provide pre: %v", err)
 	}
 	boom := errors.New("boom")
+	compensated := false
 	p := &stubPlugin{name: "bad", mount: func(c *Context) error {
 		if err := c.Provide("a", 1); err != nil {
 			return err
@@ -142,7 +146,7 @@ func TestMountFailureRollsBack(t *testing.T) {
 		if err := c.Provide("b", 2); err != nil {
 			return err
 		}
-		c.OnDispose(func() { t.Error("rolled-back disposable must not run") })
+		c.OnDispose(func() { compensated = true })
 		return boom
 	}}
 	err := root.Mount(p)
@@ -157,7 +161,9 @@ func TestMountFailureRollsBack(t *testing.T) {
 	if v, ok := root.Service("pre"); !ok || v != "keep" {
 		t.Fatalf("pre-existing service = %v,%v; want keep,true", v, ok)
 	}
-	root.Dispose() // 回滚应已撤销挂载期 OnDispose：不得触发 t.Error
+	if !compensated {
+		t.Fatal("rolled-back disposable must run as compensation (010 FR-104)")
+	}
 }
 
 // 并发安全冒烟：Provide/Service/Mount/Dispose 混发（go test -race 下钉 mu 语义）。
@@ -243,5 +249,62 @@ func TestMountAllMissingKeyAndCycle(t *testing.T) {
 	self := NewService("self", []string{"self"}, "self", func(c *Context, _ map[string]any) (any, error) { return nil, nil })
 	if err := c.MountAll(self); err == nil || !strings.Contains(err.Error(), "self -> self") {
 		t.Fatalf("self-loop err = %v, want self -> self", err)
+	}
+}
+
+// effectfulPlugin 是测试助手:Mount 内对目标 Context 逐个调用 c.Effect。
+type effectfulPlugin struct {
+	name    string
+	target  *Context
+	effects []func() (func(), error)
+}
+
+func (p *effectfulPlugin) Name() string { return p.name }
+func (p *effectfulPlugin) Mount(c *Context) error {
+	for _, fn := range p.effects {
+		if err := p.target.Effect(fn); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// TestEffectRollbackCompensation 钉 010 FR-104:第二个 effect 的 fn 返回错误
+// → Mount 失败,第一个 effect 的 undo 已逆序补偿执行(非静默截断)。
+func TestEffectRollbackCompensation(t *testing.T) {
+	c := NewContext(nil)
+	var compensations []string
+	p := &plainPlugin{"with-effects", func() {}}
+	ef := &effectfulPlugin{"ef", c, []func() (func(), error){
+		func() (func(), error) {
+			return func() { compensations = append(compensations, "undo-1") }, nil
+		},
+		func() (func(), error) {
+			return nil, fmt.Errorf("effect-2 failed")
+		},
+	}}
+	if err := c.MountAll(p, ef); err == nil {
+		t.Fatal("mount must fail on effect error")
+	}
+	if len(compensations) != 1 || compensations[0] != "undo-1" {
+		t.Fatalf("compensations = %v, want [undo-1] (逆序补偿)", compensations)
+	}
+}
+
+// TestEffectDisposeLIFO 钉 010 FR-104:成功路径下 effect undo 在 Dispose
+// 时 LIFO 逆序执行。
+func TestEffectDisposeLIFO(t *testing.T) {
+	c := NewContext(nil)
+	var order []string
+	ef := &effectfulPlugin{"ef", c, []func() (func(), error){
+		func() (func(), error) { return func() { order = append(order, "undo-1") }, nil },
+		func() (func(), error) { return func() { order = append(order, "undo-2") }, nil },
+	}}
+	if err := c.MountAll(ef); err != nil {
+		t.Fatalf("mount: %v", err)
+	}
+	c.Dispose()
+	if len(order) != 2 || order[0] != "undo-2" || order[1] != "undo-1" {
+		t.Fatalf("order = %v, want [undo-2 undo-1] (LIFO)", order)
 	}
 }
