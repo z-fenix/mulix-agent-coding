@@ -429,10 +429,10 @@ func TestGenerateRatchetOnlyTightens(t *testing.T) {
 // 且整行块注释的 wholeComment 契约被破坏)。
 func TestSplitLineCommentContract(t *testing.T) {
 	cases := []struct {
-		name          string
-		line          string
-		code          string
-		wholeComment  bool
+		name         string
+		line         string
+		code         string
+		wholeComment bool
 	}{
 		{name: "整行块注释已终止", line: "	/* c */", code: "", wholeComment: true},
 		{name: "行内块注释终止后接代码", line: "/* c */ \"internal/x\"", code: " \"internal/x\"", wholeComment: false},
