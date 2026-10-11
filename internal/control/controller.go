@@ -1539,21 +1539,24 @@ func (c *Controller) evaluateRuling(toolUseID, tool string, input json.RawMessag
 				Content: fmt.Sprintf("审批裁决 leader panic(fail-closed 兜底): %v", r)})
 		}
 	}()
-	if c.opts.EvaluateProbe != nil {
-		c.opts.EvaluateProbe(tool, input) // 测试注入点:publish 之前(覆盖「镜像只有 resolved 无 request」的异常路径)
-	}
 	c.publish(event.ApprovalRequestEvent{Seq: c.nextSeq(), Turn: c.currentTurn(),
 		ToolUseID: toolUseID, Tool: tool, Input: input})
 	// 别名配对不变量：本函数是 Gate.Evaluate 的唯一生产调用点，且每次
 	// Evaluate 前必须 SetAlias——别名配对 + 评估在 approveMu 内原子完成
 	//（终评审 Important-3c：并发传输下 SetAlias/Evaluate 交错会把人的裁决
 	// 交叉投递到错误工具调用；P1 审批语义 = 串行，与泵串行分发一致）。
+	// T11-① 终审 Critical:Unlock 必须 panic-safe(defer)——Gate.Evaluate/
+	// SetAlias 的 panic 若留下已锁的 approveMu,后续所有 leader 将在 Lock
+	// 永久悬挂(FR-101 复活)。锁的持有覆盖到兜底裁决返回,无害。
 	c.approveMu.Lock()
+	defer c.approveMu.Unlock()
 	if c.opts.Approvals != nil {
 		c.opts.Approvals.SetAlias(toolUseID)
 	}
+	if c.opts.EvaluateProbe != nil {
+		c.opts.EvaluateProbe(tool, input) // 测试注入点:临界区内 SetAlias 之后、Evaluate 之前(生产 panic 最真实位点)
+	}
 	decision, err := c.opts.Gate.Evaluate(context.Background(), tool, input)
-	c.approveMu.Unlock()
 	if err != nil { // 防御：Gate 约定 err 恒空，仍 fail-closed 兜底
 		decision = guard.GateDecision{Decision: guard.DecisionDeny,
 			Source: guard.SourceTimeout, ResolvedBy: "gate: " + err.Error()}

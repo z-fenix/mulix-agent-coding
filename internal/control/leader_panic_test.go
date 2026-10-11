@@ -16,7 +16,7 @@ import (
 
 // TestLeaderPanicWakeFollowers 钉 FR-101/102/105:单飞 leader 评估期 panic
 // 时,等待方在有限时间内被唤醒且拿到一致的 fail-closed 裁决;在飞条目被
-// 清理;异常路径镜像如实留痕(Notice);resolved 恰一次(leader 兜底发布)。
+// 清理;异常路径镜像如实留痕(Notice);每次收口的评估 resolved 恰一次。
 func TestLeaderPanicWakeFollowers(t *testing.T) {
 	c := newTestControllerWithPolicyRules(t, nil, &recordingSink{},
 		policyRuleIn{raw: "Write", effect: guard.DecisionAllow})
@@ -206,5 +206,49 @@ func TestResolvedBoundedAcrossTurns(t *testing.T) {
 	c.mu.Unlock()
 	if sizeAfterClose2 != 0 {
 		t.Fatalf("resolved size after turn 2 close = %d, want 0 (fallback never cached, normal entry cleaned)", sizeAfterClose2)
+	}
+}
+
+// TestLeaderPanicDoesNotPoisonApproveMu 钉终审 Critical:panic 发生在
+// approveMu 临界区内(SetAlias/Evaluate——生产最真实的 panic 位点)时,
+// 锁必须被 panic-safe 释放;否则后续所有 leader 在 approveMu.Lock 永久
+// 悬挂,审批回路整体卡死(FR-101 复活)。
+func TestLeaderPanicDoesNotPoisonApproveMu(t *testing.T) {
+	c := newTestControllerWithPolicyRules(t, nil, &recordingSink{},
+		policyRuleIn{raw: "Write", effect: guard.DecisionAllow})
+	probeOn := true
+	c.opts.EvaluateProbe = func(tool string, input json.RawMessage) {
+		if probeOn {
+			panic("gate exploded inside critical section (test injection)")
+		}
+	}
+	pcs := c.startPermissionCallback()
+	if pcs == nil {
+		t.Fatal("callback server must start")
+	}
+	defer pcs.close()
+
+	// 第一次:panic 发生在临界区内 → fail-closed deny。
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ans, err := postCallbackOnce(ctx, pcs.addr, "Write", `{"file_path":"x.txt"}`, "tu-poison-1")
+	if err != nil {
+		t.Fatalf("panicking POST must still answer: %v", err)
+	}
+	if ans["behavior"] != "deny" {
+		t.Fatalf("panicked ruling = %v, want deny", ans["behavior"])
+	}
+
+	// 第二次:关闭钩子后,新 leader 必须能拿到 approveMu 并正常评估
+	// (锁泄漏时此处悬挂到 ctx 超时 → RED)。
+	probeOn = false
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel2()
+	ans2, err := postCallbackOnce(ctx2, pcs.addr, "Write", `{"file_path":"x.txt"}`, "tu-poison-2")
+	if err != nil {
+		t.Fatalf("POST after critical-section panic must not deadlock on approveMu: %v", err)
+	}
+	if ans2["behavior"] != "allow" {
+		t.Fatalf("ruling after recovered panic = %v, want allow", ans2["behavior"])
 	}
 }
