@@ -8,6 +8,7 @@ import (
 	"mulix/internal/control"
 	"mulix/internal/engine"
 	"mulix/internal/guard"
+	"mulix/internal/llm"
 	"mulix/internal/sessionx"
 )
 
@@ -58,5 +59,13 @@ func TestAssembleKernelContextServiceKeys(t *testing.T) {
 	}
 	if _, ok := root.Service("approvals"); ok {
 		t.Fatal("approvals key must be absent when nil (nil=功能关闭)")
+	}
+	// llm 键:seam-only 适配器(键就位 + Name 断言——SC-002 间接面)。
+	vllm, ok := root.Service("llm")
+	if !ok {
+		t.Fatal("llm key missing (011 FR-101)")
+	}
+	if p, ok := vllm.(llm.Provider); !ok || p.Name() != "claude-cli" {
+		t.Fatalf("llm provider = %v, want claude-cli adapter", vllm)
 	}
 }
