@@ -147,23 +147,12 @@ func (b *Bus) Emit(name string, payload []byte) (errs []error) {
 	b.mu.RLock()
 	handlers := append([]func([]byte){}, b.handlers[subject]...)
 	b.mu.RUnlock()
+	// panic 语义:沿调用栈传播(设计 §2.2 规范表——仅 Parallel recover;
+	// 终审 Important 修复:去除 safeCall 吞 panic 的偏离)。
 	for _, fn := range handlers {
-		if err := safeCall(fn, payload); err != nil {
-			errs = append(errs, err)
-		}
+		fn(payload)
 	}
 	return errs
-}
-
-// safeCall 隔离订阅 panic(不因单订阅 panic 中断通知序)。
-func safeCall(fn func([]byte), payload []byte) (err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			err = fmt.Errorf("eventbus: subscriber panic: %v", r)
-		}
-	}()
-	fn(payload)
-	return nil
 }
 
 // Subscribe 建立进程内投递订阅(登记 handlers 表——进程内投递唯一路径,
@@ -264,11 +253,7 @@ func (b *Bus) Parallel(name string, payload []byte) (errs []error) {
 					mu.Unlock()
 				}
 			}()
-			if err := safeCall(fn, payload); err != nil {
-				mu.Lock()
-				errs = append(errs, err)
-				mu.Unlock()
-			}
+			fn(payload)
 		}(fn)
 	}
 	wg.Wait()

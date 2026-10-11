@@ -235,3 +235,24 @@ func TestBailStopsOnFirstNonNil(t *testing.T) {
 		t.Fatalf("bail = (%v,%v), want (first-hit,true)", v, found)
 	}
 }
+
+// TestEmitPanicPropagates 钉设计 §2.2 规范表(Emit panic=沿调用栈传播;
+// 仅 Parallel recover)——终审 Important 修复的判别测试。
+func TestEmitPanicPropagates(t *testing.T) {
+	b, err := OpenBus(BusOptions{StoreDir: filepath.Join(t.TempDir(), "js")})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer b.Close()
+	if err := b.DeclareEvents("boom"); err != nil {
+		t.Fatalf("declare: %v", err)
+	}
+	unsub, _ := b.Subscribe("boom", func([]byte) { panic("emit subscriber panic") })
+	defer unsub()
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("Emit must propagate subscriber panic (fail-closed, 设计 §2.2)")
+		}
+	}()
+	_ = b.Emit("boom", []byte("x"))
+}

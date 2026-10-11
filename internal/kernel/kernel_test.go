@@ -3,9 +3,13 @@ package kernel
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"mulix/internal/eventbus"
 )
 
 // ① Provide/Service 注入与祖先回溯：子作用域读到父服务；同名子覆盖父（遮蔽，不改父）。
@@ -315,4 +319,41 @@ func TestEffectDisposeLIFO(t *testing.T) {
 func TestEventInterfacesContract(t *testing.T) {
 	var _ EventPublisher = (EventPublisher)(nil)
 	var _ EventSubscriber = (EventSubscriber)(nil)
+}
+
+// TestSubscribeEffectDisposeIntegration 钉 010 FR-102:订阅经 ctx.Effect 登记
+// (unsub 为 undo)——作用域 Dispose 后投递停止,其他订阅不受影响。
+// (终审 Important 修复:计划 Task 10 Step 3b 的覆盖缺口补齐。)
+func TestSubscribeEffectDisposeIntegration(t *testing.T) {
+	b, err := eventbus.OpenBus(eventbus.BusOptions{StoreDir: filepath.Join(t.TempDir(), "js")})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer b.Close()
+	if err := b.DeclareEvents("scoped"); err != nil {
+		t.Fatalf("declare: %v", err)
+	}
+	c := NewContext(nil)
+	hits := 0
+	if err := c.Effect(func() (undo func(), err error) {
+		unsub, err := b.Subscribe("scoped", func([]byte) { hits++ })
+		return unsub, err
+	}); err != nil {
+		t.Fatalf("effect: %v", err)
+	}
+	otherHits := 0
+	unsubOther, err := b.Subscribe("scoped", func([]byte) { otherHits++ })
+	if err != nil {
+		t.Fatalf("subscribe other: %v", err)
+	}
+	defer unsubOther()
+	c.Dispose()
+	_ = b.Publish("scoped", []byte("x"))
+	time.Sleep(100 * time.Millisecond)
+	if hits != 0 {
+		t.Fatalf("disposed scope still received: %d", hits)
+	}
+	if otherHits == 0 {
+		t.Fatal("other subscribers must be unaffected by scope disposal")
+	}
 }

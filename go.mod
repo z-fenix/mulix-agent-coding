@@ -6,6 +6,8 @@ require (
 	charm.land/bubbletea/v2 v2.0.10
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/BurntSushi/toml v1.6.0
+	github.com/nats-io/nats-server/v2 v2.15.1
+	github.com/nats-io/nats.go v1.54.0
 	github.com/spf13/cobra v1.10.2
 )
 
@@ -27,8 +29,6 @@ require (
 	github.com/minio/highwayhash v1.0.4 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/nats-io/jwt/v2 v2.8.2 // indirect
-	github.com/nats-io/nats-server/v2 v2.15.1 // indirect
-	github.com/nats-io/nats.go v1.54.0 // indirect
 	github.com/nats-io/nkeys v0.4.16 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
