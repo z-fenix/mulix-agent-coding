@@ -3,6 +3,7 @@ package kernel
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -192,5 +193,55 @@ func TestServiceProvidesKeyedValue(t *testing.T) {
 	v, ok := c.Service("llm")
 	if !ok || v != "claude-cli-adapter" {
 		t.Fatalf("service = (%v,%v), want (claude-cli-adapter,true)", v, ok)
+	}
+}
+
+// plainPlugin 是测试用最小插件(声明序记序)。
+type plainPlugin struct {
+	name string
+	run  func()
+}
+
+func (p *plainPlugin) Name() string           { return p.name }
+func (p *plainPlugin) Mount(c *Context) error { p.run(); return nil }
+
+// TestMountAllTopologicalOrder 钉 010 FR-103:乱序提交自动重排(消费先于
+// 提供出现亦可);普通插件声明序最先。
+func TestMountAllTopologicalOrder(t *testing.T) {
+	c := NewContext(nil)
+	order := []string{}
+	plain := &plainPlugin{"plain", func() { order = append(order, "plain") }}
+	llm := NewService("llm", nil, "llm", func(c *Context, _ map[string]any) (any, error) {
+		order = append(order, "llm")
+		return "adapter", nil
+	})
+	agent := NewService("agents", []string{"llm"}, "agents", func(c *Context, deps map[string]any) (any, error) {
+		order = append(order, "agents")
+		return deps["llm"], nil
+	})
+	if err := c.MountAll(agent, plain, llm); err != nil { // 乱序:agents 在 llm 前
+		t.Fatalf("mount all: %v", err)
+	}
+	if len(order) != 3 || order[0] != "plain" || order[1] != "llm" || order[2] != "agents" {
+		t.Fatalf("order = %v, want [plain llm agents]", order)
+	}
+}
+
+// TestMountAllMissingKeyAndCycle 钉 010 FR-103:缺键拒挂含键名;环报错含
+// 路径;自环按循环依赖报错(Edge Case 裁定)。
+func TestMountAllMissingKeyAndCycle(t *testing.T) {
+	c := NewContext(nil)
+	missing := NewService("x", []string{"not-provided"}, "x", func(c *Context, _ map[string]any) (any, error) { return nil, nil })
+	if err := c.MountAll(missing); err == nil || !strings.Contains(err.Error(), "not-provided") {
+		t.Fatalf("missing key err = %v, want mention not-provided", err)
+	}
+	a := NewService("a", []string{"b"}, "a", func(c *Context, _ map[string]any) (any, error) { return nil, nil })
+	bCycle := NewService("b", []string{"a"}, "b", func(c *Context, _ map[string]any) (any, error) { return nil, nil })
+	if err := c.MountAll(a, bCycle); err == nil || !strings.Contains(err.Error(), "a") {
+		t.Fatalf("cycle err = %v, want cycle path mentioning a", err)
+	}
+	self := NewService("self", []string{"self"}, "self", func(c *Context, _ map[string]any) (any, error) { return nil, nil })
+	if err := c.MountAll(self); err == nil || !strings.Contains(err.Error(), "self -> self") {
+		t.Fatalf("self-loop err = %v, want self -> self", err)
 	}
 }

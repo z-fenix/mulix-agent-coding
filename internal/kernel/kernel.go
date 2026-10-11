@@ -128,6 +128,7 @@ func (c *Context) Dispose() {
 type Service interface {
 	Plugin
 	ServiceKey() string
+	Inject() []string
 }
 
 // NewService 是 Service 的语法糖实现：注入 deps 中的服务值，apply 产出服务
@@ -163,4 +164,82 @@ func (p *servicePlugin) Mount(c *Context) error {
 		return err
 	}
 	return c.Provide(p.key, v)
+}
+
+// MountAll 批量挂载：普通 Plugin（未实现 Inject）按声明序最先；Service 按
+// Inject 键拓扑排序（Kahn；提供键=ServiceKey）；缺键/环/自环/重复键
+// fail-closed。单个 Mount 保持既有语义（无解析——调用方自理顺序）。FR-103。
+func (c *Context) MountAll(plugins ...Plugin) error {
+	var plain []Plugin
+	var svcs []Service
+	provided := map[string]Service{} // ServiceKey -> Service(重复键检测)
+	for _, p := range plugins {
+		svc, ok := p.(Service)
+		if !ok {
+			plain = append(plain, p)
+			continue
+		}
+		if _, dup := provided[svc.ServiceKey()]; dup {
+			return fmt.Errorf("kernel: duplicate ServiceKey %q", svc.ServiceKey())
+		}
+		provided[svc.ServiceKey()] = svc
+		svcs = append(svcs, svc)
+	}
+	for _, p := range plain { // 普通插件声明序最先挂载
+		if err := c.Mount(p); err != nil {
+			return err
+		}
+	}
+	// Kahn:入边 = Service.Inject 中被其他 Service 提供的键;已就绪键(作用域
+	// 已有服务)视为无入边;缺键(无人提供且不在作用域)→ 拒挂。
+	existing := func(key string) bool {
+		_, ok := c.Service(key)
+		return ok
+	}
+	degree := map[string]int{}
+	dependents := map[string][]Service{}
+	for _, s := range svcs {
+		for _, k := range s.Inject() {
+			if k == s.ServiceKey() {
+				return fmt.Errorf("kernel: dependency cycle (self-loop): %s -> %s", s.ServiceKey(), s.ServiceKey())
+			}
+			if _, ok := provided[k]; ok {
+				degree[s.ServiceKey()]++
+				dependents[k] = append(dependents[k], s)
+			} else if !existing(k) {
+				return fmt.Errorf("kernel: mount %q missing dep %q", s.ServiceKey(), k)
+			}
+		}
+	}
+	var queue []Service
+	for _, s := range svcs {
+		if degree[s.ServiceKey()] == 0 {
+			queue = append(queue, s)
+		}
+	}
+	mounted := 0
+	for len(queue) > 0 {
+		s := queue[0]
+		queue = queue[1:]
+		if err := c.Mount(s); err != nil {
+			return err
+		}
+		mounted++
+		for _, dep := range dependents[s.ServiceKey()] {
+			degree[dep.ServiceKey()]--
+			if degree[dep.ServiceKey()] == 0 {
+				queue = append(queue, dep)
+			}
+		}
+	}
+	if mounted != len(svcs) { // 剩余即环
+		var names []string
+		for _, s := range svcs {
+			if degree[s.ServiceKey()] > 0 {
+				names = append(names, s.ServiceKey())
+			}
+		}
+		return fmt.Errorf("kernel: dependency cycle among %v", names)
+	}
+	return nil
 }
