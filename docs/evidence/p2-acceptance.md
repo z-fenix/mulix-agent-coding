@@ -227,7 +227,7 @@
 | SC-003 | ✅ | 真实二进制 lint layers exit 0 + 违规注入 exit 1（file:line + 规则名）+ revert 复跑 exit 0 + lint 15 测/cli 4 测 |
 | SC-004 | ✅ | Compose 矩阵 8 测 + 接线 3 测 + **真实 echo server 冒烟（spawn/命名空间调用/policy allow/`echo: mulix-p2-smoke-echo-12345` 往返）** |
 | SC-005 | ✅ | watcher 6 测（touch 静默/变更/删除/收口/接线）+ `mulix instructions` 真实输出（sha256/摘要/预览） |
-| SC-006 | ✅ | event codec 全绿 + 自定义钩子事件审计（guard 4 测 + cli 组合根 3 测，Replay 钉镜像面——见 SC-006 条目）+ TestE2ECrashRecoveryResume + 孤儿回合对账 + **真实冒烟镜像审计（主 10 事件/子 5 事件，崩溃路径收口）** |
+| SC-006 | ✅ | event codec 全绿 + 自定义钩子事件审计（guard 5 测 + cli 组合根 3 测，Replay 钉镜像面——见 SC-006 条目；计数口径 P3 修正（007）：沿用 report.md 既有口径（历史约定，非 helper 测试脚本消费核心 5 个），与当前 grep 事实（guard 8 + cli 4 非 helper）存在差异，已按 007 裁定入档并路由）+ TestE2ECrashRecoveryResume + 孤儿回合对账 + **真实冒烟镜像审计（主 10 事件/子 5 事件，崩溃路径收口）** |
 
 **验证命令（M18 出口）**：`go test ./... -count=1` 全绿（21 包：19 ok +
 2 无测试文件——评审修复轮 1 实测复核）+ `go vet ./...` 干净 +
