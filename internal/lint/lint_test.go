@@ -476,6 +476,27 @@ func TestScanImportsCommentEdges(t *testing.T) {
 			},
 			want: []string{"internal/cache", "internal/jsonl"},
 		},
+		{
+			name: "行内块注释终止后接代码(008 终审失败形态)",
+			lines: []string{
+				"package p", "import (", "	/* c */ \"internal/x\"", ")", "var _ = 1",
+			},
+			want: []string{"internal/x"},
+		},
+		{
+			name: "行内块注释前后均有代码",
+			lines: []string{
+				"package p", "import (", "	\"internal/cache\" /* 历史注 */ \"internal/y\"", ")", "var _ = 2",
+			},
+			want: []string{"internal/cache", "internal/y"},
+		},
+		{
+			name: "整行块注释含引号串不假 import",
+			lines: []string{
+				"package p", "import (", "	/* 见 \"internal/guard\" 文档 */", "	\"internal/cache\"", ")",
+			},
+			want: []string{"internal/cache"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

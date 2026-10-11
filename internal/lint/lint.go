@@ -195,7 +195,7 @@ func scanImports(lines []string) ([]importRef, error) {
 				inBlock = false
 				continue
 			}
-			if m := quotedPathRe.FindStringSubmatch(code); m != nil {
+			for _, m := range quotedPathRe.FindAllStringSubmatch(code, -1) {
 				refs = append(refs, importRef{Path: m[1], Line: i + 1})
 			}
 			continue
@@ -214,26 +214,39 @@ func scanImports(lines []string) ([]importRef, error) {
 	return refs, nil
 }
 
-// splitLineComment 把一行拆为代码部分与行尾注释:返回 code(引号外首个 //
-// 或 /* 之前的部分)与 wholeComment(该行是否为整行注释——以 // 或 /*
-// 起始)。引号内 // 不视为注释起始。
+// splitLineComment 把一行拆为代码部分与注释:代码段 = 引号外的非注释区间
+// 之拼接(行注释 // 至行尾终止;块注释 /* 至 */ 跳过后继续收集)。
+// 整行均为注释(代码段拼空)→ wholeComment=true。引号内 // 与 /* 不视为
+// 注释起始。跨行块注释不在本函数职责内(调用方状态位处理 /* 开启且本行
+// 无收尾的形态——返回 wholeComment=true,原始行由调用方弃用)。
+// 009 G1 残留边缘修复:行内 /*...*/ 终止后接代码按代码解析(前版返回
+// 前缀丢后缀=假阴性)。
 func splitLineComment(line string) (code string, wholeComment bool) {
+	var b []byte
 	inQuote := false
 	for i := 0; i < len(line); i++ {
-		switch line[i] {
-		case '"':
+		switch {
+		case line[i] == '"':
 			inQuote = !inQuote
-		case '/':
-			if !inQuote && i+1 < len(line) && (line[i+1] == '/' || line[i+1] == '*') {
-				trimmed := strings.TrimSpace(line[:i])
-				if trimmed == "" {
-					return "", true // 整行注释(// 或 /* 起始)
-				}
-				return line[:i], false // 行尾注释:代码部分为其前缀
+			b = append(b, line[i])
+		case !inQuote && line[i] == '/' && i+1 < len(line) && line[i+1] == '/':
+			i = len(line) // 行注释:至行尾
+		case !inQuote && line[i] == '/' && i+1 < len(line) && line[i+1] == '*':
+			end := strings.Index(line[i+2:], "*/")
+			if end < 0 {
+				return "", true // /* 开启且本行无收尾:调用方转多行状态
 			}
+			i = i + 2 + end // 越过 */;for 的 i++ 指向下一字节
+			inQuote = false // 块注释内引号不计数
+		default:
+			b = append(b, line[i])
 		}
 	}
-	return line, false
+	code = string(b)
+	if strings.TrimSpace(code) == "" {
+		return "", true // 全注释行(含「注释+空白」)
+	}
+	return code, false
 }
 
 // checkLayerImports 把模块内 import 对照分层矩阵（模块外导入不设限）。
