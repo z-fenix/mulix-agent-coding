@@ -1,6 +1,7 @@
 package eventbus
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -153,5 +154,32 @@ func TestWaterfallChainAndShortCircuit(t *testing.T) {
 	}
 	if called {
 		t.Fatal("short-circuited listener must not run (B 未执行)")
+	}
+}
+
+// TestParallelRunsAllAndAggregates 钉 FR-101 Parallel:并发全跑(含慢订阅)、
+// 单订阅 panic 被收为错误(不炸总线)、错误聚合。
+func TestParallelRunsAllAndAggregates(t *testing.T) {
+	b, err := OpenBus(BusOptions{StoreDir: filepath.Join(t.TempDir(), "js")})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer b.Close()
+	if err := b.DeclareEvents("par"); err != nil {
+		t.Fatalf("declare: %v", err)
+	}
+	done := make(chan struct{})
+	slowRan := make(chan struct{})
+	unsub1, _ := b.Subscribe("par", func([]byte) { <-done; close(slowRan) })
+	_ = unsub1
+	unsub2, _ := b.Subscribe("par", func([]byte) { panic("subscriber exploded") })
+	defer unsub2()
+	unsub3, _ := b.Subscribe("par", func([]byte) {})
+	defer unsub3()
+	close(done) // 放行慢订阅(必须在 Parallel 之前——Parallel 阻塞至全部返回)
+	errs := b.Parallel("par", []byte("x"))
+	<-slowRan // 慢订阅必须已跑完(Parallel 等待全部)
+	if len(errs) != 1 || !strings.Contains(fmt.Sprint(errs[0]), "subscriber exploded") {
+		t.Fatalf("errs = %v, want exactly the panic error", errs)
 	}
 }

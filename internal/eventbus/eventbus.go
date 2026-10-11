@@ -238,3 +238,37 @@ func (b *Bus) Waterfall(name string, arg any, next WaterfallNext) any {
 	}
 	return chain(arg)
 }
+
+// Parallel 每订阅一个 goroutine 并发全跑;单订阅 panic recover 记为该订阅
+// 错误;阻塞至全部完成。FR-101。
+func (b *Bus) Parallel(name string, payload []byte) (errs []error) {
+	subject := "mulix." + name
+	if err := b.validateDeclared(subject); err != nil {
+		return []error{err}
+	}
+	b.mu.RLock()
+	handlers := append([]func([]byte){}, b.handlers[subject]...)
+	b.mu.RUnlock()
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	for _, fn := range handlers {
+		wg.Add(1)
+		go func(fn func([]byte)) {
+			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					mu.Lock()
+					errs = append(errs, fmt.Errorf("eventbus: subscriber panic: %v", r))
+					mu.Unlock()
+				}
+			}()
+			if err := safeCall(fn, payload); err != nil {
+				mu.Lock()
+				errs = append(errs, err)
+				mu.Unlock()
+			}
+		}(fn)
+	}
+	wg.Wait()
+	return errs
+}
