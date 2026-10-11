@@ -16,12 +16,13 @@ import (
 
 // Bus 是内嵌 NATS 事件骨干的句柄:server + 进程内连接 + JetStream 上下文。
 type Bus struct {
-	srv      *server.Server
-	nc       *nats.Conn
-	js       nats.JetStreamContext
-	mu       sync.RWMutex
-	declared map[string]bool
-	handlers map[string][]func([]byte)
+	srv        *server.Server
+	nc         *nats.Conn
+	js         nats.JetStreamContext
+	mu         sync.RWMutex
+	declared   map[string]bool
+	handlers   map[string][]func([]byte)
+	wfHandlers map[string][]WaterfallHandler
 }
 
 // BusOptions 是 OpenBus 的选项:StoreDir 为 JetStream FileStorage 目录。
@@ -56,7 +57,7 @@ func OpenBus(opts BusOptions) (*Bus, error) {
 		srv.Shutdown()
 		return nil, fmt.Errorf("eventbus: jetstream: %w", err)
 	}
-	return &Bus{srv: srv, nc: nc, js: js, declared: map[string]bool{}, handlers: map[string][]func([]byte){}}, nil
+	return &Bus{srv: srv, nc: nc, js: js, declared: map[string]bool{}, handlers: map[string][]func([]byte){}, wfHandlers: map[string][]WaterfallHandler{}}, nil
 }
 
 // Conn 返回进程内连接(后续任务:发布与订阅)。
@@ -192,4 +193,48 @@ func (b *Bus) Subscribe(name string, fn func(payload []byte)) (func(), error) {
 // sameFunc 以闭包代码指针比较(同字面量注册/注销配对)。
 func sameFunc(a, b any) bool {
 	return reflect.ValueOf(a).Pointer() == reflect.ValueOf(b).Pointer()
+}
+
+// WaterfallNext 是瀑布链的续传函数(不调用即短路)。
+type WaterfallNext func(arg any) any
+
+// WaterfallHandler 是 waterfall 订阅签名(环绕中间件)。
+type WaterfallHandler func(arg any, next WaterfallNext) any
+
+// SubscribeWaterfall 登记 waterfall 监听器(可逆;unsub 成对移除首匹配)。
+func (b *Bus) SubscribeWaterfall(name string, fn WaterfallHandler) (func(), error) {
+	subject := "mulix." + name
+	if err := b.validateDeclared(subject); err != nil {
+		return nil, err
+	}
+	b.mu.Lock()
+	b.wfHandlers[subject] = append(b.wfHandlers[subject], fn)
+	b.mu.Unlock()
+	return func() {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		hs := b.wfHandlers[subject]
+		for i, h := range hs {
+			if sameFunc(h, fn) {
+				b.wfHandlers[subject] = append(hs[:i], hs[i+1:]...)
+				break
+			}
+		}
+	}, nil
+}
+
+// Waterfall 链式环绕:注册序 = 外层到内层;不调 next 即短路(其返回值为
+// 最终值);全链穿透则执行调用方 next。FR-101。
+func (b *Bus) Waterfall(name string, arg any, next WaterfallNext) any {
+	subject := "mulix." + name
+	b.mu.RLock()
+	hs := append([]WaterfallHandler{}, b.wfHandlers[subject]...)
+	b.mu.RUnlock()
+	chain := next
+	for i := len(hs) - 1; i >= 0; i-- {
+		h := hs[i]
+		n := chain
+		chain = func(a any) any { return h(a, n) }
+	}
+	return chain(arg)
 }

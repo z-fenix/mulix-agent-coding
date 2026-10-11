@@ -117,3 +117,41 @@ func TestEmitAggregatesErrors(t *testing.T) {
 		t.Fatal("emit on undeclared must aggregate a fail-closed error")
 	}
 }
+
+// TestWaterfallChainAndShortCircuit 钉 FR-101 Waterfall:链式环绕——监听器
+// 收 (arg,next),全链调 next → 直通;不调 next 即短路(其返回值为最终值)。
+func TestWaterfallChainAndShortCircuit(t *testing.T) {
+	b, err := OpenBus(BusOptions{StoreDir: filepath.Join(t.TempDir(), "js")})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer b.Close()
+	if err := b.DeclareEvents("wf"); err != nil {
+		t.Fatalf("declare: %v", err)
+	}
+	unsubA, _ := b.SubscribeWaterfall("wf", func(arg any, next WaterfallNext) any {
+		return next(arg.(int) + 1)
+	})
+	defer unsubA()
+	unsubB, _ := b.SubscribeWaterfall("wf", func(arg any, next WaterfallNext) any {
+		return next(arg.(int) + 10)
+	})
+	defer unsubB()
+	if got := b.Waterfall("wf", 1, func(a any) any { return a.(int) * 2 }); got != 24 {
+		t.Fatalf("chain result = %v, want 24 ((1+1+10)*2)", got)
+	}
+	unsubA2, _ := b.SubscribeWaterfall("wf", func(any, WaterfallNext) any { return "short" })
+	defer unsubA2()
+	called := false
+	unsubB2, _ := b.SubscribeWaterfall("wf", func(arg any, next WaterfallNext) any {
+		called = true
+		return next(arg)
+	})
+	defer unsubB2()
+	if got := b.Waterfall("wf", 1, func(a any) any { return a }); got != "short" {
+		t.Fatalf("short-circuit result = %v, want short", got)
+	}
+	if called {
+		t.Fatal("short-circuited listener must not run (B 未执行)")
+	}
+}
