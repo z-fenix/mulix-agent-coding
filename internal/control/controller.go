@@ -61,9 +61,12 @@ type Options struct {
 	Store       *sessionx.Store // 权威镜像（Task 9）
 	Meter       *cache.Meter    // 记账器（Task 13）
 	Gate        *guard.Gate     // 审批门（Task 20；T23 起在控制请求路由消费）
-	Config      config.Config   // 生效配置（模型/预设/命中率地板）
-	Workspace   string          // 工作区（Boot 快照 C1）
-	Unattended  bool            // 无人值守（镜像/事件标注）
+	// EvaluateProbe 是 leader 评估前的观察钩子(nil=无操作):测试注入点
+	// (T11-① FR-106)——从中 panic 传播即模拟 leader 评估期异常;生产恒 nil。
+	EvaluateProbe func(tool string, input json.RawMessage)
+	Config        config.Config // 生效配置（模型/预设/命中率地板）
+	Workspace     string        // 工作区（Boot 快照 C1）
+	Unattended    bool          // 无人值守（镜像/事件标注）
 
 	// Approvals 是人工裁决桥（可空=无人值守：Ask 一律 fail-closed 拒绝）。
 	// attended 接线：bridge := NewUserApprovalBridge() → Gate 以 bridge 为
@@ -921,6 +924,7 @@ type gateRuling struct {
 	decision   string // allow | deny
 	source     string // policy | session | user | timeout
 	resolvedBy string
+	turn       int64 // 裁决所属回合(收口回收口径;0=异常兜底未关联回合)
 }
 
 // Approve 对待审请求交付人工裁决（拒绝时 resolvedBy 即拒绝理由，随
@@ -1493,6 +1497,42 @@ func (c *Controller) rulingFor(toolUseID, tool string, input json.RawMessage) (g
 	c.inflight[toolUseID] = ch
 	c.mu.Unlock()
 
+	ruling, panicked := c.evaluateRuling(toolUseID, tool, input)
+	c.mu.Lock()
+	if !panicked {
+		// panic 收口不写缓存:等待方经「ruling missing」防御路径拿到一致
+		// deny;同 ID 新请求缓存未命中 → 新 leader 重新评估(FR-102 字面)。
+		c.resolved[toolUseID] = ruling
+	}
+	if c.inflight[toolUseID] == ch {
+		close(ch) // 广播：close 唤醒全部等待方（send 只能喂饱一个——P1 复审 N5）
+		delete(c.inflight, toolUseID)
+	}
+	c.mu.Unlock()
+	return ruling, true
+}
+
+// evaluateRuling 是单飞 leader 的评估段(approval_request 发布 → 别名配对 →
+// Gate.Evaluate),带 defer 异常收口(T11-① FR-101/102/105):评估 panic 时
+// 以 fail-closed 兜底裁决返回并置 panicked=true,发布 Notice 留痕;缓存的
+// 写入与在飞广播由 rulingFor 尾段统一完成(唯一 close 位点)——panicked 时
+// 跳过缓存写,等待方经「ruling missing」防御 deny 唤醒,同 ID 后续请求按新
+// 裁决重新评估。进程不悬挂、不崩溃,无「未经评估的放行」。正常路径语句
+// 顺序与拆分前逐字一致(FR-104)。
+func (c *Controller) evaluateRuling(toolUseID, tool string, input json.RawMessage) (ruling gateRuling, panicked bool) {
+	turn := c.currentTurn()
+	defer func() {
+		if r := recover(); r != nil {
+			panicked = true
+			ruling = gateRuling{decision: string(guard.DecisionDeny),
+				source: string(guard.SourceTimeout), resolvedBy: "singleflight: leader panic", turn: turn}
+			c.publish(event.NoticeEvent{Seq: c.nextSeq(), Level: "warning",
+				Content: fmt.Sprintf("审批裁决 leader panic(fail-closed 兜底): %v", r)})
+		}
+	}()
+	if c.opts.EvaluateProbe != nil {
+		c.opts.EvaluateProbe(tool, input) // 测试注入点:publish 之前(覆盖「镜像只有 resolved 无 request」的异常路径)
+	}
 	c.publish(event.ApprovalRequestEvent{Seq: c.nextSeq(), Turn: c.currentTurn(),
 		ToolUseID: toolUseID, Tool: tool, Input: input})
 	// 别名配对不变量：本函数是 Gate.Evaluate 的唯一生产调用点，且每次
@@ -1509,16 +1549,8 @@ func (c *Controller) rulingFor(toolUseID, tool string, input json.RawMessage) (g
 		decision = guard.GateDecision{Decision: guard.DecisionDeny,
 			Source: guard.SourceTimeout, ResolvedBy: "gate: " + err.Error()}
 	}
-	ruling := gateRuling{decision: string(decision.Decision),
-		source: string(decision.Source), resolvedBy: decision.ResolvedBy}
-	c.mu.Lock()
-	c.resolved[toolUseID] = ruling
-	if c.inflight[toolUseID] == ch {
-		close(ch) // 广播：close 唤醒全部等待方（send 只能喂饱一个——P1 复审 N5）
-		delete(c.inflight, toolUseID)
-	}
-	c.mu.Unlock()
-	return ruling, true
+	return gateRuling{decision: string(decision.Decision),
+		source: string(decision.Source), resolvedBy: decision.ResolvedBy, turn: turn}, false
 }
 
 // mcpBehaviorResponse 组 MCP tools/call 应答：content[0].text = behavior JSON
