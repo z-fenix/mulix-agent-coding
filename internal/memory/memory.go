@@ -304,7 +304,7 @@ func (s *Store) isolate(good [][]byte, segments []damagedSegment) error {
 		}
 	}
 	if err := f.Sync(); err != nil { // T5-⑤(008 FR-103):rename 前刷盘——
-		f.Close()                   // 崩溃窗口内 rename 不得落到未刷写数据
+		f.Close() // 崩溃窗口内 rename 不得落到未刷写数据
 		return fmt.Errorf("memory: rewrite sync: %w", err)
 	}
 	if err := f.Close(); err != nil {
