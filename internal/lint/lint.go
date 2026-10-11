@@ -166,16 +166,36 @@ func scanFile(module, rel, abs string) ([]Violation, error) {
 }
 
 // scanImports 提取文件全部 import 声明（单行 + 块内逐行），带行号。
+// 注释剥离（T10-①，008 FR-101）：块内先剥离注释再判定——行注释（// 至
+// 行尾，引号外首个 //）与块注释（/* */，含跨行）不参与闭合判定与 import
+// 提取；闭合 = 剥离后整行 TrimSpace 为 ")"。扫描结果与「剥离注释的等价
+// 文件」一致——注释既不假闭合也不假 import。
 func scanImports(lines []string) ([]importRef, error) {
 	var refs []importRef
 	inBlock := false
+	inBlockComment := false
 	for i, line := range lines {
+		if inBlockComment {
+			if idx := strings.Index(line, "*/"); idx >= 0 {
+				line = line[idx+2:] // 块注释收尾:其余部分继续按代码处理
+				inBlockComment = false
+			} else {
+				continue // 整行在块注释内
+			}
+		}
 		if inBlock {
-			if strings.Contains(line, ")") {
+			code, wholeComment := splitLineComment(line)
+			if wholeComment {
+				if strings.HasPrefix(strings.TrimSpace(line), "/*") && !strings.Contains(line, "*/") {
+					inBlockComment = true // /* 开启且本行无收尾:转多行状态
+				}
+				continue
+			}
+			if strings.TrimSpace(code) == ")" {
 				inBlock = false
 				continue
 			}
-			if m := quotedPathRe.FindStringSubmatch(line); m != nil {
+			if m := quotedPathRe.FindStringSubmatch(code); m != nil {
 				refs = append(refs, importRef{Path: m[1], Line: i + 1})
 			}
 			continue
@@ -192,6 +212,28 @@ func scanImports(lines []string) ([]importRef, error) {
 		return nil, errors.New("import 块未闭合")
 	}
 	return refs, nil
+}
+
+// splitLineComment 把一行拆为代码部分与行尾注释:返回 code(引号外首个 //
+// 或 /* 之前的部分)与 wholeComment(该行是否为整行注释——以 // 或 /*
+// 起始)。引号内 // 不视为注释起始。
+func splitLineComment(line string) (code string, wholeComment bool) {
+	inQuote := false
+	for i := 0; i < len(line); i++ {
+		switch line[i] {
+		case '"':
+			inQuote = !inQuote
+		case '/':
+			if !inQuote && i+1 < len(line) && (line[i+1] == '/' || line[i+1] == '*') {
+				trimmed := strings.TrimSpace(line[:i])
+				if trimmed == "" {
+					return "", true // 整行注释(// 或 /* 起始)
+				}
+				return line[:i], false // 行尾注释:代码部分为其前缀
+			}
+		}
+	}
+	return line, false
 }
 
 // checkLayerImports 把模块内 import 对照分层矩阵（模块外导入不设限）。

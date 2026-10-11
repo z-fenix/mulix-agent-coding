@@ -9,6 +9,7 @@ package lint
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -420,5 +421,75 @@ func TestGenerateRatchetOnlyTightens(t *testing.T) {
 	}
 	if want := "{\n  \"app/a.go\": 5\n}\n"; string(data) != want {
 		t.Fatalf("ratchet.json = %q, want %q (既有计数 5 不得放松为 1)", string(data), want)
+	}
+}
+
+// TestScanImportsCommentEdges 钉 T10-①(008 FR-101):import 块内注释行
+// 既不假闭合也不假 import——扫描结果与剥离注释的等价文件完全一致。
+func TestScanImportsCommentEdges(t *testing.T) {
+	cases := []struct {
+		name  string
+		lines []string // 原始文件行
+		want  []string // 期望 import 路径(按序)
+	}{
+		{
+			name: "注释含右括号不假闭合",
+			lines: []string{
+				"package p", "import (", "\t\"internal/cache\"",
+				"\t// internal/config) 这是注释", "\t\"internal/jsonl\"", ")",
+			},
+			want: []string{"internal/cache", "internal/jsonl"},
+		},
+		{
+			name: "注释内引号串不假 import",
+			lines: []string{
+				"package p", "import (", "\t// 见 \"internal/guard\" 文档", "\t\"internal/cache\"", ")",
+			},
+			want: []string{"internal/cache"},
+		},
+		{
+			name: "行尾注释不干扰",
+			lines: []string{
+				"package p", "import (", "\t\"internal/cache\" // cache: 记账", ")",
+			},
+			want: []string{"internal/cache"},
+		},
+		{
+			name: "右括号后行尾注释正常闭合",
+			lines: []string{
+				"package p", "import (", "\t\"internal/cache\"", ") // 分层矩阵收口", "var _ = 1",
+			},
+			want: []string{"internal/cache"},
+		},
+		{
+			name: "单行块注释不假闭合",
+			lines: []string{
+				"package p", "import (", "\t\"internal/cache\"", "\t/* internal/config) 历史说明 */", "\t\"internal/jsonl\"", ")",
+			},
+			want: []string{"internal/cache", "internal/jsonl"},
+		},
+		{
+			name: "多行块注释跨行不假闭合不假 import",
+			lines: []string{
+				"package p", "import (", "\t\"internal/cache\"", "\t/* 历史说明开始",
+				"\t\"internal/guard\" 引用于旧版", "\t结束 */", "\t\"internal/jsonl\"", ")",
+			},
+			want: []string{"internal/cache", "internal/jsonl"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			refs, err := scanImports(tc.lines)
+			if err != nil {
+				t.Fatalf("scanImports: %v", err)
+			}
+			var got []string
+			for _, r := range refs {
+				got = append(got, r.Path)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("imports = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
