@@ -178,3 +178,19 @@ func TestConcurrentAccess(t *testing.T) {
 	wg.Wait()
 	root.Dispose()
 }
+
+// TestServiceProvidesKeyedValue 钉 010 FR-102 前置(Service 即插件):
+// NewService 插件 Mount 后,其键可经 Service 查得,值即 apply 产出。
+func TestServiceProvidesKeyedValue(t *testing.T) {
+	c := NewContext(nil)
+	svc := NewService("llm", nil, "llm-adapter", func(c *Context, deps map[string]any) (any, error) {
+		return "claude-cli-adapter", nil
+	})
+	if err := c.Mount(svc); err != nil {
+		t.Fatalf("mount: %v", err)
+	}
+	v, ok := c.Service("llm")
+	if !ok || v != "claude-cli-adapter" {
+		t.Fatalf("service = (%v,%v), want (claude-cli-adapter,true)", v, ok)
+	}
+}

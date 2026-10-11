@@ -122,3 +122,45 @@ func (c *Context) Dispose() {
 		disposables[i]()
 	}
 }
+
+// Service 是「提供服务的插件」：键即 ctx.<key>；Mount 完成即服务就绪
+// （cordis 忠实模型——服务本身就是插件；键即契约，消费方按 key 断言类型）。
+type Service interface {
+	Plugin
+	ServiceKey() string
+}
+
+// NewService 是 Service 的语法糖实现：注入 deps 中的服务值，apply 产出服务
+// 值并自动 Provide（key 即 ServiceKey）。deps 缺失时 Mount 返回错误
+// （指名缺键；与 MountAll 拓扑解析配合，乱序提交由解析器重排）。
+func NewService(key string, deps []string, name string,
+	apply func(c *Context, deps map[string]any) (any, error)) Plugin {
+	return &servicePlugin{name: name, key: key, deps: deps, apply: apply}
+}
+
+type servicePlugin struct {
+	name  string
+	key   string
+	deps  []string
+	apply func(c *Context, deps map[string]any) (any, error)
+}
+
+func (p *servicePlugin) Name() string       { return p.name }
+func (p *servicePlugin) ServiceKey() string { return p.key }
+func (p *servicePlugin) Inject() []string   { return p.deps }
+
+func (p *servicePlugin) Mount(c *Context) error {
+	deps := map[string]any{}
+	for _, k := range p.deps {
+		v, ok := c.Service(k)
+		if !ok {
+			return fmt.Errorf("kernel: service %q missing dep %q", p.key, k)
+		}
+		deps[k] = v
+	}
+	v, err := p.apply(c, deps)
+	if err != nil {
+		return err
+	}
+	return c.Provide(p.key, v)
+}
