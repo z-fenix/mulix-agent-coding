@@ -16,6 +16,7 @@ import (
 	"mulix/internal/event"
 	"mulix/internal/guard"
 	"mulix/internal/kernel"
+	"mulix/internal/llm/claude"
 	"mulix/internal/memory"
 	"mulix/internal/registry"
 	"mulix/internal/sessionx"
@@ -294,6 +295,11 @@ func assembleKernelContext(o control.Options) (*kernel.Context, control.Options,
 		if err := root.Provide("registry", o.Registry); err != nil {
 			return nil, control.Options{}, err
 		}
+	}
+	// llm 键:seam-only 适配器(011 裁定 b——委托接线随 P4b-2 controller
+	// 消费 ctx.llm 时落地;键先就位,接口形状已与 engine.Host 对应)。
+	if err := root.Provide("llm", claude.NewClaudeAdapter()); err != nil {
+		return nil, control.Options{}, err
 	}
 	return root, o, nil
 }

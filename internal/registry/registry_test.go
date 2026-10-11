@@ -289,3 +289,19 @@ func TestMCPServersSelfCommand(t *testing.T) {
 		t.Fatalf("MCPServers unstable: %+v vs %+v", got, got2)
 	}
 }
+
+// TestSnapshotFreezesAtCallTime 钉 011 FR-103:Snapshot 返回调用时刻副本——
+// 调用后的注册不影响副本(冻结语义)。
+func TestSnapshotFreezesAtCallTime(t *testing.T) {
+	resetRegistry(t)
+	Register(&stubTool{name: "snap-a", desc: "a", schema: `{"type":"object"}`})
+	snap1 := Snapshot()
+	Register(&stubTool{name: "snap-b", desc: "b", schema: `{"type":"object"}`})
+	if len(snap1) != 1 {
+		t.Fatalf("snapshot 1 = %d tools, want 1 (副本不可变)", len(snap1))
+	}
+	snap2 := Snapshot()
+	if len(snap2) != 2 {
+		t.Fatalf("snapshot 2 = %d tools, want 2 (当前态)", len(snap2))
+	}
+}

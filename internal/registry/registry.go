@@ -47,6 +47,19 @@ var (
 	registry = map[string]registeredTool{}
 )
 
+// Snapshot 返回当前已注册工具的副本(011 FR-103 读原语:effect 可逆注册的
+// 未来写面消费;副本不可变——调用后的注册/注销不影响其内容)。
+func Snapshot() []Tool {
+	regMu.RLock()
+	defer regMu.RUnlock()
+	out := make([]Tool, 0, len(registry))
+	for name, rt := range registry {
+		_ = name
+		out = append(out, rt.Tool)
+	}
+	return out
+}
+
 // Register 全局注册一个工具（重名/空名/非法 schema panic——注册期冲突是
 // 程序员错误，不静默覆盖；C2 冻结语义：进程生命周期内不增减，schema 于此
 // 时一次 canonicalize）。
