@@ -141,6 +141,8 @@ func NewRootCommand(opts Options) *cobra.Command {
 	root.AddCommand(newMCPCommand(&opts))
 	root.AddCommand(newInstructionsCommand(&opts))
 	root.AddCommand(newLintCommand(&opts))
+	root.AddCommand(newForkCommand(&opts))
+	root.AddCommand(newSearchCommand(&opts))
 	return root
 }
 

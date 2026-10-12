@@ -427,7 +427,7 @@ type assembleSessionSpec struct {
 	UsageRoot   string // 记账根（子会话独立 usage 文件）
 	Workspace   string
 	// EnableEventBus 是镜像→总线桥的接线开关(012;默认关=测试零文件句柄)。
-	EnableEventBus bool `toml:"enable_event_bus"`
+	EnableEventBus bool
 	Cfg            config.Config
 	Approvals      *control.UserApprovalBridge // 继承父审批桥（nil = 无人值守 fail-closed）
 	Attended       bool                        // 父会话模式（子镜像 Unattended 标注跟随）

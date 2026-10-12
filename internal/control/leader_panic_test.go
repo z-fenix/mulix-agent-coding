@@ -254,7 +254,6 @@ func TestLeaderPanicDoesNotPoisonApproveMu(t *testing.T) {
 // (模拟「publish 自身 panic」的双重故障源——判别注入)。
 type noticePanicSink struct {
 	Sink
-	events []any
 }
 
 func (s *noticePanicSink) Publish(ev any) {

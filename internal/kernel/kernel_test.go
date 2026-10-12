@@ -357,3 +357,14 @@ func TestSubscribeEffectDisposeIntegration(t *testing.T) {
 		t.Fatal("other subscribers must be unaffected by scope disposal")
 	}
 }
+
+// TestMountAllDuplicateServiceKey 钉 010 deferred 清偿(013):重复 ServiceKey
+// fail-closed(键即契约——双提供即歧义)。
+func TestMountAllDuplicateServiceKey(t *testing.T) {
+	c := NewContext(nil)
+	a := NewService("dup", nil, "dup-a", func(c *Context, _ map[string]any) (any, error) { return "A", nil })
+	b := NewService("dup", nil, "dup-b", func(c *Context, _ map[string]any) (any, error) { return "B", nil })
+	if err := c.MountAll(a, b); err == nil || !strings.Contains(err.Error(), "duplicate ServiceKey") {
+		t.Fatalf("duplicate key err = %v, want duplicate ServiceKey", err)
+	}
+}
