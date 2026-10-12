@@ -75,3 +75,28 @@ func TestAssembleKernelContextServiceKeys(t *testing.T) {
 		t.Fatalf("llm provider = %v, want claude-cli adapter", vllm)
 	}
 }
+
+// TestProfileServiceKey 钉 014 FR-104(终审 Important 修复:计划 T3 Step 1
+// 的覆盖缺口补齐):profile 服务键就位且值=standard。
+func TestProfileServiceKey(t *testing.T) {
+	cfg := config.Config{}
+	o := control.Options{
+		HostFactory: func(boot engine.BootConfig) (engine.Host, error) { return nil, nil },
+		Sink:        testAssemblySink{},
+		Store:       &sessionx.Store{},
+		Meter:       &cache.Meter{},
+		Gate:        &guard.Gate{},
+		Config:      cfg,
+	}
+	root, _, err := assembleKernelContext(o)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	v, ok := root.Service("profile")
+	if !ok {
+		t.Fatal("profile key missing (FR-104)")
+	}
+	if pm, isMode := v.(config.ProfileMode); !isMode || pm != config.ProfileStandard {
+		t.Fatalf("profile = %v, want standard", v)
+	}
+}
