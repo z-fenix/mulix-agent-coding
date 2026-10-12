@@ -46,6 +46,7 @@ var layerMatrix = map[string][]string{
 	"internal/kernel":     {},
 	"internal/eventbus":   {"internal/kernel"},
 	"internal/agentloop":  {"internal/engine", "internal/event", "internal/kernel"},
+	"internal/ptc":        {"internal/registry"},
 	"internal/llm":        {"internal/engine"},
 	"internal/llm/claude": {"internal/engine", "internal/llm"},
 	"internal/engine":     {},
