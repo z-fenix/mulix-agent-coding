@@ -53,9 +53,14 @@ func (Default) Run(ctx context.Context, src EventSource, cb Callbacks) error {
 // dispatch 单事件路由(与 controller 既有 dispatch 语义逐字节一致;default
 // 未知 kind → 跳过——design §1.2 裁定,扩展点留 P5)。
 func dispatch(src EventSource, cb Callbacks, ev engine.Event) {
+	// src 可为 nil(Replay 历史重放无宿主——host 收 nil)。
+	var host engine.Host
+	if src != nil {
+		host = src.Host()
+	}
 	switch ev.Kind {
 	case engine.KindInit:
-		cb.OnInit(src.Host(), ev)
+		cb.OnInit(host, ev)
 	case engine.KindAssistant:
 		cb.OnAssistant(ev)
 	case engine.KindToolResult:
@@ -69,11 +74,21 @@ func dispatch(src EventSource, cb Callbacks, ev engine.Event) {
 	case engine.KindExit:
 		cb.OnExit(ev)
 	case engine.KindControlRequest:
-		cb.OnControlRequest(src.Host(), ev)
+		cb.OnControlRequest(host, ev)
 	case engine.KindHookResponse:
 		cb.OnHookResponse(ev)
 	default:
 		// 未知 kind:跳过(与现状 dispatch default 一致——design §1.2 裁定,
 		// 不进回调;扩展点留 P5)。
 	}
+}
+
+// Replay 将历史事件流经 Callbacks 重放(只读——零镜像追加;观测面)。
+// 事件序列经同一 dispatch 路由(与引擎流语义一致);OnEngineClosed 不触发
+// (非引擎关闭——历史重放无关闭语义)。FR-102。
+func Replay(ctx context.Context, events []engine.Event, cb Callbacks) error {
+	for _, ev := range events {
+		dispatch(EventSource(nil), cb, ev)
+	}
+	return nil
 }

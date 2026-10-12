@@ -85,3 +85,29 @@ func TestDefaultRunRoutesByKindAndDrains(t *testing.T) {
 		t.Fatalf("host passthrough count = %d, want 2", len(cb.hostSeen))
 	}
 }
+
+// TestReplayRoutesMirrorEvents 钉 013 FR-102:镜像事件流经 Callbacks 重放
+// (路由序列对齐);replay 不触发 OnEngineClosed(只读重放)。
+func TestReplayRoutesMirrorEvents(t *testing.T) {
+	cb := &recordCallbacks{}
+	events := []engine.Event{
+		{Kind: engine.KindInit},
+		{Kind: engine.KindAssistant},
+		{Kind: engine.KindResult},
+	}
+	if err := Replay(context.Background(), events, cb); err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	want := []string{"init", "assistant", "result"}
+	if len(cb.route) != len(want) {
+		t.Fatalf("route = %v, want %v", cb.route, want)
+	}
+	for i := range want {
+		if cb.route[i] != want[i] {
+			t.Fatalf("route[%d] = %q, want %q", i, cb.route[i], want[i])
+		}
+	}
+	if cb.closed {
+		t.Fatal("replay must not fire OnEngineClosed (只读重放)")
+	}
+}
