@@ -356,3 +356,52 @@ func TestEngineVisibleFreezeIsSessionGranular(t *testing.T) {
 		t.Fatalf("s2 tools = %v, want 2 (会话粒度生效)", got2)
 	}
 }
+
+// TestNewServerToolFilter 钉 014 FR-102:ToolFilter 非空时仅暴露键集内工具
+// (InMemory transports + ListTools 协议级黑盒——011 同款)。
+func TestNewServerToolFilter(t *testing.T) {
+	ctx := context.Background()
+	resetRegistry(t)
+	Register(&stubTool{name: "mulix_usage", desc: "u", schema: `{"type":"object"}`})
+	Register(&stubTool{name: "mulix_permission", desc: "p", schema: `{"type":"object"}`})
+	sAll := NewServer(Options{Name: "full"})
+	cT1, sT1 := mcp.NewInMemoryTransports()
+	ss1, err := sAll.mcpServer.Connect(ctx, sT1, nil)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer ss1.Close()
+	client1 := mcp.NewClient(&mcp.Implementation{Name: "probe", Version: "v0"}, nil)
+	cs1, err := client1.Connect(ctx, cT1, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	defer cs1.Close()
+	res1, err := cs1.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(res1.Tools) != 2 {
+		t.Fatalf("unfiltered tools = %d, want 2", len(res1.Tools))
+	}
+	sMin := NewServer(Options{Name: "min", ToolFilter: map[string]bool{"mulix_usage": true}})
+	cT2, sT2 := mcp.NewInMemoryTransports()
+	ss2, err := sMin.mcpServer.Connect(ctx, sT2, nil)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer ss2.Close()
+	client2 := mcp.NewClient(&mcp.Implementation{Name: "probe", Version: "v0"}, nil)
+	cs2, err := client2.Connect(ctx, cT2, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	defer cs2.Close()
+	res2, err := cs2.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(res2.Tools) != 1 || res2.Tools[0].Name != "mulix_usage" {
+		t.Fatalf("filtered tools = %v, want [mulix_usage]", res2.Tools)
+	}
+}

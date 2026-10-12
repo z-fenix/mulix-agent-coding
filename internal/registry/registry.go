@@ -151,6 +151,9 @@ type Options struct {
 	// SelfCommand 是 mcp-config 条目的 mulix 自 spawn 命令（argv 全量）。
 	// 为空 = 不暴露 stdio 条目（纯进程内用途）。
 	SelfCommand []string
+	// ToolFilter 是工具名→是否暴露的白名单（014 FR-102；nil=全部——
+	// standard；非 nil=仅暴露键集内工具——minimal 的引擎可见面子集）。
+	ToolFilter map[string]bool
 }
 
 // NewServer 冻结当前注册表并构建服务器（C2：此后注册的新工具不影响本
@@ -162,6 +165,9 @@ func NewServer(opts Options) *Server {
 	}
 	ms := mcp.NewServer(&mcp.Implementation{Name: opts.Name, Version: opts.Version}, nil)
 	for _, t := range registeredTools() {
+		if opts.ToolFilter != nil && !opts.ToolFilter[t.Name()] {
+			continue // profile 过滤：非白名单工具不进 tools/list（014 FR-102）
+		}
 		ms.AddTool(&mcp.Tool{
 			Name:        t.Name(),
 			Description: t.Description(),
