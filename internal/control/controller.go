@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"mulix/internal/agentloop"
 	"mulix/internal/cache"
 	"mulix/internal/config"
 	"mulix/internal/engine"
@@ -82,6 +83,12 @@ type Options struct {
 	// AllowEngineDrift 是 engine.lock 版本漂移的显式放行（FR-016；cli 的
 	// --allow-engine-drift / 用户配置。放行时引擎留痕 engine_drift trace）。
 	AllowEngineDrift bool
+
+	// Loop 是回合循环(P4b-2,012 FR-102;nil=Default——既有装配兼容)。
+	// Source 是事件源(llm.Provider/测试形态 hostAsSource——012 裁定 A:
+	// agent loop 消费 ctx.llm);nil 时泵以 host 直连(兼容面)。
+	Loop   agentloop.Loop
+	Source agentloop.EventSource
 
 	// SubagentFactory 是子代理会话工厂（cli 组合根注入，M12/Task 4；nil =
 	// 子代理整体禁用：不组装 Manager、不起回调桥、不注入
@@ -1071,9 +1078,18 @@ func (c *Controller) Close(ctx context.Context) error {
 // 等待方；KindTrace→Notice；KindExit→EngineExited（活跃回合先 error 收口）。
 func (c *Controller) pump(host engine.Host) {
 	defer close(c.pumpDone)
-	for ev := range host.Events() {
-		c.dispatch(host, ev)
+	// P4b-2(012 FR-102):泵循环经 agentloop.Loop 消费(可替换——dsh
+	// ctx.agentLoop);治理动作经 controllerCallbacks 回调注入。行为零变更:
+	// dispatch 路由与泵尾部逐字节经回调承载。
+	src := agentloop.EventSource(hostAsSource{host})
+	if c.opts.Source != nil {
+		src = c.opts.Source
 	}
+	loop := c.opts.Loop
+	if loop == nil {
+		loop = agentloop.Default{}
+	}
+	_ = loop.Run(context.Background(), src, controllerCallbacks{c})
 	// 引擎事件流关闭（Close/崩溃）且未见显式 exit：活跃回合 error 收口 +
 	// 终止留痕（合成 reason=engine_closed；显式 KindExit 已在 onExit 处理）。
 	// 收口顺序（Critical-1 修复）：关闭性发布全部完成 → running=false →
@@ -1105,41 +1121,74 @@ func (c *Controller) pump(host engine.Host) {
 	}
 }
 
-// dispatch 单事件路由（泵 goroutine 内串行执行）。
-func (c *Controller) dispatch(host engine.Host, ev engine.Event) {
-	switch ev.Kind {
-	case engine.KindInit:
-		c.onInit(host, ev)
-	case engine.KindAssistant:
-		c.onAssistant(ev)
-	case engine.KindToolResult:
-		c.onToolResult(ev)
-	case engine.KindResult:
-		c.onResult(ev)
-	case engine.KindTrace:
-		if ev.Trace != nil {
-			content := ev.Trace.Message
-			if ev.Trace.Code != "" {
-				// code 进镜像（engine_drift 等治理事件的可检索留痕）
-				content = fmt.Sprintf("[%s] %s", ev.Trace.Code, ev.Trace.Message)
-			}
-			c.publish(event.NoticeEvent{Seq: c.nextSeq(), Level: "info",
-				Content: content, IsMeta: true})
+// hostAsSource 是测试/兼容用 EventSource(engine.Host 自身实现 Events;
+// Host() 返回自身)——012 裁定 A 的测试形态;生产=llm 适配器。
+type hostAsSource struct{ host engine.Host }
+
+func (s hostAsSource) Events() <-chan engine.Event { return s.host.Events() }
+func (s hostAsSource) Host() engine.Host           { return s.host }
+
+// controllerCallbacks 让 agentloop 调用治理动作(P4b-2 012 FR-101:方法体=
+// 原 dispatch 各分支与泵尾部——逐字节搬家,行为零变更)。
+type controllerCallbacks struct{ c *Controller }
+
+func (h controllerCallbacks) OnInit(host engine.Host, ev engine.Event) { h.c.onInit(host, ev) }
+func (h controllerCallbacks) OnAssistant(ev engine.Event)              { h.c.onAssistant(ev) }
+func (h controllerCallbacks) OnToolResult(ev engine.Event)             { h.c.onToolResult(ev) }
+func (h controllerCallbacks) OnResult(ev engine.Event)                 { h.c.onResult(ev) }
+func (h controllerCallbacks) OnTrace(ev engine.Event) {
+	if ev.Trace != nil {
+		content := ev.Trace.Message
+		if ev.Trace.Code != "" {
+			// code 进镜像（engine_drift 等治理事件的可检索留痕）
+			content = fmt.Sprintf("[%s] %s", ev.Trace.Code, ev.Trace.Message)
 		}
-	case engine.KindPermissionDenied:
-		if ev.Denied != nil {
-			c.publish(event.NoticeEvent{Seq: c.nextSeq(), Level: "warning",
-				Content: fmt.Sprintf("permission denied: %s: %s", ev.Denied.ToolName, ev.Denied.Message)})
-		}
-	case engine.KindExit:
-		c.onExit(ev)
-	case engine.KindControlRequest:
-		c.onControlRequest(host, ev)
-	case engine.KindHookResponse:
-		c.onHook(ev)
-	default:
-		// KindNoise/KindHookStarted：informational 容忍忽略（钩子仅在
-		// hook_response 分发——complete record，见 onHook 注）。
+		h.c.publish(event.NoticeEvent{Seq: h.c.nextSeq(), Level: "info",
+			Content: content, IsMeta: true})
+	}
+}
+func (h controllerCallbacks) OnPermissionDenied(ev engine.Event) {
+	if ev.Denied != nil {
+		h.c.publish(event.NoticeEvent{Seq: h.c.nextSeq(), Level: "warning",
+			Content: fmt.Sprintf("permission denied: %s: %s", ev.Denied.ToolName, ev.Denied.Message)})
+	}
+}
+func (h controllerCallbacks) OnExit(ev engine.Event) { h.c.onExit(ev) }
+func (h controllerCallbacks) OnControlRequest(host engine.Host, ev engine.Event) {
+	h.c.onControlRequest(host, ev)
+}
+func (h controllerCallbacks) OnHookResponse(ev engine.Event) { h.c.onHook(ev) }
+func (h controllerCallbacks) OnUnknown(ev engine.Event)      { /* 未知 kind:跳过(既有 default) */ }
+func (h controllerCallbacks) OnEngineClosed()                { h.c.onEngineClosed() }
+
+// onEngineClosed 是泵尾部合成(自 controllerCallbacks.OnEngineClosed 调用;
+// Critical-1 顺序逐字节:关闭性发布 → running=false → close(ch))。
+func (c *Controller) onEngineClosed() {
+	// 泵尾部合成(原 pump 逐字节):关闭性发布 → running=false → close(ch)。
+	c.mu.Lock()
+	wasRunning := c.running
+	alreadyLogged := c.exitLogged
+	c.exitLogged = true
+	turn := c.turn
+	var ch chan struct{}
+	if wasRunning {
+		ch = c.turnDoneChLocked(turn)
+	}
+	c.mu.Unlock()
+	if ch != nil {
+		c.publish(event.TurnDoneEvent{
+			Seq: c.nextSeq(), Turn: turn, Subtype: "engine_closed", IsError: true,
+		})
+	}
+	if !alreadyLogged {
+		c.publish(event.EngineExitedEvent{Seq: c.nextSeq(), Reason: "engine_closed"})
+	}
+	c.mu.Lock()
+	c.engineDead = true
+	c.running = false
+	c.mu.Unlock()
+	if ch != nil {
+		close(ch)
 	}
 }
 
