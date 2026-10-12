@@ -3,6 +3,7 @@ package cli
 import (
 	"testing"
 
+	"mulix/internal/agentloop"
 	"mulix/internal/cache"
 	"mulix/internal/config"
 	"mulix/internal/control"
@@ -37,9 +38,14 @@ func TestAssembleKernelContextServiceKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("assemble: %v", err)
 	}
-	for _, k := range []string{"sink", "store", "meter", "gate", "config"} {
+	for _, k := range []string{"sink", "store", "meter", "gate", "config", "agentloop"} {
 		if _, ok := root.Service(k); !ok {
 			t.Fatalf("key %q missing (SC-001)", k)
+		}
+	}
+	if v, ok := root.Service("agentloop"); ok {
+		if _, isDefault := v.(*agentloop.Default); !isDefault {
+			t.Fatalf("agentloop = %T, want *agentloop.Default", v)
 		}
 	}
 	if v, ok := root.Service("sink"); !ok || v.(control.Sink) != sink {
