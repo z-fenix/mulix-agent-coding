@@ -342,6 +342,15 @@ func (c *Controller) start(ctx context.Context, boot engine.BootConfig) error {
 	if err != nil {
 		return fmt.Errorf("control: host factory: %w", err)
 	}
+	// P4b-2(012 FR-101a):HostFactory 产出宿主后,经小接口绑定到 Source
+	// (llm.Provider/测试形态)——seam-only 形态退役,泵经 Source 消费宿主
+	// 事件流。未实现 Bind 的 Source(如 hostAsSource 测试形态)跳过。
+	if binder, ok := c.opts.Source.(interface{ Bind(engine.Host) error }); ok {
+		if berr := binder.Bind(host); berr != nil {
+			_ = host.Close(ctx)
+			return fmt.Errorf("control: source bind: %w", berr)
+		}
+	}
 	if err := host.Start(ctx, artifact); err != nil {
 		// Start 失败也要收掉宿主：真实宿主 Start 的 spawn 后失败路径杀进程
 		// 树但不清理 --mcp-config 临时文件（cleanupTemp 只在 Close 跑）——

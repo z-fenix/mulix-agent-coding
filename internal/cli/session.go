@@ -268,7 +268,7 @@ func (o Options) assembleController(cfg config.Config, store *sessionx.Store, me
 			var kinds []string
 			for _, k := range []string{"turn_started", "assistant_thinking", "assistant_text",
 				"tool_use_requested", "approval_request", "approval_resolved", "tool_result",
-				"delegation_started", "delegation_completed", "delegation_cancelled",
+				"delegation_started", "delegation_completed", "delegation_cancelled", "delegation_failed",
 				"usage", "turn_done", "notice", "engine_exited"} {
 				kinds = append(kinds, "mirror."+k)
 			}
@@ -324,11 +324,17 @@ func assembleKernelContext(o control.Options) (*kernel.Context, control.Options,
 	if err := root.Provide("agentloop", &agentloop.Default{}); err != nil {
 		return nil, control.Options{}, err
 	}
-	// llm 键:seam-only 适配器(011 裁定 b——委托接线随 P4b-2 controller
-	// 消费 ctx.llm 时落地;键先就位,接口形状已与 engine.Host 对应)。
-	if err := root.Provide("llm", claude.NewClaudeAdapter()); err != nil {
+	// llm 键:seam-only 适配器(011 裁定 b);012 接线:适配器即
+	// agentloop.EventSource——P4b-2 起 controller 消费。
+	adapter := claude.NewClaudeAdapter()
+	if err := root.Provide("llm", adapter); err != nil {
 		return nil, control.Options{}, err
 	}
+	// Source 回填(012 FR-101a 生产路径):适配器即 agentloop.EventSource
+	// (Events+Host)——泵经 ctx.llm 消费宿主事件流;start 内 HostFactory
+	// 产出 host 后,controller 经小接口 interface{ Bind(engine.Host) error }
+	// 断言并 Bind(适配器)——seam-only 形态退役。
+	o.Source = adapter
 	return root, o, nil
 }
 
