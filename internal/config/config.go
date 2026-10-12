@@ -209,13 +209,14 @@ func (l *Loader) Load(flags Flags, paths Paths) (*Config, []string, error) {
 	if _, err := toml.Decode(buf.String(), &cfg); err != nil {
 		return nil, warnings, fmt.Errorf("config: decode merged: %w", err)
 	}
-	l.lastGood = &cfg
-	// profile mode 校验（014 FR-101：fail-closed，错误含 mode 值）。
+	// profile mode 校验（014 FR-101：fail-closed，错误含 mode 值）——
+	// 在 lastGood 赋值之前(拒绝的配置不得成为 last good)。
 	switch cfg.Profile.RawMode {
 	case "", string(ProfileStandard), string(ProfileMinimal):
 	default:
 		return nil, warnings, fmt.Errorf("config: profile.mode %q must be standard or minimal", cfg.Profile.RawMode)
 	}
+	l.lastGood = &cfg
 	return &cfg, warnings, nil
 }
 

@@ -142,6 +142,12 @@ func ServeMCP(ctx context.Context, o Options) error {
 		return fmt.Errorf("mcp serve: load config: %w", err)
 	}
 	registerServeTools(o, cfg)
-	srv := registry.NewServer(registry.Options{Name: "mulix", Version: Version})
+	// profile ToolFilter(014 FR-102):minimal 时 NewServer 过滤——
+	// serve 子进程是引擎的工具可见面(Compose 的 mcp-config 自 spawn 指向此处)。
+	srv := registry.NewServer(registry.Options{
+		Name:       "mulix",
+		Version:    Version,
+		ToolFilter: profileToolFilter(cfg),
+	})
 	return srv.ServeStdio(serveCtx)
 }
