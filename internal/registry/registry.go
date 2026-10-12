@@ -231,3 +231,15 @@ func (s *Server) MCPServers() []cache.MCPServer {
 func (s *Server) ServeStdio(ctx context.Context) error {
 	return s.mcpServer.Run(ctx, &mcp.StdioTransport{})
 }
+
+// SnapshotToolMap 返回当前已注册工具的 name→Tool 映射(015 PTC 沙箱消费;
+// 副本不可变——调用后的注册/注销不影响其内容)。
+func SnapshotToolMap() map[string]Tool {
+	regMu.RLock()
+	defer regMu.RUnlock()
+	out := make(map[string]Tool, len(registry))
+	for name, rt := range registry {
+		out[name] = rt.Tool
+	}
+	return out
+}

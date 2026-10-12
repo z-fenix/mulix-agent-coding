@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"mulix/internal/cache"
 	"mulix/internal/config"
@@ -23,7 +22,6 @@ import (
 	"mulix/internal/kernel"
 	"mulix/internal/llm/claude"
 	"mulix/internal/memory"
-	"mulix/internal/ptc"
 	"mulix/internal/registry"
 	"mulix/internal/sessionx"
 	"mulix/internal/subagent"
@@ -321,27 +319,6 @@ func assembleKernelContext(o control.Options) (*kernel.Context, control.Options,
 	if err := root.Provide("profile", o.Config.Profile.Normalized()); err != nil {
 		return nil, control.Options{}, err
 	}
-	// PTC(015 FR-104):standard profile 注册 ptc_execute(minimal 不注册)。
-	// sync.Once 防重复注册(Register 全局 panic;主会话+子会话各调一次)。
-	ptcOnce.Do(func() {
-		if o.Config.Profile.Normalized() != config.ProfileStandard {
-			return
-		}
-		snapshot := registry.Snapshot()
-		toolMap := make(map[string]registry.Tool, len(snapshot))
-		for _, t := range snapshot {
-			toolMap[t.Name()] = t
-		}
-		registry.Register(ptc.NewPTCExecuteTool(
-			func() map[string]registry.Tool { return toolMap },
-			30*time.Second,
-		))
-	})
-	if o.Registry != nil {
-		if err := root.Provide("registry", o.Registry); err != nil {
-			return nil, control.Options{}, err
-		}
-	}
 	if err := root.Provide("agentloop", &agentloop.Default{}); err != nil {
 		return nil, control.Options{}, err
 	}
@@ -405,10 +382,6 @@ func newRegistryServer(toolFilter map[string]bool) *registry.Server {
 		Name: "mulix", Version: Version, SelfCommand: selfCmd, ToolFilter: toolFilter,
 	})
 }
-
-// ptcOnce 防止 ptc_execute 在主会话+子会话装配中重复注册(Register 全局
-// panic;进程内一次定型——与 RegisterConditional 先例一致)。
-var ptcOnce sync.Once
 
 // ---- 子代理会话工厂（M12/T12.4：组合根的 SessionFactory 实现） ----
 

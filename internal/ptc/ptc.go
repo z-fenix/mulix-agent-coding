@@ -38,8 +38,11 @@ func (s *Sandbox) Execute(script string) (string, error) {
 	})
 	defer timer.Stop()
 
-	// 注册工具为 JS 全局函数。
+	// 注册工具为 JS 全局函数(仅 ReadOnly 工具——非 ReadOnly 走引擎治理)。
 	for name, tool := range s.tools {
+		if !tool.ReadOnly() {
+			continue // 治理红线:非 ReadOnly 工具不进 PTC 沙箱(需逐次审批)
+		}
 		t := tool // 闭包捕获
 		fn := func(call goja.FunctionCall) goja.Value {
 			argsJSON, _ := json.Marshal(call.Argument(0).Export())

@@ -8,10 +8,12 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"mulix/internal/cache"
 	"mulix/internal/config"
 	"mulix/internal/event"
+	"mulix/internal/ptc"
 	"mulix/internal/registry"
 	"mulix/internal/sessionx"
 	"mulix/internal/tools/mulixmemory"
@@ -142,6 +144,15 @@ func ServeMCP(ctx context.Context, o Options) error {
 		return fmt.Errorf("mcp serve: load config: %w", err)
 	}
 	registerServeTools(o, cfg)
+	// PTC(015 FR-104):standard profile 注册 ptc_execute——serve 子进程是
+	// 引擎的工具可见面(012 终审 Critical 修复:注册必须在 NewServer 冻结前
+	// 且在此进程内)。
+	if cfg.Profile.Normalized() == config.ProfileStandard {
+		registry.Register(ptc.NewPTCExecuteTool(
+			func() map[string]registry.Tool { return registry.SnapshotToolMap() },
+			30*time.Second,
+		))
+	}
 	// profile ToolFilter(014 FR-102):minimal 时 NewServer 过滤——
 	// serve 子进程是引擎的工具可见面(Compose 的 mcp-config 自 spawn 指向此处)。
 	srv := registry.NewServer(registry.Options{
