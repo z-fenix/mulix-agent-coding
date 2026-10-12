@@ -31,8 +31,9 @@ var layerMatrix = map[string][]string{
 	// control：回合唯一驱动器（不得 import frontends——design 001 §5.3 第 2 条；
 	// 现况 = cache/config/engine/event/guard/memory/sessionx/subagent）。
 	"internal/control": {
-		"internal/cache", "internal/config", "internal/engine", "internal/event",
-		"internal/guard", "internal/memory", "internal/sessionx", "internal/subagent",
+		"internal/agentloop", "internal/cache", "internal/config", "internal/engine",
+		"internal/event", "internal/guard", "internal/kernel", "internal/memory",
+		"internal/sessionx", "internal/subagent",
 	},
 
 	// subagent：T6/C3 修订文本（见文件头）；kernel 之上、control 之下的编排器。
