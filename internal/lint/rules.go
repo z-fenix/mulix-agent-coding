@@ -44,6 +44,7 @@ var layerMatrix = map[string][]string{
 	// 内核层与 utility leaves（design 001 §5.3 第 3 条：禁止 import 任何内核包）。
 	"internal/kernel":     {},
 	"internal/eventbus":   {"internal/kernel"},
+	"internal/agentloop":  {"internal/engine", "internal/event", "internal/kernel"},
 	"internal/llm":        {"internal/engine"},
 	"internal/llm/claude": {"internal/engine", "internal/llm"},
 	"internal/engine":     {},
