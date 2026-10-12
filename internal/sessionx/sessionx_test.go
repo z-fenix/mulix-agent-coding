@@ -439,3 +439,73 @@ func TestScanSessionsOrderAndUnattended(t *testing.T) {
 		t.Fatalf("unexpected head: %+v", list[0])
 	}
 }
+
+// TestForkCopiesEventsAndMeta 钉 013 FR-101:fork 副本至 atSeq+meta 标注+
+// 源不受影响+独立追加。
+func TestForkCopiesEventsAndMeta(t *testing.T) {
+	root := t.TempDir()
+	src, err := Create(root, Options{ID: "src", Workspace: "w"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	for i := 0; i < 4; i++ {
+		if err := src.Append(event.TurnStartedEvent{Seq: int64(i + 1), SessionID: "src"}); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	src.Close()
+
+	forked, err := Fork(src, root, "forked", 2)
+	if err != nil {
+		t.Fatalf("fork: %v", err)
+	}
+	forked.Close() // Windows:释放句柄(TempDir 清理兼容)
+	events, err := forked.ReadAllEvents()
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("forked events = %d, want 2", len(events))
+	}
+	// meta 标注(经 ReadMeta——Store 无 parentID 字段)。
+	fmeta, _ := forked.ReadMeta()
+	if fmeta["parent_id"] != "src" {
+		t.Fatalf("parent_id = %v, want src", fmeta["parent_id"])
+	}
+	if fmeta["seed_length"] == nil {
+		t.Fatal("seed_length missing in meta")
+	}
+	// 源不受影响。
+	events2, _ := src.ReadAllEvents()
+	if len(events2) != 4 {
+		t.Fatalf("src events changed: %d", len(events2))
+	}
+	// 独立追加互不干扰(经 OpenStore 重开——Windows 文件句柄兼容)。
+	forked2, err := OpenStore(filepath.Join(root, "forked"))
+	if err != nil {
+		t.Fatalf("reopen forked: %v", err)
+	}
+	defer forked2.Close()
+	if err := forked2.Append(event.TurnStartedEvent{Seq: 5, SessionID: "forked"}); err != nil {
+		t.Fatalf("append forked: %v", err)
+	}
+	events3, _ := forked2.ReadAllEvents()
+	events4, _ := src.ReadAllEvents()
+	if len(events3) != 3 || len(events4) != 4 {
+		t.Fatalf("independent append failed: forked=%d src=%d", len(events3), len(events4))
+	}
+}
+
+// TestForkFailClosed 钉 013 FR-101:atSeq 非法 fail-closed。
+func TestForkFailClosed(t *testing.T) {
+	root := t.TempDir()
+	src, _ := Create(root, Options{ID: "src2", Workspace: "w"})
+	src.Append(event.TurnStartedEvent{Seq: 1, SessionID: "src2"})
+	src.Close()
+	if _, err := Fork(src, root, "f1", 0); err == nil {
+		t.Fatal("atSeq=0 must fail-closed")
+	}
+	if _, err := Fork(src, root, "f2", 99); err == nil {
+		t.Fatal("atSeq beyond end must fail-closed")
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"mulix/internal/event"
@@ -244,4 +245,51 @@ func writeJSONFile(path string, v any) error {
 		return fmt.Errorf("sessionx: rename %s: %w", filepath.Base(path), err)
 	}
 	return nil
+}
+
+// Fork 从源镜像复制事件(至 atSeq,1 起含)到新会话;meta 标注 parent_id/
+// seed_length。源会话只读不受影响。atSeq 非法(≤0 或超末尾)→ fail-closed。
+// engine_session_id 不继承(新会话新引擎实例)。013 FR-101。
+func Fork(src *Store, root string, newID string, atSeq int64) (*Store, error) {
+	events, err := src.ReadAllEvents()
+	if err != nil {
+		return nil, fmt.Errorf("sessionx: fork read: %w", err)
+	}
+	if atSeq < 1 || int(atSeq) > len(events) {
+		return nil, fmt.Errorf("sessionx: fork atSeq %d out of range [1, %d]", atSeq, len(events))
+	}
+	srcMeta, _ := src.ReadMeta()
+	ws, _ := srcMeta["workspace"].(string)
+	model, _ := srcMeta["model"].(string)
+	pinned, _ := srcMeta["pinned_model"].(string)
+	forked, err := Create(root, Options{
+		ID:          newID,
+		Workspace:   ws,
+		Model:       model,
+		PinnedModel: pinned,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("sessionx: fork create: %w", err)
+	}
+	// 原始行复制:白盒直读源镜像文件,取前 atSeq 行原样 append(保真优于
+	// 类型化往返)。
+	raw, err := os.ReadFile(filepath.Join(src.dir, "events.jsonl"))
+	if err != nil {
+		return nil, fmt.Errorf("sessionx: fork read raw: %w", err)
+	}
+	srcLines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	for i := int64(0); i < atSeq && int(i) < len(srcLines); i++ {
+		if err := forked.writer.Append([]byte(srcLines[i])); err != nil {
+			return nil, fmt.Errorf("sessionx: fork append: %w", err)
+		}
+	}
+	if err := forked.SetParentID(filepath.Base(src.dir)); err != nil {
+		return nil, fmt.Errorf("sessionx: fork set parent: %w", err)
+	}
+	// seed_length 落 meta（与 SetParentID 同款 read-modify-write）。
+	fmeta, _ := forked.ReadMeta()
+	fmeta["seed_length"] = fmt.Sprintf("%d", atSeq)
+	writeJSONFile(filepath.Join(forked.dir, "meta.json"), fmeta)
+	forked.Close()
+	return OpenStore(filepath.Join(root, newID))
 }
