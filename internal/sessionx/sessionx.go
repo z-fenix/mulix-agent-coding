@@ -287,9 +287,16 @@ func Fork(src *Store, root string, newID string, atSeq int64) (*Store, error) {
 		return nil, fmt.Errorf("sessionx: fork set parent: %w", err)
 	}
 	// seed_length 落 meta（与 SetParentID 同款 read-modify-write）。
-	fmeta, _ := forked.ReadMeta()
+	fmeta, rerr := forked.ReadMeta()
+	if rerr != nil {
+		forked.Close()
+		return nil, fmt.Errorf("sessionx: fork read meta: %w", rerr)
+	}
 	fmeta["seed_length"] = fmt.Sprintf("%d", atSeq)
-	writeJSONFile(filepath.Join(forked.dir, "meta.json"), fmeta)
+	if err := writeJSONFile(filepath.Join(forked.dir, "meta.json"), fmeta); err != nil {
+		forked.Close()
+		return nil, fmt.Errorf("sessionx: fork write meta: %w", err)
+	}
 	forked.Close()
 	return OpenStore(filepath.Join(root, newID))
 }
