@@ -64,3 +64,22 @@ func TestSandboxTimeout(t *testing.T) {
 		t.Fatalf("timeout err = %v, want timeout", err)
 	}
 }
+
+// TestPTCExecuteTool 钉 015 FR-104:ptc_execute 工具——脚本文本→沙箱执行。
+func TestPTCExecuteTool(t *testing.T) {
+	tools := map[string]registry.Tool{
+		"echo": &stubTool{name: "echo", result: "executed"},
+	}
+	tool := NewPTCExecuteTool(func() map[string]registry.Tool { return tools }, 5*time.Second)
+	if tool.Name() != "ptc_execute" {
+		t.Fatalf("name = %q", tool.Name())
+	}
+	args := json.RawMessage(`{"script": "echo({message: 'test'})"}`)
+	result, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if !strings.Contains(result, "executed") {
+		t.Fatalf("result = %q", result)
+	}
+}
