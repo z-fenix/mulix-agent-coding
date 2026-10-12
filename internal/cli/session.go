@@ -244,7 +244,7 @@ func (o Options) assembleController(cfg config.Config, store *sessionx.Store, me
 		Config:           cfg,
 		Workspace:        o.Workspace,
 		Unattended:       unattended,
-		Registry:         newRegistryServer(),
+		Registry:         newRegistryServer(profileToolFilter(cfg)),
 		AllowEngineDrift: o.driftAllowed(),
 		SubagentFactory:  subFactory,
 		SubagentLimits: control.SubagentLimits{
@@ -316,6 +316,9 @@ func assembleKernelContext(o control.Options) (*kernel.Context, control.Options,
 			return nil, control.Options{}, err
 		}
 	}
+	if err := root.Provide("profile", o.Config.Profile.Normalized()); err != nil {
+		return nil, control.Options{}, err
+	}
 	if o.Registry != nil {
 		if err := root.Provide("registry", o.Registry); err != nil {
 			return nil, control.Options{}, err
@@ -375,13 +378,13 @@ func productionHostFactory(o Options) func(engine.BootConfig) (engine.Host, erro
 // mcp-config；工具经 init() 自注册，T26）。无可执行路径时退回无条目注册面
 // ——此时 composeBoot 同样不会设置 prompt tool（两开关一致，不产生「指向
 // 不存在服务器」的 Boot 面）。
-func newRegistryServer() *registry.Server {
+func newRegistryServer(toolFilter map[string]bool) *registry.Server {
 	selfCmd, err := selfCommand()
 	if err != nil {
-		return registry.NewServer(registry.Options{Name: "mulix", Version: Version})
+		return registry.NewServer(registry.Options{Name: "mulix", Version: Version, ToolFilter: toolFilter})
 	}
 	return registry.NewServer(registry.Options{
-		Name: "mulix", Version: Version, SelfCommand: selfCmd,
+		Name: "mulix", Version: Version, SelfCommand: selfCmd, ToolFilter: toolFilter,
 	})
 }
 
@@ -766,4 +769,13 @@ func CloseSharedBus() {
 		_ = b.Close()
 	}
 	busByWS = map[string]*eventbus.Bus{}
+}
+
+// profileToolFilter 返回 profile 对应的工具过滤(nil=全部——standard;
+// minimal=仅权限回路必需工具)。014 FR-102。
+func profileToolFilter(cfg config.Config) map[string]bool {
+	if cfg.Profile.Normalized() == config.ProfileMinimal {
+		return map[string]bool{"permission": true}
+	}
+	return nil
 }
