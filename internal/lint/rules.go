@@ -55,8 +55,8 @@ var layerMatrix = map[string][]string{
 	"internal/config":     {},
 
 	// 中间层（现况矩阵：与已交付代码逐包核对一致）。
-	"internal/memory":   {"internal/jsonl"},
-	"internal/sessionx": {"internal/event", "internal/jsonl"},
+	"internal/memory":   {"internal/jsonl", "internal/textutil"},
+	"internal/sessionx": {"internal/event", "internal/jsonl", "internal/textutil"},
 	"internal/guard":    {"internal/config"},
 	"internal/cache":    {"internal/config", "internal/jsonl"},
 	"internal/registry": {"internal/cache"},
