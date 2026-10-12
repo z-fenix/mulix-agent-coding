@@ -500,3 +500,31 @@ func warnMentions(warnings []string, key string) bool {
 	}
 	return false
 }
+
+// TestProfileModeParsing 钉 014 FR-101:三态(缺省/minimal/非法 fail-closed)。
+func TestProfileModeParsing(t *testing.T) {
+	cfg1, _, err := NewLoader().Load(Flags{}, Paths{})
+	if err != nil {
+		t.Fatalf("default load: %v", err)
+	}
+	if cfg1.Profile.Normalized() != ProfileStandard {
+		t.Fatalf("default mode = %v, want standard", cfg1.Profile.Normalized())
+	}
+	// minimal(文件路径经 Paths.Project——与 DefaultPaths 文件约定一致)。
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "mulix.toml")
+	os.WriteFile(cfgPath, []byte("[profile]\nmode = \"minimal\"\n"), 0o644)
+	cfg2, _, err := NewLoader().Load(Flags{}, Paths{Project: cfgPath})
+	if err != nil {
+		t.Fatalf("minimal load: %v", err)
+	}
+	if cfg2.Profile.Normalized() != ProfileMinimal {
+		t.Fatalf("minimal mode = %v, want minimal", cfg2.Profile.Normalized())
+	}
+	// 非法 fail-closed(错误含 mode 值)。
+	os.WriteFile(cfgPath, []byte("[profile]\nmode = \"bogus\"\n"), 0o644)
+	_, _, err = NewLoader().Load(Flags{}, Paths{Project: cfgPath})
+	if err == nil || !strings.Contains(err.Error(), "bogus") {
+		t.Fatalf("bogus mode err = %v, want fail-closed with mode value", err)
+	}
+}

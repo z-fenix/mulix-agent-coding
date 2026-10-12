@@ -11,6 +11,27 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+// ProfileMode 是运行模式（standard=全工具集缺省；minimal=薄环境评测）。
+type ProfileMode string
+
+const (
+	ProfileStandard ProfileMode = "standard"
+	ProfileMinimal  ProfileMode = "minimal"
+)
+
+// ProfileConfig 是 [profile] 节（014 FR-101）。
+type ProfileConfig struct {
+	RawMode string `toml:"mode"`
+}
+
+// Mode 返回标准化后的运行模式（""→standard；非法在 Load 末尾 fail-closed）。
+func (p ProfileConfig) Normalized() ProfileMode {
+	if p.RawMode == string(ProfileMinimal) {
+		return ProfileMinimal
+	}
+	return ProfileStandard
+}
+
 // Config 是 mulix 的最终生效配置（design §12 骨架字段）。
 type Config struct {
 	DefaultModel string            `toml:"default_model"`
@@ -21,6 +42,7 @@ type Config struct {
 	Memory       MemoryConfig      `toml:"memory"`
 	Subagent     SubagentConfig    `toml:"subagent"`
 	MCP          MCPConfig         `toml:"mcp"`
+	Profile      ProfileConfig     `toml:"profile"`
 	Hooks        HooksConfig       `toml:"hooks"`
 }
 
@@ -188,6 +210,12 @@ func (l *Loader) Load(flags Flags, paths Paths) (*Config, []string, error) {
 		return nil, warnings, fmt.Errorf("config: decode merged: %w", err)
 	}
 	l.lastGood = &cfg
+	// profile mode 校验（014 FR-101：fail-closed，错误含 mode 值）。
+	switch cfg.Profile.RawMode {
+	case "", string(ProfileStandard), string(ProfileMinimal):
+	default:
+		return nil, warnings, fmt.Errorf("config: profile.mode %q must be standard or minimal", cfg.Profile.RawMode)
+	}
 	return &cfg, warnings, nil
 }
 
