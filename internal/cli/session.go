@@ -15,6 +15,9 @@ import (
 	"mulix/internal/engine"
 	"mulix/internal/event"
 	"mulix/internal/guard"
+	"path/filepath"
+
+	"mulix/internal/eventbus"
 	"mulix/internal/kernel"
 	"mulix/internal/llm/claude"
 	"mulix/internal/memory"
@@ -253,6 +256,27 @@ func (o Options) assembleController(cfg config.Config, store *sessionx.Store, me
 	if kerr != nil {
 		return nil, nil, kerr
 	}
+	// 镜像→总线桥(012 FR-104;EnableEventBus 门控——默认关,测试零文件句柄):
+	// 进程级单例(按工作区键);openSession 失败=桥关闭(如实记录)。
+	if o.EnableEventBus {
+		if bus := sharedEventBus(o); bus != nil {
+			if err := root.Provide("events", bus); err != nil {
+				return nil, nil, err
+			}
+			// 声明全部镜像 kind 的 subject(一次性;桥 Emit 前)。
+			var kinds []string
+			for _, k := range []string{"turn_started", "assistant_thinking", "assistant_text",
+				"tool_use_requested", "approval_request", "approval_resolved", "tool_result",
+				"delegation_started", "delegation_completed", "delegation_cancelled",
+				"usage", "turn_done", "notice", "engine_exited"} {
+				kinds = append(kinds, "mirror."+k)
+			}
+			if err := bus.DeclareEvents(kinds...); err != nil {
+				return nil, nil, fmt.Errorf("eventbus: declare: %w", err)
+			}
+			opts.EventPublisher = bus
+		}
+	}
 	_ = root // 根 Context 就位(P4b-2 消费:agent loop/镜像桥经此接线)
 	c, err := control.NewController(opts)
 	if err != nil {
@@ -392,13 +416,15 @@ type assembleSessionSpec struct {
 	Root        string // sessions 根（子镜像与主会话同池）
 	UsageRoot   string // 记账根（子会话独立 usage 文件）
 	Workspace   string
-	Cfg         config.Config
-	Approvals   *control.UserApprovalBridge // 继承父审批桥（nil = 无人值守 fail-closed）
-	Attended    bool                        // 父会话模式（子镜像 Unattended 标注跟随）
-	ParentID    string                      // 父会话 id（meta.parent_id）
-	SessionID   string                      // 派生 id（<parentID>-sub-<n>）
-	Task        string                      // 委派任务（子会话首回合输入）
-	Ctx         context.Context             // spawn ctx（Submit 等待与收口消费）
+	// EnableEventBus 是镜像→总线桥的接线开关(012;默认关=测试零文件句柄)。
+	EnableEventBus bool `toml:"enable_event_bus"`
+	Cfg            config.Config
+	Approvals      *control.UserApprovalBridge // 继承父审批桥（nil = 无人值守 fail-closed）
+	Attended       bool                        // 父会话模式（子镜像 Unattended 标注跟随）
+	ParentID       string                      // 父会话 id（meta.parent_id）
+	SessionID      string                      // 派生 id（<parentID>-sub-<n>）
+	Task           string                      // 委派任务（子会话首回合输入）
+	Ctx            context.Context             // spawn ctx（Submit 等待与收口消费）
 }
 
 // assembleSession 组装一个子代理子会话（与 buildComponents 同一组装核——
@@ -695,4 +721,39 @@ func storeID(s *sessionx.Store) string {
 		return dir[i+1:]
 	}
 	return dir
+}
+
+// 总线单例按工作区键隔离(012 T4;TempDir 工作区不锁死——按 key 隔离;
+// Windows FileStorage 句柄锁目录——键隔离避免)。
+var (
+	busMu   sync.Mutex
+	busByWS = map[string]*eventbus.Bus{}
+)
+
+func sharedEventBus(o Options) *eventbus.Bus {
+	key := o.Workspace
+	busMu.Lock()
+	defer busMu.Unlock()
+	if b, ok := busByWS[key]; ok {
+		return b
+	}
+	b, err := eventbus.OpenBus(eventbus.BusOptions{
+		StoreDir: filepath.Join(o.Workspace, ".mulix", "bus"),
+	})
+	if err != nil {
+		return nil // 桥关闭(OpenBus 失败,如实记录)
+	}
+	busByWS[key] = b
+	return b
+}
+
+// CloseSharedBus 关闭全部工作区总线(进程退出调用;FileStorage 同步发布
+// 已持久,无 Close 亦安全——显式收口为卫生面)。
+func CloseSharedBus() {
+	busMu.Lock()
+	defer busMu.Unlock()
+	for _, b := range busByWS {
+		_ = b.Close()
+	}
+	busByWS = map[string]*eventbus.Bus{}
 }

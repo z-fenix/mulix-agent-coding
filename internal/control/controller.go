@@ -29,6 +29,7 @@ import (
 	"mulix/internal/engine"
 	"mulix/internal/event"
 	"mulix/internal/guard"
+	"mulix/internal/kernel"
 	"mulix/internal/memory"
 	"mulix/internal/sessionx"
 	"mulix/internal/subagent"
@@ -90,6 +91,10 @@ type Options struct {
 	Loop   agentloop.Loop
 	Source agentloop.EventSource
 
+	// EventPublisher 是镜像→总线桥的发布面(P4b-2 012 FR-104;nil=桥关——
+	// 既有装配兼容)。实现=eventbus.Bus(kernel.EventPublisher)。
+	EventPublisher kernel.EventPublisher
+
 	// SubagentFactory 是子代理会话工厂（cli 组合根注入，M12/Task 4；nil =
 	// 子代理整体禁用：不组装 Manager、不起回调桥、不注入
 	// MULIX_SUBAGENT_CALLBACK——Boot 面与 P1 逐字节一致）。
@@ -142,8 +147,10 @@ type Controller struct {
 
 	mu             sync.Mutex
 	host           engine.Host
-	engineInfo     engine.EngineInfo // 首个 init 推导（幂等，以首条为准）
-	turn           int64             // 当前回合序号（Submit 递增）
+	evPub          kernel.EventPublisher // 镜像→总线桥(nil=关)
+	bridgeDisabled bool                  // 桥自禁(首次失败后;012 FR-105 防递归)
+	engineInfo     engine.EngineInfo     // 首个 init 推导（幂等，以首条为准）
+	turn           int64                 // 当前回合序号（Submit 递增）
 	running        bool
 	closed         bool
 	seq            int64
@@ -194,6 +201,7 @@ func NewController(opts Options) (*Controller, error) {
 	}
 	c := &Controller{
 		opts:      opts,
+		evPub:     opts.EventPublisher,
 		sessionID: sessionID,
 		turnDones: map[int64]chan struct{}{},
 		resolved:  map[string]gateRuling{},
@@ -1430,6 +1438,32 @@ func (c *Controller) publish(ev any) {
 		return
 	}
 	c.opts.Sink.Publish(ev)
+	// 镜像→总线桥(012 FR-104/105):先镜像后总线(顺序红线);失败
+	// fail-visible + 桥自禁(防递归)。**禁走 c.publish/禁经桥发 Notice**——
+	// pubMu 不可重入(controller.go:48-50 红线);留痕走直接
+	// Store.Append+Sink.Publish(与既有镜像失败分支同款)。
+	if c.evPub != nil && !c.bridgeDisabled {
+		kind, kerr := sessionx.EventKindOf(ev)
+		if kerr == nil {
+			if evLine, merr := json.Marshal(ev); merr == nil {
+				record, _ := json.Marshal(map[string]json.RawMessage{
+					"kind": json.RawMessage(`"` + string(kind) + `"`),
+					"ev":   json.RawMessage(evLine),
+				})
+				subject := "mirror." + string(kind)
+				if err := c.evPub.Publish(subject, record); err != nil {
+					c.mu.Lock()
+					c.bridgeDisabled = true // 桥自禁（防递归；首次失败已留痕）
+					c.mu.Unlock()
+					warn := event.NoticeEvent{Seq: c.nextSeq(), Level: "warning",
+						Content: fmt.Sprintf("eventbus: 镜像桥发布失败（%s）: %v", subject, err)}
+					if aerr := c.opts.Store.Append(warn); aerr == nil {
+						c.opts.Sink.Publish(warn)
+					}
+				}
+			}
+		}
+	}
 }
 
 func (c *Controller) nextSeq() int64 {

@@ -7,6 +7,10 @@ import (
 	"mulix/internal/event"
 )
 
+// EventKindOf 返回事件的 kind 标注（导出面：012 镜像桥 subject 命名消费
+// ——单一来源，与 Append 内部同一函数）。
+func EventKindOf(ev any) (event.Kind, error) { return eventKindOf(ev) }
+
 // eventKindOf 返回事件的 kind 标注（镜像记录的 kind 字段）。
 func eventKindOf(ev any) (event.Kind, error) {
 	switch ev.(type) {
