@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"os"
+	"strings"
 	"testing"
 
 	"mulix/internal/agentloop"
@@ -98,5 +100,40 @@ func TestProfileServiceKey(t *testing.T) {
 	}
 	if pm, isMode := v.(config.ProfileMode); !isMode || pm != config.ProfileStandard {
 		t.Fatalf("profile = %v, want standard", v)
+	}
+}
+
+// TestKernelKeysIncludeEventsKey 钉 016 终审 Important:events 键注册于
+// assembleKernelContext 返回之后(总线开启时)——KernelKeys 快照必须取自
+// 装配末尾,否则 kernel_inspect.services 在总线会话确定性静默缺键。
+func TestKernelKeysIncludeEventsKey(t *testing.T) {
+	var boot engine.BootConfig
+	// 手工清理:总线为进程级单例(JetStream 句柄持有至进程关停)——
+	// t.TempDir 的 RemoveAll 在 Windows 上会撞文件锁。
+	ws, err := os.MkdirTemp("", "mulix016")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(ws) })
+	opts := Options{Workspace: ws, SessionsRoot: ws, UsageRoot: ws,
+		Config: testConfig(), EnableEventBus: true,
+		HostFactory: func(bc engine.BootConfig) (engine.Host, error) {
+			boot = bc
+			script, ferr := engine.FixtureScript("../../fixtures/engine/happy-turn.jsonl")
+			if ferr != nil {
+				return nil, ferr
+			}
+			return engine.NewFakeHost(script), nil
+		}}
+	h := mustOpenSession(t, opts, "", nil)
+	defer h.close()
+	found := false
+	for _, e := range boot.Env {
+		if strings.HasPrefix(e, "MULIX_KERNEL_KEYS=") && strings.Contains(e, "events") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("MULIX_KERNEL_KEYS missing events key (env=%v)", boot.Env)
 	}
 }
