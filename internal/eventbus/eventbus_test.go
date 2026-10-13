@@ -2,10 +2,13 @@ package eventbus
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nats-io/nats.go"
 
 	"mulix/internal/kernel"
 )
@@ -255,4 +258,53 @@ func TestEmitPanicPropagates(t *testing.T) {
 		}
 	}()
 	_ = b.Emit("boom", []byte("x"))
+}
+
+// TestOpenBusEndpointHandshake 钉 018 FR-103 前置:监听+endpoint 握手——
+// endpoint 文件存在且非 InProcess 客户端可经它连接收发。
+// subject 真身:桥声明 "mirror.test" → Emit 加 "mulix." 前缀 →
+// 总线实际 subject = mulix.mirror.test(评审 Critical 修正)。
+func TestOpenBusEndpointHandshake(t *testing.T) {
+	dir := t.TempDir()
+	b, err := OpenBus(BusOptions{StoreDir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer b.Close()
+
+	raw, err := os.ReadFile(filepath.Join(dir, "endpoint"))
+	if err != nil {
+		t.Fatalf("endpoint: %v", err)
+	}
+	url := strings.TrimSpace(string(raw))
+	if !strings.HasPrefix(url, "nats://127.0.0.1:") {
+		t.Fatalf("endpoint = %q, want nats://127.0.0.1:<port>", url)
+	}
+	// 独立连接(不经 InProcess 选项)——跨进程形态核验。
+	if err := b.DeclareEvents("mirror.test"); err != nil {
+		t.Fatalf("declare: %v", err)
+	}
+	nc, err := nats.Connect(url, nats.Timeout(5*time.Second))
+	if err != nil {
+		t.Fatalf("external connect: %v", err)
+	}
+	defer nc.Close()
+	got := make(chan string, 1)
+	sub, err := nc.Subscribe("mulix.mirror.test", func(m *nats.Msg) { got <- string(m.Data) })
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer sub.Unsubscribe()
+	nc.Flush() // SUB 协议先于 PUB 到达服务器(否则订阅注册竞态——探针坐实)
+	if err := b.Publish("mirror.test", []byte("hello")); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	select {
+	case msg := <-got:
+		if msg != "hello" {
+			t.Fatalf("msg = %q", msg)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("external subscriber got nothing")
+	}
 }

@@ -6,6 +6,8 @@ package eventbus
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -39,7 +41,8 @@ func OpenBus(opts BusOptions) (*Bus, error) {
 		JetStream: true,
 		StoreDir:  opts.StoreDir,
 		NoLog:     true,
-		Port:      -1, // 不监听 TCP(nats 默认 4222——内嵌形态仅 InProcess 连接)
+		Host:      "127.0.0.1", // 仅本地(018 设计裁定——观察面跨进程握手)
+		Port:      -1,          // 随机端口(018 Ruling:nats-server 语义 0=默认 4222、-1=随机——010 注释「-1=不监听」系误记)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("eventbus: new server: %w", err)
@@ -58,6 +61,22 @@ func OpenBus(opts BusOptions) (*Bus, error) {
 		nc.Close()
 		srv.Shutdown()
 		return nil, fmt.Errorf("eventbus: jetstream: %w", err)
+	}
+	// endpoint 握手(018 FR-103):观察面经此发现总线;原子写(tmp+rename,
+	// memory 同款纪律);写失败=OpenBus 报错——开了没 endpoint 等于没开。
+	// 插入点:nc 连接与 JetStream 上下文建立成功之后、return 之前
+	// (评审 Important 修正——nc 在 Connect 成功后才存在)。
+	endpoint := filepath.Join(opts.StoreDir, "endpoint")
+	tmp := endpoint + ".tmp"
+	if werr := os.WriteFile(tmp, []byte(srv.ClientURL()), 0o600); werr != nil {
+		nc.Close()
+		srv.Shutdown()
+		return nil, fmt.Errorf("eventbus: write endpoint tmp: %w", werr)
+	}
+	if rerr := os.Rename(tmp, endpoint); rerr != nil {
+		nc.Close()
+		srv.Shutdown()
+		return nil, fmt.Errorf("eventbus: rename endpoint: %w", rerr)
 	}
 	return &Bus{srv: srv, nc: nc, js: js, declared: map[string]bool{}, handlers: map[string][]func([]byte){}, wfHandlers: map[string][]WaterfallHandler{}, serialHandlers: map[string][]func([]byte) error{}, bailHandlers: map[string][]func(any) any{}}, nil
 }
