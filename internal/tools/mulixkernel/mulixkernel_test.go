@@ -118,18 +118,36 @@ func quote(s string) string {
 	return string(b)
 }
 
-// TestRegisterSelfRefTools 钉 016 FR-103/SC-003 前半:注册面双钉——
-// standard 只注册 kernel_inspect/cordis_run;minimal 不注册。
+// TestRegisterSelfRefTools 钉 017 FR-103/SC-003:profile 单真源——
+// standard 注册 kernel_inspect/cordis_run;minimal 不注册(无 bool 矛盾面)。
 func TestRegisterSelfRefTools(t *testing.T) {
 	var registered []string
 	reg := func(t registry.Tool) { registered = append(registered, t.Name()) }
 
-	RegisterSelfRefTools(false, nil, config.ProfileMinimal, toolsFunc, reg)
+	RegisterSelfRefTools(config.ProfileMinimal, nil, toolsFunc, reg)
 	if len(registered) != 0 {
 		t.Fatalf("minimal registered = %v, want empty", registered)
 	}
-	RegisterSelfRefTools(true, []string{"profile"}, config.ProfileStandard, toolsFunc, reg)
+	RegisterSelfRefTools(config.ProfileStandard, []string{"profile"}, toolsFunc, reg)
 	if len(registered) != 2 || registered[0] != "kernel_inspect" || registered[1] != "cordis_run" {
 		t.Fatalf("standard registered = %v, want [kernel_inspect cordis_run]", registered)
+	}
+}
+
+// TestParseKernelKeys 钉 017 FR-101:env 进程边界脏值滤除——TrimSpace+
+// 滤空段;空串 → nil(降级非阻断形态)。
+func TestParseKernelKeys(t *testing.T) {
+	got := ParseKernelKeys("a, b,,c,")
+	if len(got) != 3 || got[0] != "a" || got[1] != "b" || got[2] != "c" {
+		t.Fatalf("ParseKernelKeys dirty = %v, want [a b c]", got)
+	}
+	if got := ParseKernelKeys("  "); got != nil {
+		t.Fatalf("ParseKernelKeys blank = %v, want nil", got)
+	}
+	if got := ParseKernelKeys(""); got != nil {
+		t.Fatalf("ParseKernelKeys empty = %v, want nil", got)
+	}
+	if got := ParseKernelKeys("profile"); len(got) != 1 || got[0] != "profile" {
+		t.Fatalf("ParseKernelKeys single = %v, want [profile]", got)
 	}
 }

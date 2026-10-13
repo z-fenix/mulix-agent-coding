@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"mulix/internal/config"
@@ -67,12 +68,29 @@ func (t *KernelInspectTool) Execute(ctx context.Context, args json.RawMessage) (
 }
 
 // RegisterSelfRefTools 是自指工具注册的 testable seam(015 RegisterPTCExecute
-// 同款形态):standard 守卫 + 顺序注册 kernel_inspect→cordis_run(调用方保证
+// 同款形态):profile 单真源(017 FR-103——bool 与 profile 双参数的矛盾面
+// 退役),standard 守卫 + 顺序注册 kernel_inspect→cordis_run(调用方保证
 // 在 NewServer 冻结前、ptc_execute 注册之后调用)。minimal 不注册。
-func RegisterSelfRefTools(standard bool, keys []string, profile config.ProfileMode, tools func() map[string]registry.Tool, reg func(registry.Tool)) {
-	if !standard {
+func RegisterSelfRefTools(profile config.ProfileMode, keys []string, tools func() map[string]registry.Tool, reg func(registry.Tool)) {
+	if profile != config.ProfileStandard {
 		return
 	}
 	reg(NewKernelInspectTool(keys, profile, tools))
 	reg(NewCordisRunTool(tools, 30*time.Second))
+}
+
+// ParseKernelKeys 解析 MULIX_KERNEL_KEYS(017 FR-101):env 是进程边界——
+// 脏值(空格/尾逗号/空段)不得以幽灵键形态进入巡检输出。TrimSpace+滤空段;
+// 空串/全空白 → nil(降级非阻断,与 NewKernelInspectTool nil-keys 形态一致)。
+func ParseKernelKeys(v string) []string {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+	var keys []string
+	for _, k := range strings.Split(v, ",") {
+		if k = strings.TrimSpace(k); k != "" {
+			keys = append(keys, k)
+		}
+	}
+	return keys
 }

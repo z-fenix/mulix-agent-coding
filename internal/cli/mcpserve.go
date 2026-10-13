@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -159,14 +158,10 @@ func ServeMCP(ctx context.Context, o Options) error {
 	// cordis_run——在 ptc_execute 之后(kernel_inspect 的 ptc_registered 于
 	// Execute 时从注册面快照判定)、NewServer 冻结之前(015 终审 Critical
 	// 红线)。服务键经 MULIX_KERNEL_KEYS Boot env 桥;缺席=空(降级非阻断)。
-	var kernelKeys []string
-	if v := os.Getenv("MULIX_KERNEL_KEYS"); v != "" {
-		kernelKeys = strings.Split(v, ",")
-	}
+	kernelKeys := mulixkernel.ParseKernelKeys(os.Getenv("MULIX_KERNEL_KEYS"))
 	mulixkernel.RegisterSelfRefTools(
-		cfg.Profile.Normalized() == config.ProfileStandard,
-		kernelKeys,
 		cfg.Profile.Normalized(),
+		kernelKeys,
 		func() map[string]registry.Tool { return registry.SnapshotToolMap() },
 		registry.Register,
 	)
