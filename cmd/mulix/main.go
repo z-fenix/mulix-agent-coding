@@ -14,8 +14,13 @@ import (
 func main() {
 	opts := cli.Options{Workspace: cwd()}
 	cmd := cli.NewRootCommand(opts)
-	if err := cmd.Execute(); err != nil {
-		_, _ = fmt.Fprintln(os.Stderr, "mulix:", err)
+	execErr := cmd.Execute()
+	// 总线收尾(020 FR-101):单点覆盖全命令——CloseSharedBus 逐 Bus Close
+	// (019 已含 endpoint 删除);serve 无桥=busByWS 空→空转 no-op(015 裁定
+	// 天然安全)。execErr 仍按原语义退出(收尾不改变退出语义)。
+	cli.CloseSharedBus()
+	if execErr != nil {
+		_, _ = fmt.Fprintln(os.Stderr, "mulix:", execErr)
 		os.Exit(1)
 	}
 }
