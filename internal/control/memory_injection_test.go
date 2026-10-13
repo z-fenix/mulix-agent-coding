@@ -351,12 +351,16 @@ func TestMemorySessionEnvInjection(t *testing.T) {
 // 同款裁定:Boot Env 通道,绝不入 mcp-config;缺席=降级非阻断)。
 func TestBootEnvKernelKeys(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		keys       []string
-		wantEnvVar bool
+		name         string
+		keys         []string
+		wantEnvVar   bool
+		noMulixEntry bool
 	}{
 		{name: "no keys = no env", keys: nil, wantEnvVar: false},
 		{name: "keys present = env injected", keys: []string{"profile", "registry"}, wantEnvVar: true},
+		// 017 FR-102:第二合取项单独否决路径——keys 非空但注册面无 mulix
+		// 条目(无 serve 消费者)→ env 不注入(hasMulixRegistryEntry 门控钉)。
+		{name: "keys but no mulix entry = no env", keys: []string{"profile"}, wantEnvVar: false, noMulixEntry: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := engine.NewFakeHost(engine.FakeScript{})
@@ -364,20 +368,35 @@ func TestBootEnvKernelKeys(t *testing.T) {
 			var boot engine.BootConfig
 			c := newTestControllerCapturingBoot(t, fake, sink, &boot, func(o *Options) {
 				o.KernelKeys = tc.keys
-				o.Registry = registry.NewServer(registry.Options{Name: "mulix", Version: "test",
-					SelfCommand: []string{"mulix.exe", "mcp", "serve"}})
+				if tc.noMulixEntry {
+					o.Registry = registry.NewServer(registry.Options{Name: "other", Version: "test"})
+				} else {
+					o.Registry = registry.NewServer(registry.Options{Name: "mulix", Version: "test",
+						SelfCommand: []string{"mulix.exe", "mcp", "serve"}})
+				}
 			})
 			if err := c.NewSession(context.Background()); err != nil {
 				t.Fatalf("new session: %v", err)
 			}
 			has := false
 			for _, e := range boot.Env {
-				if e == "MULIX_KERNEL_KEYS=profile,registry" {
-					has = true
+				if strings.HasPrefix(e, "MULIX_KERNEL_KEYS=") {
+					has = true // 前缀判定——否决分支任何形态的注入都算命中
 				}
 			}
 			if has != tc.wantEnvVar {
 				t.Fatalf("MULIX_KERNEL_KEYS in env = %v, want %v (env=%v)", has, tc.wantEnvVar, boot.Env)
+			}
+			if tc.wantEnvVar {
+				exact := false
+				for _, e := range boot.Env {
+					if e == "MULIX_KERNEL_KEYS=profile,registry" {
+						exact = true
+					}
+				}
+				if !exact {
+					t.Fatalf("MULIX_KERNEL_KEYS value mismatch, want profile,registry (env=%v)", boot.Env)
+				}
 			}
 			// env 不入面:mcp-config 与有无内核键无关(SC-003 字节稳定)。
 			art, err := cache.Compose(mustDefaultConfig(), "w", c.opts.Registry)
