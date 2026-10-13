@@ -54,6 +54,7 @@ func TestKernelInspectTool(t *testing.T) {
 		Tools                 []string `json:"tools"`
 		PtcRegistered         bool     `json:"ptc_registered"`
 		EventbusSubscriptions int      `json:"eventbus_subscriptions"`
+		KeysSource            string   `json:"keys_source"`
 	}
 	if err := json.Unmarshal([]byte(out), &rep); err != nil {
 		t.Fatalf("json: %v (out=%s)", err, out)
@@ -70,11 +71,25 @@ func TestKernelInspectTool(t *testing.T) {
 	if rep.EventbusSubscriptions != 0 {
 		t.Fatalf("eventbus_subscriptions = %d, want 0(serve 进程无桥——前台键不跨进程)", rep.EventbusSubscriptions)
 	}
-	// env 缺席形态(独立运行):keys 空——降级非阻断。
+	if rep.KeysSource != "env" {
+		t.Fatalf("keys_source = %q, want env", rep.KeysSource)
+	}
+	// env 缺席形态(独立运行):keys 空——降级非阻断;keys_source=degraded
+	// (019 FR-104;016 P6+ 路由核销——区分「真无服务键」与「桥缺席」,
+	// 运维排障两态表象相同)。
 	empty := NewKernelInspectTool(nil, config.ProfileStandard, toolsFunc)
 	out, err = empty.Execute(context.Background(), json.RawMessage(`{}`))
 	if err != nil || !strings.Contains(out, `"services":[]`) {
 		t.Fatalf("degraded out = %q err = %v, want services=[] 非阻断", out, err)
+	}
+	var drep struct {
+		KeysSource string `json:"keys_source"`
+	}
+	if err := json.Unmarshal([]byte(out), &drep); err != nil {
+		t.Fatalf("degraded json: %v", err)
+	}
+	if drep.KeysSource != "degraded" {
+		t.Fatalf("degraded keys_source = %q, want degraded", drep.KeysSource)
 	}
 }
 

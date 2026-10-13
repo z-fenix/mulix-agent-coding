@@ -51,6 +51,12 @@ func (t *KernelInspectTool) Execute(ctx context.Context, args json.RawMessage) (
 		}
 	}
 	sort.Strings(toolNames)
+	// keys_source(019 FR-104;016 P6+ 路由核销):区分「真无服务键」与
+	// 「桥缺席降级」——运维排障两态表象相同(services 恒空)。
+	keysSource := "env"
+	if len(t.keys) == 0 {
+		keysSource = "degraded"
+	}
 	// eventbus_subscriptions:serve 进程无总线桥(前台指标不跨进程暴露,
 	// 015 同款裁定)——如实恒 0,Ruling 入台账。
 	rep := struct {
@@ -59,7 +65,8 @@ func (t *KernelInspectTool) Execute(ctx context.Context, args json.RawMessage) (
 		Tools                 []string `json:"tools"`
 		PtcRegistered         bool     `json:"ptc_registered"`
 		EventbusSubscriptions int      `json:"eventbus_subscriptions"`
-	}{svc, string(t.profile), toolNames, ptcRegistered, 0}
+		KeysSource            string   `json:"keys_source"`
+	}{svc, string(t.profile), toolNames, ptcRegistered, 0, keysSource}
 	b, err := json.Marshal(rep)
 	if err != nil {
 		return "", fmt.Errorf("kernel_inspect: marshal: %w", err)

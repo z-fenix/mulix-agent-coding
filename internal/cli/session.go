@@ -756,7 +756,10 @@ func sharedEventBus(o Options) *eventbus.Bus {
 		StoreDir: filepath.Join(o.Workspace, ".mulix", "bus"),
 	})
 	if err != nil {
-		return nil // 桥关闭(OpenBus 失败,如实记录)
+		// 019 FR-101:swallow 前透出一行(012「桥关闭如实记录」字面落实;
+		// stdout 是 serve/MCP 协议面——只写 stderr 不污染)。
+		_, _ = fmt.Fprintf(o.stderr(), "eventbus: 桥关闭(OpenBus 失败): %v\n", err)
+		return nil
 	}
 	busByWS[key] = b
 	return b
