@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -281,6 +282,11 @@ func (o Options) assembleController(cfg config.Config, store *sessionx.Store, me
 			}
 			opts.EventPublisher = bus
 		}
+	} else {
+		// 残留卫生(020 FR-102):门控关=无进程持有总线——endpoint 必为
+		// 死残留(kill/crash 收尾无法覆盖),删除清痕;错误忽略(卫生面
+		// 不阻断启动)。
+		_ = os.Remove(filepath.Join(o.Workspace, ".mulix", "bus", "endpoint"))
 	}
 	// KernelKeys 快照(016 FR-101;终审修复:events 键注册于
 	// assembleKernelContext 返回之后——快照必须取自装配末尾,否则总线会话
