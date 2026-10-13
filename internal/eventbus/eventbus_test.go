@@ -455,8 +455,10 @@ func TestObserveSummaryRuneSafe(t *testing.T) {
 	if err := b.Publish("mirror.t", []byte(long)); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
+	// 轮询门加「输出非空」:utf8.ValidString("") 恒 true——空串当有效会假红
+	// (消息送达前首轮退出→边界断言必败;终审 Minor 1 修复)。
 	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && !utf8.ValidString(lastLine(out.String())) {
+	for time.Now().Before(deadline) && (out.String() == "" || !utf8.ValidString(lastLine(out.String()))) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	line := lastLine(out.String())
