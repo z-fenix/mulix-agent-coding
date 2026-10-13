@@ -545,8 +545,8 @@ func TestEventbusEnabled(t *testing.T) {
 	} {
 		got, err := EventbusConfig{RawEnable: tc.raw}.Enabled()
 		if tc.wantEr {
-			if err == nil || !strings.Contains(err.Error(), tc.raw) {
-				t.Fatalf("raw %q err = %v, want fail-closed 含原值", tc.raw, err)
+			if err == nil || !strings.Contains(err.Error(), tc.raw) || !strings.Contains(err.Error(), `enable = "true"`) {
+				t.Fatalf("raw %q err = %v, want fail-closed 含原值+引号串指路", tc.raw, err)
 			}
 			continue
 		}

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nats-io/nats.go"
 
@@ -378,4 +379,102 @@ func TestObserveMirrors(t *testing.T) {
 	if err := ObserveMirrors(context.Background(), "nats://127.0.0.1:1", io.Discard); err == nil {
 		t.Fatal("bad url must fail-closed")
 	}
+}
+
+// TestObserveMirrorsPeerClosed 钉 019 FR-102:对端(会话进程)关闭→观察面
+// 报错退出(NoReconnect——禁自动重连,静默冻结窗口关闭)。
+func TestObserveMirrorsPeerClosed(t *testing.T) {
+	dir := t.TempDir()
+	b, err := OpenBus(BusOptions{StoreDir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "endpoint"))
+	if err != nil {
+		t.Fatalf("endpoint: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- ObserveMirrors(context.Background(), strings.TrimSpace(string(raw)), io.Discard) }()
+	time.Sleep(200 * time.Millisecond) // 订阅就绪
+	b.Close()                          // 对端死亡
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("peer closed must fail-visible (非 nil), 不允许静默冻结")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("observe frozen after peer close (NoReconnect 未生效?)")
+	}
+}
+
+// TestBusCloseRemovesEndpoint 钉 019 FR-103:进程收尾清理——Close 后
+// endpoint 不存在(观察面不再读到死端点);幂等(Close 二次不报错)。
+func TestBusCloseRemovesEndpoint(t *testing.T) {
+	dir := t.TempDir()
+	b, err := OpenBus(BusOptions{StoreDir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "endpoint")); err != nil {
+		t.Fatalf("endpoint must exist before close: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "endpoint")); !os.IsNotExist(err) {
+		t.Fatalf("endpoint after close = %v, want NotExist", err)
+	}
+	if err := b.Close(); err != nil { // 幂等
+		t.Fatalf("second close: %v", err)
+	}
+}
+
+// TestObserveSummaryRuneSafe 钉 019 FR-103:多字节字符截断不 mojibake
+// (rune 边界——200 字节处劈开中文不再产生非法 UTF-8)。
+func TestObserveSummaryRuneSafe(t *testing.T) {
+	dir := t.TempDir()
+	b, err := OpenBus(BusOptions{StoreDir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer b.Close()
+	raw, err := os.ReadFile(filepath.Join(dir, "endpoint"))
+	if err != nil {
+		t.Fatalf("endpoint: %v", err)
+	}
+	var out syncBuffer
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	done := make(chan error, 1)
+	go func() { done <- ObserveMirrors(ctx, strings.TrimSpace(string(raw)), &out) }()
+	time.Sleep(200 * time.Millisecond)
+	long := strings.Repeat("好", 300) // 900 字节——触发 200 字节截断
+	if err := b.DeclareEvents("mirror.t"); err != nil {
+		t.Fatalf("declare: %v", err)
+	}
+	if err := b.Publish("mirror.t", []byte(long)); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && !utf8.ValidString(lastLine(out.String())) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	line := lastLine(out.String())
+	if !utf8.ValidString(line) {
+		t.Fatalf("truncated line not valid UTF-8 (字节劈开多字节字符): %q", line)
+	}
+	// 截断本身也钉(评审 Advisory):行 payload 部分不得超 200 字节上限
+	// (66 个完整「好」=198 字节——「截断含完整尾字符」)。
+	if !strings.Contains(line, strings.Repeat("好", 66)) || strings.Contains(line, strings.Repeat("好", 67)) {
+		t.Fatalf("truncation boundary wrong: %q", line)
+	}
+	stop()
+}
+
+func lastLine(s string) string {
+	s = strings.TrimRight(s, "\n")
+	if i := strings.LastIndexByte(s, '\n'); i >= 0 {
+		return s[i+1:]
+	}
+	return s
 }

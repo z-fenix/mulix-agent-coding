@@ -21,6 +21,7 @@ type Bus struct {
 	srv            *server.Server
 	nc             *nats.Conn
 	js             nats.JetStreamContext
+	storeDir       string
 	mu             sync.RWMutex
 	declared       map[string]bool
 	handlers       map[string][]func([]byte)
@@ -78,7 +79,7 @@ func OpenBus(opts BusOptions) (*Bus, error) {
 		srv.Shutdown()
 		return nil, fmt.Errorf("eventbus: rename endpoint: %w", rerr)
 	}
-	return &Bus{srv: srv, nc: nc, js: js, declared: map[string]bool{}, handlers: map[string][]func([]byte){}, wfHandlers: map[string][]WaterfallHandler{}, serialHandlers: map[string][]func([]byte) error{}, bailHandlers: map[string][]func(any) any{}}, nil
+	return &Bus{srv: srv, nc: nc, js: js, storeDir: opts.StoreDir, declared: map[string]bool{}, handlers: map[string][]func([]byte){}, wfHandlers: map[string][]WaterfallHandler{}, serialHandlers: map[string][]func([]byte) error{}, bailHandlers: map[string][]func(any) any{}}, nil
 }
 
 // Conn 返回进程内连接(后续任务:发布与订阅)。
@@ -96,6 +97,9 @@ func (b *Bus) Close() error {
 	if b.srv != nil {
 		b.srv.Shutdown()
 	}
+	// endpoint 收尾清理(019 FR-103):进程收尾删握手文件——观察面不再读到
+	// 死端点;幂等(不存在=成功),失败忽略(收尾清理不得阻塞关停)。
+	_ = os.Remove(filepath.Join(b.storeDir, "endpoint"))
 	return nil
 }
 

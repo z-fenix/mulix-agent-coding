@@ -49,7 +49,7 @@ func (e EventbusConfig) Enabled() (bool, error) {
 	case "false":
 		return false, nil
 	default:
-		return false, fmt.Errorf("config: eventbus.enable %q must be true or false", e.RawEnable)
+		return false, fmt.Errorf("config: eventbus.enable %q must be true or false (TOML 字符串形态: enable = \"true\")", e.RawEnable)
 	}
 }
 
