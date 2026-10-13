@@ -32,6 +32,27 @@ func (p ProfileConfig) Normalized() ProfileMode {
 	return ProfileStandard
 }
 
+// EventbusConfig 是 [eventbus] 节(018 FR-101):镜像→总线桥生产接线门控。
+// 缺省关(不写=行为与 017 逐字节一致);显式 true/false;非法值 Load 末尾
+// fail-closed(014 profile 同款)。
+type EventbusConfig struct {
+	RawEnable string `toml:"enable"`
+}
+
+// Enabled 返回门控态;非法值报错(错误含原值)。
+func (e EventbusConfig) Enabled() (bool, error) {
+	switch e.RawEnable {
+	case "":
+		return false, nil
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
+	default:
+		return false, fmt.Errorf("config: eventbus.enable %q must be true or false", e.RawEnable)
+	}
+}
+
 // Config 是 mulix 的最终生效配置（design §12 骨架字段）。
 type Config struct {
 	DefaultModel string            `toml:"default_model"`
@@ -43,6 +64,7 @@ type Config struct {
 	Subagent     SubagentConfig    `toml:"subagent"`
 	MCP          MCPConfig         `toml:"mcp"`
 	Profile      ProfileConfig     `toml:"profile"`
+	Eventbus     EventbusConfig    `toml:"eventbus"`
 	Hooks        HooksConfig       `toml:"hooks"`
 }
 
@@ -215,6 +237,11 @@ func (l *Loader) Load(flags Flags, paths Paths) (*Config, []string, error) {
 	case "", string(ProfileStandard), string(ProfileMinimal):
 	default:
 		return nil, warnings, fmt.Errorf("config: profile.mode %q must be standard or minimal", cfg.Profile.RawMode)
+	}
+	// eventbus.enable 校验(018 FR-101:三态 fail-closed,错误含原值)——
+	// 在 lastGood 赋值之前(拒绝的配置不得成为 last good)。
+	if _, eberr := cfg.Eventbus.Enabled(); eberr != nil {
+		return nil, warnings, eberr
 	}
 	l.lastGood = &cfg
 	return &cfg, warnings, nil

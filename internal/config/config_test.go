@@ -528,3 +528,30 @@ func TestProfileModeParsing(t *testing.T) {
 		t.Fatalf("bogus mode err = %v, want fail-closed with mode value", err)
 	}
 }
+
+// TestEventbusEnabled 钉 018 FR-101:[eventbus] 三态——缺省关/true/false/
+// 非法 fail-closed(错误含原值)。
+func TestEventbusEnabled(t *testing.T) {
+	for _, tc := range []struct {
+		raw    string
+		want   bool
+		wantEr bool
+	}{
+		{raw: "", want: false},
+		{raw: "false", want: false},
+		{raw: "true", want: true},
+		{raw: "yes", wantEr: true},
+		{raw: "TRUE", wantEr: true},
+	} {
+		got, err := EventbusConfig{RawEnable: tc.raw}.Enabled()
+		if tc.wantEr {
+			if err == nil || !strings.Contains(err.Error(), tc.raw) {
+				t.Fatalf("raw %q err = %v, want fail-closed 含原值", tc.raw, err)
+			}
+			continue
+		}
+		if err != nil || got != tc.want {
+			t.Fatalf("raw %q = (%v,%v), want (%v,nil)", tc.raw, got, err, tc.want)
+		}
+	}
+}
