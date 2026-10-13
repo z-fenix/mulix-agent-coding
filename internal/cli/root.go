@@ -19,13 +19,16 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
 	"mulix/internal/config"
 	"mulix/internal/engine"
+	"mulix/internal/eventbus"
 	"mulix/internal/memory"
 )
 
@@ -143,7 +146,33 @@ func NewRootCommand(opts Options) *cobra.Command {
 	root.AddCommand(newLintCommand(&opts))
 	root.AddCommand(newForkCommand(&opts))
 	root.AddCommand(newSearchCommand(&opts))
+	root.AddCommand(newEventsCommand(&opts))
 	return root
+}
+
+// newEventsCommand 是外部观察面(018 FR-103):读 endpoint 握手文件→订阅
+// mulix.mirror.* 实时打印(纯订阅零写入——镜像 1:1 审计面不受影响)。
+func newEventsCommand(opts *Options) *cobra.Command {
+	var workspace string
+	cmd := &cobra.Command{
+		Use:   "events",
+		Short: "订阅 mulix.mirror.* 实时打印(外部观察面;需 [eventbus] enable=true)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ws := opts.Workspace
+			if workspace != "" {
+				ws = workspace
+			}
+			raw, err := os.ReadFile(filepath.Join(ws, ".mulix", "bus", "endpoint"))
+			if err != nil {
+				return fmt.Errorf("events: 总线未启用(endpoint 缺席——会话侧需 [eventbus] enable=true): %w", err)
+			}
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			return eventbus.ObserveMirrors(ctx, strings.TrimSpace(string(raw)), os.Stdout)
+		},
+	}
+	cmd.Flags().StringVar(&workspace, "workspace", "", "工作区(缺省=当前目录)")
+	return cmd
 }
 
 func newRunCommand(opts *Options) *cobra.Command {

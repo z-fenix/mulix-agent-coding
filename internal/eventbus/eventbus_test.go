@@ -1,10 +1,14 @@
 package eventbus
 
 import (
+	"bytes"
+	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -306,5 +310,72 @@ func TestOpenBusEndpointHandshake(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("external subscriber got nothing")
+	}
+}
+
+// syncBuffer:回调 goroutine 写 out 与主 goroutine 轮询并发——mutex 化
+// (评审 Minor 修正:-race 不可用不等于无竞态)。
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
+}
+
+// TestObserveMirrors 钉 018 FR-103:观察面——订阅 mulix.mirror.* 实时收行;
+// ctx 取消干净退出;连接失败 fail-closed。
+func TestObserveMirrors(t *testing.T) {
+	dir := t.TempDir()
+	b, err := OpenBus(BusOptions{StoreDir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer b.Close()
+	raw, err := os.ReadFile(filepath.Join(dir, "endpoint"))
+	if err != nil {
+		t.Fatalf("endpoint: %v", err)
+	}
+
+	var out syncBuffer
+	ctx, stop := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- ObserveMirrors(ctx, strings.TrimSpace(string(raw)), &out) }()
+	time.Sleep(200 * time.Millisecond) // 订阅就绪
+	// subject 真身:声明 "mirror.turn_started" → Emit 加前缀 → mulix.mirror.turn_started。
+	if err := b.DeclareEvents("mirror.turn_started"); err != nil {
+		t.Fatalf("declare: %v", err)
+	}
+	if err := b.Publish("mirror.turn_started", []byte(`{"seq":1}`)); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && !strings.Contains(out.String(), "turn_started") {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !strings.Contains(out.String(), "turn_started") {
+		t.Fatalf("observe out = %q, want kind 行", out.String())
+	}
+	stop() // 干净退出
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("observe exit: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("observe did not exit after ctx cancel")
+	}
+	// 连接失败 fail-closed。
+	if err := ObserveMirrors(context.Background(), "nats://127.0.0.1:1", io.Discard); err == nil {
+		t.Fatal("bad url must fail-closed")
 	}
 }
