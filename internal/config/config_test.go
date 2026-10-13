@@ -555,3 +555,30 @@ func TestEventbusEnabled(t *testing.T) {
 		}
 	}
 }
+
+// TestEventbusGateLoadFailClosed 钉 018 FR-101(Load 级,终审 Minor 1):
+// [eventbus] enable 非法值经真实 TOML Load fail-closed(错误含原值);且
+// 校验先于 lastGood 赋值——失败的配置不得成为 last good(LastGood 为 nil)。
+func TestEventbusGateLoadFailClosed(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "mulix.toml")
+	os.WriteFile(cfgPath, []byte("[eventbus]\nenable = \"yes\"\n"), 0o644)
+	l := NewLoader()
+	_, _, err := l.Load(Flags{}, Paths{Project: cfgPath})
+	if err == nil || !strings.Contains(err.Error(), "yes") {
+		t.Fatalf("enable=yes err = %v, want fail-closed 含原值", err)
+	}
+	if l.LastGood() != nil {
+		t.Fatalf("LastGood = %+v, want nil(校验必须先于 lastGood 赋值——拒绝的配置不得成为 last good)", l.LastGood())
+	}
+	// 合法值经 Load 正常通过(引号串形态——自然布尔 true 会被 toml 解码器
+	// 拒绝,终审 Minor 2 路由文档明示)。
+	os.WriteFile(cfgPath, []byte("[eventbus]\nenable = \"true\"\n"), 0o644)
+	cfg, _, err := l.Load(Flags{}, Paths{Project: cfgPath})
+	if err != nil {
+		t.Fatalf("enable=true load: %v", err)
+	}
+	if on, err := cfg.Eventbus.Enabled(); err != nil || !on {
+		t.Fatalf("enabled = (%v,%v), want (true,nil)", on, err)
+	}
+}
