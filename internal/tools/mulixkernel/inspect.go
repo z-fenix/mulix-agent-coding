@@ -1,5 +1,5 @@
 // Package mulixkernel 提供 P5d 自指工具(kernel_inspect/cordis_run):
-// Agent 对运行时的只读巡检与 goja 沙箱执行。cordis_define/undefine/stop
+// Agent 对运行时的只读巡检与 goja 沙箱执行。define/undefine/stop 三工具
 // 不实现(016 FR-103 治理红线:Agent 不能修改自己的权限/工具面)。
 package mulixkernel
 

@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"mulix/internal/ptc"
 	"mulix/internal/registry"
 	"mulix/internal/sessionx"
+	"mulix/internal/tools/mulixkernel"
 	"mulix/internal/tools/mulixmemory"
 	"mulix/internal/tools/mulixsubagent"
 )
@@ -153,6 +155,21 @@ func ServeMCP(ctx context.Context, o Options) error {
 			30*time.Second,
 		))
 	}
+	// 自指工具(016 FR-101/102):standard profile 注册 kernel_inspect/
+	// cordis_run——在 ptc_execute 之后(kernel_inspect 的 ptc_registered 于
+	// Execute 时从注册面快照判定)、NewServer 冻结之前(015 终审 Critical
+	// 红线)。服务键经 MULIX_KERNEL_KEYS Boot env 桥;缺席=空(降级非阻断)。
+	var kernelKeys []string
+	if v := os.Getenv("MULIX_KERNEL_KEYS"); v != "" {
+		kernelKeys = strings.Split(v, ",")
+	}
+	mulixkernel.RegisterSelfRefTools(
+		cfg.Profile.Normalized() == config.ProfileStandard,
+		kernelKeys,
+		cfg.Profile.Normalized(),
+		func() map[string]registry.Tool { return registry.SnapshotToolMap() },
+		registry.Register,
+	)
 	// profile ToolFilter(014 FR-102):minimal 时 NewServer 过滤——
 	// serve 子进程是引擎的工具可见面(Compose 的 mcp-config 自 spawn 指向此处)。
 	srv := registry.NewServer(registry.Options{

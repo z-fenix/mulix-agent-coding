@@ -91,6 +91,11 @@ type Options struct {
 	Loop   agentloop.Loop
 	Source agentloop.EventSource
 
+	// KernelKeys 是前台内核根 Context 的服务键快照(016 FR-101):经 Boot
+	// env 桥 MULIX_KERNEL_KEYS 送达 serve 子进程的 kernel_inspect——服务键
+	// 真身在前台,引擎工具面在 serve(015 终审 Critical 同款进程拓扑)。
+	KernelKeys []string
+
 	// EventPublisher 是镜像→总线桥的发布面(P4b-2 012 FR-104;nil=桥关——
 	// 既有装配兼容)。实现=eventbus.Bus(kernel.EventPublisher)。
 	EventPublisher kernel.EventPublisher
@@ -332,6 +337,14 @@ func (c *Controller) start(ctx context.Context, boot engine.BootConfig) error {
 	// 条目（存在会消费它的 serve 子进程）时注入；value = 本会话镜像 id。
 	if c.opts.Memory != nil && c.hasMulixRegistryEntry() {
 		boot.Env = append(boot.Env, "MULIX_MEMORY_SESSION="+c.sessionID)
+	}
+
+	// 内核服务键桥(016 FR-101):MULIX_KERNEL_KEYS——Boot Env 通道,绝不入
+	// mcp-config(SC-003 字节稳定,与 MULIX_SUBAGENT_CALLBACK 同一裁定)。
+	// 仅注册面含 mulix 条目(存在消费它的 serve 子进程)时注入;缺席=降级
+	// 非阻断(kernel_inspect 返回空 services)。
+	if len(c.opts.KernelKeys) > 0 && c.hasMulixRegistryEntry() {
+		boot.Env = append(boot.Env, "MULIX_KERNEL_KEYS="+strings.Join(c.opts.KernelKeys, ","))
 	}
 
 	artifact, err := c.composeBoot(boot)

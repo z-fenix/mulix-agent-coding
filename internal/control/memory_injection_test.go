@@ -345,3 +345,48 @@ func TestMemorySessionEnvInjection(t *testing.T) {
 		})
 	}
 }
+
+// TestBootEnvKernelKeys 钉 016 FR-101 桥:MULIX_KERNEL_KEYS 仅在
+// KernelKeys 非空且注册面含 mulix 条目时注入(TestMemorySessionEnvInjection
+// 同款裁定:Boot Env 通道,绝不入 mcp-config;缺席=降级非阻断)。
+func TestBootEnvKernelKeys(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		keys       []string
+		wantEnvVar bool
+	}{
+		{name: "no keys = no env", keys: nil, wantEnvVar: false},
+		{name: "keys present = env injected", keys: []string{"profile", "registry"}, wantEnvVar: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := engine.NewFakeHost(engine.FakeScript{})
+			sink := &recordingSink{}
+			var boot engine.BootConfig
+			c := newTestControllerCapturingBoot(t, fake, sink, &boot, func(o *Options) {
+				o.KernelKeys = tc.keys
+				o.Registry = registry.NewServer(registry.Options{Name: "mulix", Version: "test",
+					SelfCommand: []string{"mulix.exe", "mcp", "serve"}})
+			})
+			if err := c.NewSession(context.Background()); err != nil {
+				t.Fatalf("new session: %v", err)
+			}
+			has := false
+			for _, e := range boot.Env {
+				if e == "MULIX_KERNEL_KEYS=profile,registry" {
+					has = true
+				}
+			}
+			if has != tc.wantEnvVar {
+				t.Fatalf("MULIX_KERNEL_KEYS in env = %v, want %v (env=%v)", has, tc.wantEnvVar, boot.Env)
+			}
+			// env 不入面:mcp-config 与有无内核键无关(SC-003 字节稳定)。
+			art, err := cache.Compose(mustDefaultConfig(), "w", c.opts.Registry)
+			if err != nil {
+				t.Fatalf("compose: %v", err)
+			}
+			if boot.MCPConfigJSON != art.MCPConfigJSON {
+				t.Fatalf("mcp-config must not carry kernel keys env:\nboot: %s\nbase: %s", boot.MCPConfigJSON, art.MCPConfigJSON)
+			}
+		})
+	}
+}

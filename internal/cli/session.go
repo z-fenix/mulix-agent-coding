@@ -333,6 +333,9 @@ func assembleKernelContext(o control.Options) (*kernel.Context, control.Options,
 	// 产出 host 后,controller 经小接口 interface{ Bind(engine.Host) error }
 	// 断言并 Bind(适配器)——seam-only 形态退役。
 	o.Source = adapter
+	// 服务键快照回填(016 FR-101):供 control 经 Boot env 桥 MULIX_KERNEL_KEYS
+	// 送达 serve 侧 kernel_inspect(Keys 读面——P5d T1;缺席=降级非阻断)。
+	o.KernelKeys = root.Keys()
 	return root, o, nil
 }
 
