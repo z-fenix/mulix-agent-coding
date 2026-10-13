@@ -257,9 +257,13 @@ func (o Options) assembleController(cfg config.Config, store *sessionx.Store, me
 	if kerr != nil {
 		return nil, nil, kerr
 	}
-	// 镜像→总线桥(012 FR-104;EnableEventBus 门控——默认关,测试零文件句柄):
+	// 镜像→总线桥(018 FR-102:单真源=cfg.Eventbus——CLI flag 退役):
 	// 进程级单例(按工作区键);openSession 失败=桥关闭(如实记录)。
-	if o.EnableEventBus {
+	eventbusOn, eberr := cfg.Eventbus.Enabled()
+	if eberr != nil {
+		return nil, nil, fmt.Errorf("eventbus: gate: %w", eberr)
+	}
+	if eventbusOn {
 		if bus := sharedEventBus(o); bus != nil {
 			if err := root.Provide("events", bus); err != nil {
 				return nil, nil, err
@@ -428,15 +432,14 @@ type assembleSessionSpec struct {
 	Root        string // sessions 根（子镜像与主会话同池）
 	UsageRoot   string // 记账根（子会话独立 usage 文件）
 	Workspace   string
-	// EnableEventBus 是镜像→总线桥的接线开关(012;默认关=测试零文件句柄)。
-	EnableEventBus bool
-	Cfg            config.Config
-	Approvals      *control.UserApprovalBridge // 继承父审批桥（nil = 无人值守 fail-closed）
-	Attended       bool                        // 父会话模式（子镜像 Unattended 标注跟随）
-	ParentID       string                      // 父会话 id（meta.parent_id）
-	SessionID      string                      // 派生 id（<parentID>-sub-<n>）
-	Task           string                      // 委派任务（子会话首回合输入）
-	Ctx            context.Context             // spawn ctx（Submit 等待与收口消费）
+	// 总线门控经 cfg.Eventbus(018——assembleSessionSpec 不再携带开关)。
+	Cfg       config.Config
+	Approvals *control.UserApprovalBridge // 继承父审批桥（nil = 无人值守 fail-closed）
+	Attended  bool                        // 父会话模式（子镜像 Unattended 标注跟随）
+	ParentID  string                      // 父会话 id（meta.parent_id）
+	SessionID string                      // 派生 id（<parentID>-sub-<n>）
+	Task      string                      // 委派任务（子会话首回合输入）
+	Ctx       context.Context             // spawn ctx（Submit 等待与收口消费）
 }
 
 // assembleSession 组装一个子代理子会话（与 buildComponents 同一组装核——

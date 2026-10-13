@@ -34,13 +34,13 @@ const Version = "0.1.0-dev"
 
 // Options 是命令装配参数（测试注入 IO/路径/钩子；生产零值走默认）。
 type Options struct {
-	Stdin          io.Reader // 测试注入；nil = os.Stdin
-	Stdout         io.Writer // 测试注入；nil = os.Stdout
-	Stderr         io.Writer // 测试注入；nil = os.Stderr
-	Workspace      string    // 工作区（默认 cwd）
-	EnableEventBus bool      // 镜像→总线桥接线开关（012;默认关=测试零文件句柄）
-	SessionsRoot   string    // 会话镜像根（默认 ~/.mulix/sessions）
-	UsageRoot      string    // 记账根（默认 ~/.mulix）
+	Stdin     io.Reader // 测试注入；nil = os.Stdin
+	Stdout    io.Writer // 测试注入；nil = os.Stdout
+	Stderr    io.Writer // 测试注入；nil = os.Stderr
+	Workspace string    // 工作区（默认 cwd）
+	// 镜像→总线桥接线门控经 [eventbus] 配置(018 FR-102 单真源——CLI flag 已退役)。
+	SessionsRoot string // 会话镜像根（默认 ~/.mulix/sessions）
+	UsageRoot    string // 记账根（默认 ~/.mulix）
 
 	// HostFactory 注入引擎宿主（测试=FakeHost；nil = 生产 ClaudeHost）。
 	HostFactory func(boot engine.BootConfig) (engine.Host, error)

@@ -103,6 +103,14 @@ func TestProfileServiceKey(t *testing.T) {
 	}
 }
 
+// withEventbusEnabled 返回开总线门控的配置副本(018:T2 起 flag 退役——
+// 单真源=cfg.Eventbus;testConfig 定义在 tui_test.go 343 行,同包直用)。
+func withEventbusEnabled() *config.Config {
+	cfg := testConfig()
+	cfg.Eventbus.RawEnable = "true"
+	return cfg
+}
+
 // TestKernelKeysIncludeEventsKey 钉 016 终审 Important:events 键注册于
 // assembleKernelContext 返回之后(总线开启时)——KernelKeys 快照必须取自
 // 装配末尾,否则 kernel_inspect.services 在总线会话确定性静默缺键。
@@ -116,7 +124,7 @@ func TestKernelKeysIncludeEventsKey(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(ws) })
 	opts := Options{Workspace: ws, SessionsRoot: ws, UsageRoot: ws,
-		Config: testConfig(), EnableEventBus: true,
+		Config: withEventbusEnabled(),
 		HostFactory: func(bc engine.BootConfig) (engine.Host, error) {
 			boot = bc
 			script, ferr := engine.FixtureScript("../../fixtures/engine/happy-turn.jsonl")
