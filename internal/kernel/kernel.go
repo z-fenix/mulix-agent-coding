@@ -14,6 +14,7 @@ package kernel
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 )
 
@@ -67,6 +68,34 @@ func (c *Context) Service(name string) (any, bool) {
 		return c.parent.Service(name)
 	}
 	return nil, false
+}
+
+// Keys 返回已注册服务键的只读快照:沿自身→祖先链收集,同键去重(子遮蔽
+// 父,与 Service 查找语义一致),排序返回。巡检读面(016 FR-101 前置)——
+// 仅读,不扩写面(治理红线:自指工具不得修改运行时)。
+func (c *Context) Keys() []string {
+	c.mu.Lock()
+	keys := make([]string, 0, len(c.services))
+	for name := range c.services {
+		keys = append(keys, name)
+	}
+	c.mu.Unlock()
+	if c.parent != nil {
+		for _, k := range c.parent.Keys() {
+			dup := false
+			for _, have := range keys {
+				if have == k {
+					dup = true
+					break
+				}
+			}
+			if !dup {
+				keys = append(keys, k)
+			}
+		}
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // OnDispose 注册清理函数（LIFO：后注册先执行）。

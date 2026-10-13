@@ -368,3 +368,38 @@ func TestMountAllDuplicateServiceKey(t *testing.T) {
 		t.Fatalf("duplicate key err = %v, want duplicate ServiceKey", err)
 	}
 }
+
+// TestContextKeys 钉 016 FR-101 前置:Keys 读面——链上收集、子遮蔽父去重、
+// 排序返回(巡检语义:子作用域覆盖语义与 Service 一致)。
+func TestContextKeys(t *testing.T) {
+	root := NewContext(nil)
+	if err := root.Provide("sink", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := root.Provide("meter", 2); err != nil {
+		t.Fatal(err)
+	}
+	child := NewContext(root)
+	if err := child.Provide("sink", 3); err != nil { // 遮蔽父同名键
+		t.Fatal(err)
+	}
+	if err := child.Provide("gate", 4); err != nil {
+		t.Fatal(err)
+	}
+
+	// 根:仅自身键,排序。
+	got := root.Keys()
+	if len(got) != 2 || got[0] != "meter" || got[1] != "sink" {
+		t.Fatalf("root.Keys() = %v, want [meter sink]", got)
+	}
+	// 子:链上收集,同键去重(3 键,不是 4)。
+	got = child.Keys()
+	if len(got) != 3 || got[0] != "gate" || got[1] != "meter" || got[2] != "sink" {
+		t.Fatalf("child.Keys() = %v, want [gate meter sink]", got)
+	}
+	// 空作用域:空切片非 nil。
+	empty := NewContext(nil)
+	if ks := empty.Keys(); ks == nil || len(ks) != 0 {
+		t.Fatalf("empty.Keys() = %v, want empty non-nil", ks)
+	}
+}
