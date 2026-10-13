@@ -67,6 +67,8 @@ var layerMatrix = map[string][]string{
 	"internal/tools/mulixsubagent":   {"internal/registry"},
 	"internal/tools/mulixmemory":     {"internal/memory", "internal/registry"},
 	"internal/tools/mulixusage":      {"internal/cache", "internal/registry"},
+	// P5d 自指工具(016):kernel 键经 []string 注入——不 import kernel。
+	"internal/tools/mulixkernel": {"internal/config", "internal/ptc", "internal/registry"},
 }
 
 // refRule 是一条引用扫描规则：marker 字面量超出 allowlist 文件 → 违规
