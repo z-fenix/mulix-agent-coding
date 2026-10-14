@@ -215,11 +215,11 @@ func NewController(opts Options) (*Controller, error) {
 	}
 	loopAny, ok := opts.Kernel.Service("agentloop")
 	if !ok {
-		return nil, fmt.Errorf("control: kernel 服务键缺失: agentloop")
+		return nil, fmt.Errorf("control: kernel service key missing: agentloop")
 	}
 	loop, ok := loopAny.(agentloop.Loop)
 	if !ok {
-		return nil, fmt.Errorf("control: kernel 服务键类型不符: agentloop (want agentloop.Loop)")
+		return nil, fmt.Errorf("control: kernel service key type mismatch: agentloop (got %T, want agentloop.Loop)", loopAny)
 	}
 	sessionID := ""
 	if meta, err := opts.Store.ReadMeta(); err == nil {

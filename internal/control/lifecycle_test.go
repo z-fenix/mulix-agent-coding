@@ -502,7 +502,7 @@ func TestNewControllerRequiresKernelLoop(t *testing.T) {
 	// ② ctx 缺 agentloop 键。
 	o := base()
 	o.Kernel = kernel.NewContext(nil)
-	if _, err := NewController(o); err == nil || !strings.Contains(err.Error(), "服务键缺失") {
+	if _, err := NewController(o); err == nil || !strings.Contains(err.Error(), "service key missing") {
 		t.Fatalf("missing key err = %v", err)
 	}
 	// ③ 键值类型不符。
@@ -510,7 +510,8 @@ func TestNewControllerRequiresKernelLoop(t *testing.T) {
 	if err := o.Kernel.Provide("agentloop", "not-a-loop"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewController(o); err == nil || !strings.Contains(err.Error(), "类型不符") {
+	if _, err := NewController(o); err == nil || !strings.Contains(err.Error(), "type mismatch") ||
+		!strings.Contains(err.Error(), "got string") {
 		t.Fatalf("wrong type err = %v", err)
 	}
 	// ④ 正确键 → 组装成功。
