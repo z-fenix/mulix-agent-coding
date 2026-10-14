@@ -21,7 +21,6 @@ func TestStaleEndpointRemovedWhenGateOff(t *testing.T) {
 	}
 	// 门控关会话(cfg 无 [eventbus])——经 assembleController 不可轻启,
 	// 残留清理落 sharedEventBus 邻位:直调形态以 openSession 同函数核验。
-	// 实现者以最小可达锚核验(见 Step 3 注)。
 	h := mustOpenSession(t, Options{Workspace: ws, SessionsRoot: ws, UsageRoot: ws,
 		Config: testConfig(), HostFactory: fakeHostFactory(t)}, "", nil)
 	h.close() // close() 无返回值(session.go:616)——语句式调用(评审 Minor 1)

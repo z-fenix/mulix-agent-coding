@@ -165,4 +165,7 @@ func TestParseKernelKeys(t *testing.T) {
 	if got := ParseKernelKeys("profile"); len(got) != 1 || got[0] != "profile" {
 		t.Fatalf("ParseKernelKeys single = %v, want [profile]", got)
 	}
+	if got := ParseKernelKeys("a, ,b"); len(got) != 2 || got[0] != "a" || got[1] != "b" {
+		t.Fatalf("ParseKernelKeys inner-blank = %v, want [a b]", got)
+	}
 }

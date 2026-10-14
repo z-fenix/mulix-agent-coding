@@ -360,6 +360,8 @@ func TestBootEnvKernelKeys(t *testing.T) {
 		{name: "keys present = env injected", keys: []string{"profile", "registry"}, wantEnvVar: true},
 		// 017 FR-102:第二合取项单独否决路径——keys 非空但注册面无 mulix
 		// 条目(无 serve 消费者)→ env 不注入(hasMulixRegistryEntry 门控钉)。
+		// 注:本分支 Name:"other" 不承载语义——真机制=缺 SelfCommand→
+		// MCPServers 空面;Name 比对路径未执行(017 Final 裁定)。
 		{name: "keys but no mulix entry = no env", keys: []string{"profile"}, wantEnvVar: false, noMulixEntry: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

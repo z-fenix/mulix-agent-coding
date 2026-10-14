@@ -259,7 +259,8 @@ func (o Options) assembleController(cfg config.Config, store *sessionx.Store, me
 		return nil, nil, kerr
 	}
 	// 镜像→总线桥(018 FR-102:单真源=cfg.Eventbus——CLI flag 退役):
-	// 进程级单例(按工作区键);openSession 失败=桥关闭(如实记录)。
+	// 进程级单例(按工作区键);桥不可用不阻断会话——sharedEventBus 仅前台
+	// 运行,stdout 是用户可见面而非 MCP 传输(019 Final 裁定)。
 	eventbusOn, eberr := cfg.Eventbus.Enabled()
 	if eberr != nil {
 		return nil, nil, fmt.Errorf("eventbus: gate: %w", eberr)
