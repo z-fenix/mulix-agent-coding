@@ -89,6 +89,7 @@ func newTestController(t *testing.T, host engine.Host, sink Sink) *Controller {
 		Gate:        gate,
 		Config:      mustDefaultConfig(),
 		Workspace:   "w",
+		Kernel:      kernelCtxWithLoop(), // 021 FR-102:loop 权威 ctx(测试注入缝)
 	})
 	if err != nil {
 		t.Fatalf("new controller: %v", err)
@@ -152,6 +153,7 @@ func newTestControllerWithPolicyRules(t *testing.T, host engine.Host, sink Sink,
 		HostFactory: func(engine.BootConfig) (engine.Host, error) { return host, nil },
 		Sink:        sink, Store: store, Meter: meter, Gate: gate,
 		Config: mustDefaultConfig(), Workspace: "w",
+		Kernel: kernelCtxWithLoop(), // 021 FR-102:loop 权威 ctx(测试注入缝)
 	})
 	if err != nil {
 		t.Fatalf("new controller: %v", err)
@@ -195,6 +197,7 @@ func newTestControllerAttended(t *testing.T, host engine.Host, sink Sink, timeou
 		HostFactory: func(engine.BootConfig) (engine.Host, error) { return host, nil },
 		Sink:        sink, Store: store, Meter: meter, Gate: gate,
 		Config: mustDefaultConfig(), Workspace: "w", Approvals: bridge,
+		Kernel: kernelCtxWithLoop(), // 021 FR-102:loop 权威 ctx(测试注入缝)
 	})
 	if err != nil {
 		t.Fatalf("new controller: %v", err)
@@ -480,6 +483,7 @@ func TestNewSessionHostFactoryError(t *testing.T) {
 		Meter:  meter,
 		Gate:   gate,
 		Config: mustDefaultConfig(),
+		Kernel: kernelCtxWithLoop(), // 021 FR-102:loop 权威 ctx(测试注入缝)
 	})
 	if err != nil {
 		t.Fatal(err)

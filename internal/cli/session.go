@@ -347,6 +347,10 @@ func assembleKernelContext(o control.Options) (*kernel.Context, control.Options,
 	// 产出 host 后,controller 经小接口 interface{ Bind(engine.Host) error }
 	// 断言并 Bind(适配器)——seam-only 形态退役。
 	o.Source = adapter
+	// loop 权威 ctx 回填（021 FR-102）：control 装配期经此解析 "agentloop"
+	// 服务键（键即契约，缺键/类型不符 fail-closed）——主会话与子会话各自经
+	// 本函数装配，单点回填两路覆盖（非 Options 副本传递）。
+	o.Kernel = root
 	return root, o, nil
 }
 

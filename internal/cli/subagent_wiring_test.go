@@ -15,17 +15,29 @@ import (
 
 	"charm.land/bubbletea/v2"
 
+	"mulix/internal/agentloop"
 	"mulix/internal/cache"
 	"mulix/internal/control"
 	"mulix/internal/engine"
 	"mulix/internal/event"
 	"mulix/internal/guard"
+	"mulix/internal/kernel"
 	"mulix/internal/registry"
 	"mulix/internal/sessionx"
 	"mulix/internal/subagent"
 )
 
 // ---- M12/T12.4 组装接线测试基建 ----
+
+// kernelCtxWithLoop 返回挂载 loop 插件的最小根 ctx（021 FR-102 测试注入缝；
+// 形态同 control 测试面同名 helper——cli 包无共享测试基建，各自最小实现）。
+func kernelCtxWithLoop() *kernel.Context {
+	root := kernel.NewContext(nil)
+	if err := root.Mount(agentloop.NewPlugin()); err != nil {
+		panic(err)
+	}
+	return root
+}
 
 // callTool 经全局注册面按名直调工具（serve 子进程的进程内替身）：工具
 // Execute → POST MULIX_SUBAGENT_CALLBACK → 前台回调桥——与真实
@@ -487,6 +499,7 @@ func TestSubagentDisabledWhenFactoryNil(t *testing.T) {
 				Sink: discardSink{}, Store: store, Meter: meter, Gate: gate,
 				Config: *testConfig(), Workspace: "w", Registry: reg,
 				SubagentFactory: tc.factory,
+				Kernel:          kernelCtxWithLoop(), // 021 FR-102:loop 权威 ctx(测试注入缝)
 			})
 			if err != nil {
 				t.Fatalf("controller: %v", err)

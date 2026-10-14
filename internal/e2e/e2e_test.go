@@ -11,12 +11,14 @@ import (
 	"testing"
 	"time"
 
+	"mulix/internal/agentloop"
 	"mulix/internal/cache"
 	"mulix/internal/config"
 	"mulix/internal/control"
 	"mulix/internal/engine"
 	"mulix/internal/event"
 	"mulix/internal/guard"
+	"mulix/internal/kernel"
 	"mulix/internal/registry"
 	"mulix/internal/sessionx"
 )
@@ -33,6 +35,16 @@ type allowApprover struct{}
 
 func (allowApprover) ApproveRequest(context.Context, guard.ApprovalRequest) (guard.ApprovalVerdict, error) {
 	return guard.ApprovalVerdict{Allow: true, ResolvedBy: "e2e-allow"}, nil
+}
+
+// kernelCtxWithLoop 返回挂载 loop 插件的最小根 ctx（021 FR-102 测试注入缝；
+// 形态同 control/cli 测试面同名 helper——包间无共享测试基建，各自最小实现）。
+func kernelCtxWithLoop() *kernel.Context {
+	root := kernel.NewContext(nil)
+	if err := root.Mount(agentloop.NewPlugin()); err != nil {
+		panic(err)
+	}
+	return root
 }
 
 type env struct {
@@ -121,6 +133,7 @@ func newEnv(t *testing.T, o envOpts) *env {
 		Gate: gate, Approvals: e.bridge,
 		Config: *cfg, Workspace: "w", Unattended: !o.attended,
 		Registry: registry.NewServer(registry.Options{Name: "mulix", Version: "0.1.0-dev"}),
+		Kernel:   kernelCtxWithLoop(), // 021 FR-102:loop 权威 ctx(测试注入缝)
 	})
 	if err != nil {
 		t.Fatalf("controller: %v", err)
@@ -325,6 +338,7 @@ func TestE2ECrashRecoveryResume(t *testing.T) {
 	ctrl, err := control.NewController(control.Options{
 		HostFactory: func(engine.BootConfig) (engine.Host, error) { return engine.NewFakeHost(fixture), nil },
 		Sink:        sink, Store: store, Meter: meter, Gate: gate, Config: *cfg, Workspace: "w",
+		Kernel: kernelCtxWithLoop(), // 021 FR-102:loop 权威 ctx(测试注入缝)
 	})
 	if err != nil {
 		t.Fatalf("controller: %v", err)

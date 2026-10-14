@@ -10,10 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"mulix/internal/agentloop"
 	"mulix/internal/cache"
 	"mulix/internal/engine"
 	"mulix/internal/event"
 	"mulix/internal/guard"
+	"mulix/internal/kernel"
 	"mulix/internal/registry"
 	"mulix/internal/sessionx"
 )
@@ -55,6 +57,7 @@ func newTestControllerCapturingBoot(t *testing.T, host engine.Host, sink Sink, b
 		},
 		Sink: sink, Store: store, Meter: meter, Gate: gate,
 		Config: mustDefaultConfig(), Workspace: "w",
+		Kernel: kernelCtxWithLoop(), // 021 FR-102:loop 权威 ctx(测试注入缝)
 	}
 	for _, f := range opts {
 		f(&cOpts)
@@ -452,4 +455,67 @@ func (f *closingHostStub) Start(context.Context, engine.BootConfig) error {
 func (f *closingHostStub) Close(context.Context) error {
 	f.closed = true
 	return nil
+}
+
+// kernelCtxWithLoop 返回挂载 loop 插件的最小根 ctx(021 测试注入缝)。
+func kernelCtxWithLoop() *kernel.Context {
+	root := kernel.NewContext(nil)
+	if err := root.Mount(agentloop.NewPlugin()); err != nil {
+		panic(err)
+	}
+	return root
+}
+
+// TestNewControllerRequiresKernelLoop 钉 021 FR-102:缺 Kernel/缺键/类型
+// 不符三态 fail-closed(键即契约——缺 loop 的 controller 不该存在)。
+func TestNewControllerRequiresKernelLoop(t *testing.T) {
+	base := func() Options {
+		root := t.TempDir()
+		store, err := sessionx.Create(root, sessionx.Options{
+			ID: "s-loop-test", Workspace: "w", Model: "m", PinnedModel: "m",
+		})
+		if err != nil {
+			t.Fatalf("create store: %v", err)
+		}
+		t.Cleanup(func() { store.Close() })
+		policy, err := guard.NewPolicy(guard.PresetDefault, nil)
+		if err != nil {
+			t.Fatalf("new policy: %v", err)
+		}
+		gate, err := guard.NewGate(guard.GateOptions{Policy: policy})
+		if err != nil {
+			t.Fatalf("new gate: %v", err)
+		}
+		return Options{
+			HostFactory: func(boot engine.BootConfig) (engine.Host, error) {
+				return engine.NewFakeHost(engine.FakeScript{}), nil
+			},
+			Sink: &recordingSink{}, Store: store,
+			Meter: &cache.Meter{},
+			Gate:  gate,
+		}
+	}
+	// ① Kernel nil。
+	if _, err := NewController(base()); err == nil || !strings.Contains(err.Error(), "kernel context") {
+		t.Fatalf("nil kernel err = %v", err)
+	}
+	// ② ctx 缺 agentloop 键。
+	o := base()
+	o.Kernel = kernel.NewContext(nil)
+	if _, err := NewController(o); err == nil || !strings.Contains(err.Error(), "服务键缺失") {
+		t.Fatalf("missing key err = %v", err)
+	}
+	// ③ 键值类型不符。
+	o.Kernel = kernel.NewContext(nil)
+	if err := o.Kernel.Provide("agentloop", "not-a-loop"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewController(o); err == nil || !strings.Contains(err.Error(), "类型不符") {
+		t.Fatalf("wrong type err = %v", err)
+	}
+	// ④ 正确键 → 组装成功。
+	o.Kernel = kernelCtxWithLoop()
+	if _, err := NewController(o); err != nil {
+		t.Fatalf("valid ctx err = %v", err)
+	}
 }

@@ -85,11 +85,13 @@ type Options struct {
 	// --allow-engine-drift / 用户配置。放行时引擎留痕 engine_drift trace）。
 	AllowEngineDrift bool
 
-	// Loop 是回合循环(P4b-2,012 FR-102;nil=Default——既有装配兼容)。
 	// Source 是事件源(llm.Provider/测试形态 hostAsSource——012 裁定 A:
 	// agent loop 消费 ctx.llm);nil 时泵以 host 直连(兼容面)。
-	Loop   agentloop.Loop
 	Source agentloop.EventSource
+
+	// Kernel 是根 Context(021 FR-102):loop 的权威真源——NewController
+	// 装配期解析 "agentloop" 键(键即契约,缺键/类型不符 fail-closed)。
+	Kernel *kernel.Context
 
 	// KernelKeys 是前台内核根 Context 的服务键快照(016 FR-101):经 Boot
 	// env 桥 MULIX_KERNEL_KEYS 送达 serve 子进程的 kernel_inspect——服务键
@@ -150,6 +152,11 @@ type SubagentLimits struct {
 type Controller struct {
 	opts Options
 
+	// loop 是回合循环（021 FR-102：kernel 权威解析产物——装配期从
+	// Options.Kernel 的 "agentloop" 服务键解析，非 nil 不变量由 NewController
+	// fail-closed 保证；泵不再兜底 Default）。
+	loop agentloop.Loop
+
 	mu             sync.Mutex
 	host           engine.Host
 	evPub          kernel.EventPublisher // 镜像→总线桥(nil=关)
@@ -200,12 +207,27 @@ func NewController(opts Options) (*Controller, error) {
 		opts.Meter == nil || opts.Gate == nil {
 		return nil, fmt.Errorf("control: options require hostfactory, sink, store, meter, gate")
 	}
+	// Kernel 是 loop 的权威真源（021 FR-102/103）：装配期解析 "agentloop"
+	// 服务键——键即契约，缺 ctx/缺键/类型不符一律 fail-closed 拒绝构造
+	//（nil→Default 兜底退役；既有装配经 cli assembleKernelContext 回填迁移）。
+	if opts.Kernel == nil {
+		return nil, fmt.Errorf("control: kernel context required (021 FR-102: loop 权威真源)")
+	}
+	loopAny, ok := opts.Kernel.Service("agentloop")
+	if !ok {
+		return nil, fmt.Errorf("control: kernel 服务键缺失: agentloop")
+	}
+	loop, ok := loopAny.(agentloop.Loop)
+	if !ok {
+		return nil, fmt.Errorf("control: kernel 服务键类型不符: agentloop (want agentloop.Loop)")
+	}
 	sessionID := ""
 	if meta, err := opts.Store.ReadMeta(); err == nil {
 		sessionID, _ = meta["id"].(string)
 	}
 	c := &Controller{
 		opts:      opts,
+		loop:      loop,
 		evPub:     opts.EventPublisher,
 		sessionID: sessionID,
 		turnDones: map[int64]chan struct{}{},
@@ -1115,10 +1137,7 @@ func (c *Controller) pump(host engine.Host) {
 	if c.opts.Source != nil {
 		src = c.opts.Source
 	}
-	loop := c.opts.Loop
-	if loop == nil {
-		loop = agentloop.Default{}
-	}
+	loop := c.loop // kernel 权威解析产物（021 FR-102；装配期 fail-closed 保证非 nil）
 	_ = loop.Run(context.Background(), src, controllerCallbacks{c})
 	// 引擎事件流关闭（Close/崩溃）且未见显式 exit：活跃回合 error 收口 +
 	// 终止留痕（合成 reason=engine_closed；显式 KindExit 已在 onExit 处理）。
