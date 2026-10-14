@@ -9,6 +9,7 @@ import (
 	"context"
 
 	"mulix/internal/engine"
+	"mulix/internal/kernel"
 )
 
 // EventSource 是事件源最小接口(llm.Provider 满足——012 裁定 A:
@@ -91,4 +92,21 @@ func Replay(ctx context.Context, events []engine.Event, cb Callbacks) error {
 		dispatch(EventSource(nil), cb, ev)
 	}
 	return nil
+}
+
+// Plugin 是内建 loop 的插件壳(021 FR-101):「loop 本身是插件」——内建
+// Default 也经 kernel 插件路径挂载,未来任何 loop 实现 kernel.Plugin
+// (Mount 提供 "agentloop" 键)即替换。
+type Plugin struct{}
+
+// NewPlugin 创建内建 loop 插件。
+func NewPlugin() Plugin { return Plugin{} }
+
+// Name 实现 kernel.Plugin。
+func (Plugin) Name() string { return "agentloop" }
+
+// Mount 实现 kernel.Plugin:提供 "agentloop" 服务键(值=Loop 接口;指针
+// 形态——kernel_assembly_test 既有断言 v.(*agentloop.Default),评审 Critical 3)。
+func (Plugin) Mount(c *kernel.Context) error {
+	return c.Provide("agentloop", Loop(&Default{}))
 }

@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"mulix/internal/engine"
+
+	"mulix/internal/kernel"
 )
 
 // fakeSource/记录回调——泵语义逐字节对齐的判定面。
@@ -109,5 +111,35 @@ func TestReplayRoutesMirrorEvents(t *testing.T) {
 	}
 	if cb.closed {
 		t.Fatal("replay must not fire OnEngineClosed (只读重放)")
+	}
+}
+
+// TestPluginMount 钉 021 FR-101:loop 插件形态——Mount 提供键/取回 Loop
+// 接口/同键回滚沿 kernel 语义。
+func TestPluginMount(t *testing.T) {
+	root := kernel.NewContext(nil)
+	if err := root.Mount(NewPlugin()); err != nil {
+		t.Fatalf("mount: %v", err)
+	}
+	keys := root.Keys()
+	found := false
+	for _, k := range keys {
+		if k == "agentloop" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("keys = %v, want agentloop", keys)
+	}
+	svc, ok := root.Service("agentloop")
+	if !ok {
+		t.Fatal("service agentloop missing")
+	}
+	if _, ok := svc.(Loop); !ok {
+		t.Fatalf("service type %T, want Loop", svc)
+	}
+	// 同键已注册→Mount 失败回滚(fail-closed 键即契约)。
+	if err := root.Mount(NewPlugin()); err == nil {
+		t.Fatal("duplicate mount must fail-closed")
 	}
 }

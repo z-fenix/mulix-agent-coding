@@ -333,8 +333,8 @@ func assembleKernelContext(o control.Options) (*kernel.Context, control.Options,
 	if err := root.Provide("profile", o.Config.Profile.Normalized()); err != nil {
 		return nil, control.Options{}, err
 	}
-	if err := root.Provide("agentloop", &agentloop.Default{}); err != nil {
-		return nil, control.Options{}, err
+	if err := root.Mount(agentloop.NewPlugin()); err != nil {
+		return nil, control.Options{}, fmt.Errorf("assemble: %w", err)
 	}
 	// llm 键:seam-only 适配器(011 裁定 b);012 接线:适配器即
 	// agentloop.EventSource——P4b-2 起 controller 消费。
