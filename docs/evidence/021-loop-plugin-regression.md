@@ -3,6 +3,8 @@
 - change: 021-p6-loop-plugin-kernel-authority
 - date: 2026-10-14
 - 环境: Windows 11 / Go 1.27 / trunk master（T1=f2802fa，T2=21b91e4）
+- 基线: 8dc3737（021 变更 diff 起点；020 收官提交）
+- 注:负向四钉表 ②③ 期望文案（服务键缺失/类型不符）已于 022 T1 英文化，本表为 21b91e4 时点记录。
 - 说明: `-race` 因 CGO_ENABLED=0 不可用，如实记录（FR-108 惯例）
 
 ## 1. 门禁命令与结果

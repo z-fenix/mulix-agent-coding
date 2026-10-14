@@ -12,7 +12,7 @@ mulix 是一个 Go 实现的 coding agent 宿主，对齐 DeepSeek Harness（dsh
 
 产品公式：Model + Harness = Agent（Model 经引擎适配器接入，引擎为可替换插件）。
 
-当前阶段：P4a 内核升级（change 010，进行中）。 历史分期与产品裁定见 AGENTS.md §历史阶段 与 .mulix/memory/history.md。
+当前阶段：P1→P6 主弧线收官——021 loop 插件化 kernel 权威解析已归档（2026-10-14）；无 active change，下一变更范围待用户裁定。
 
 ## 2. 关键红线（CRITICAL）
 
@@ -22,7 +22,7 @@ mulix 是一个 Go 实现的 coding agent 宿主，对齐 DeepSeek Harness（dsh
 
 fail-closed：非法 JSON / 流损坏 / 未知治理形态 / 无人值守 ask → 一律拒绝收口，不静默。
 
-kernel 不落盘：事件总线（010 后）为内存订阅层；镜像 events.jsonl 是唯一持久真相源。
+事件总线（010）= 内嵌 NATS（JetStream 持久化，经批准的首个第三方依赖）；镜像 events.jsonl 仍为 1:1 审计面（先镜像后总线）。
 
 双层注册：插件注册 effect 可逆；引擎可见清单回合开始冻结快照（P4b 落地）。
 
@@ -82,7 +82,7 @@ make lint                   # golangci-lint（本机工具链不匹配，不可�
 make cross                  # 三平台交叉编译
 ```
 
-环境限制：Go 1.27；零第三方运行时依赖（治理红线）；golangci-lint 因工具链不匹配在本机不可用——以 go vet ./... + gofmt -l 兜底；-race 因 CGO_ENABLED=0 不可用，如实记录。
+环境限制：Go 1.27；第三方依赖：NATS（nats-server/nats.go，010 裁定批准）为唯一例外，其余零第三方；golangci-lint 因工具链不匹配在本机不可用——以 go vet ./... + gofmt -l 兜底；-race 因 CGO_ENABLED=0 不可用，如实记录。
 
 引擎治理
 
@@ -151,7 +151,3 @@ TDD：先写失败测试并亲眼看它失败（编译期 RED 须在台账记 Ru
 | 终审员（final reviewer，独立 subagent，最强模型） | 全分支对照 spec 的正确性审查；按 effect 分级；Declined-to-judge 清单逐条交回 executor | 只读；不重审已由覆盖测试回答的项；Minor 不进修复轮 |
 | 修复者（fix executor） | 终审 Critical/Important 的一轮修复（每项 RED→GREEN+全量） | Minor 不进修复轮；无失败测试的修复不算修复 |
 | 归档决策（用户） | archive_confirmation（A=归档+push / B=仅归档 / C=保持） | guard 拦截即补正，不 --force |
-
-## 附：历史阶段（指针）
-
-历史分期、归档记录与产品裁定（2026-10-11）的原文，见 AGENTS.md §历史阶段 与 .mulix/memory/history.md。产品裁定不可凭记忆转述，须读原文。
