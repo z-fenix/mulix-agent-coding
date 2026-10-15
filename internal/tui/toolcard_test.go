@@ -31,7 +31,7 @@ func TestToolCardLifecycle(t *testing.T) {
 		t.Fatalf("running card: state=%d arg=%q", card.state, card.arg)
 	}
 	head := card.render(80)[0]
-	for _, want := range []string{"\x1b[36m⏺\x1b[0m", "\x1b[1m运行\x1b[0m", "npm test", "运行中"} {
+	for _, want := range []string{"\x1b[38;5;173m⏺\x1b[0m", "\x1b[1m运行\x1b[0m", "npm test", "运行中"} { // T18：accent 槽
 		if !strings.Contains(head, want) {
 			t.Fatalf("running header %q missing %q", head, want)
 		}
@@ -86,8 +86,8 @@ func TestToolCardFailure(t *testing.T) {
 			t.Fatalf("failure card %q missing %q", rendered, want)
 		}
 	}
-	if !strings.Contains(rendered, "\x1b[31m") {
-		t.Fatal("failure card must be red (SGR 31)")
+	if !strings.Contains(rendered, "\x1b[38;5;167m") {
+		t.Fatal("failure card must take the red slot (SGR 38;5;167)")
 	}
 }
 

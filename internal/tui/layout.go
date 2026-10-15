@@ -79,15 +79,24 @@ func (m *tuiModel) frame() string {
 // scrollbarView 末列滚动条的静态呈现（023 D5；拖拽随 Task 21）：无溢出给
 // 空白列；溢出时 thumb=█（随 offset 移动）/track=│。行数与视口一致，经
 // JoinHorizontal 拼在内容右列（对照参考 transcript.go:429-455 renderTranscript
-// 的滚动条列——参考经 theme 着色，配色随 Task 18 主题系统接入）。
+// 的滚动条列——参考经 theme 着色，T18 接入主题槽：thumb=accent / track=dim，
+// 对照参考 scrollThumbStyle/scrollTrackStyle）。
 func (m *tuiModel) scrollbarView() string {
 	h := m.transcriptState.vp.Height()
 	total := len(m.transcriptState.wrappedLines)
 	yoff := m.transcriptState.vp.YOffset()
 	thumbStart, thumbSize := scrollbarThumb(h, yoff, total)
+	thumb, track := activeTheme.accent("█"), activeTheme.dim("│")
 	cells := make([]string, h)
 	for r := range cells {
-		cells[r] = scrollbarCell(r, total, h, thumbStart, thumbSize)
+		switch scrollbarCell(r, total, h, thumbStart, thumbSize) {
+		case "█":
+			cells[r] = thumb
+		case "│":
+			cells[r] = track
+		default:
+			cells[r] = " "
+		}
 	}
 	return strings.Join(cells, "\n")
 }

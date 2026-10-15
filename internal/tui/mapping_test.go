@@ -101,7 +101,7 @@ func TestEventRenderMatrix(t *testing.T) {
 			events: []any{
 				event.AssistantThinkingEvent{Seq: 1, Turn: 1, Thinking: "推理进行中", EstimatedTokens: 7},
 			},
-			wantBlocks: []string{"推理进行中", "\x1b[2m"},
+			wantBlocks: []string{"推理进行中", "\x1b[38;5;245m"}, // T18：dim 槽（graphite 暗 245）
 			wantAbsent: []string{"7 tok"},
 			wantState: func(t *testing.T, m *tuiModel) {
 				if m.thinkingIdx != 0 {
@@ -120,7 +120,7 @@ func TestEventRenderMatrix(t *testing.T) {
 				event.ToolUseRequestedEvent{Seq: 1, Turn: 1, ToolUseID: "tu-a", Tool: "Bash",
 					Input: json.RawMessage(`{"command":"go test ./..."}`)},
 			},
-			wantBlocks: []string{"\x1b[36m⏺\x1b[0m", "go test ./...", "运行中"},
+			wantBlocks: []string{"\x1b[38;5;173m⏺\x1b[0m", "go test ./...", "运行中"}, // T18：accent 槽
 			wantState: func(t *testing.T, m *tuiModel) {
 				idx, ok := m.cards["tu-a"]
 				if !ok || idx != 0 {
@@ -160,7 +160,7 @@ func TestEventRenderMatrix(t *testing.T) {
 				event.ToolResultEvent{Seq: 2, Turn: 1, ToolUseID: "tu-f", IsError: true,
 					Content: "Error: exit 1"},
 			},
-			wantBlocks: []string{"\x1b[31m", "⊘", "失败", "Error: exit 1"},
+			wantBlocks: []string{"\x1b[38;5;167m", "⊘", "失败", "Error: exit 1"}, // T18：red 槽
 			wantState: func(t *testing.T, m *tuiModel) {
 				if card := m.transcriptState.blocks[0].(*toolCard); card.state != toolFailed {
 					t.Fatalf("IsError must fail the card, state = %d", card.state)
@@ -235,7 +235,7 @@ func TestEventRenderMatrix(t *testing.T) {
 		{
 			name:       "Notice warning：! 前缀色分",
 			events:     []any{event.NoticeEvent{Seq: 1, Level: "warning", Content: "引擎漂移"}},
-			wantBlocks: []string{"! 引擎漂移", "\x1b[33m"},
+			wantBlocks: []string{"! 引擎漂移", "\x1b[38;5;179m"}, // T18：yellow 槽
 			wantAbsent: []string{"[notice]"},
 		},
 		// 12. TurnDoneEvent（完成）：折叠思考块 + 冲刷流式残留 + 收口行
@@ -302,7 +302,7 @@ func TestEventRenderMatrix(t *testing.T) {
 				event.DelegationStartedEvent{Seq: 1, SubSessionID: "sub-12345678",
 					Task: "跑全量测试", Depth: 1},
 			},
-			wantBlocks: []string{"\x1b[36m⏺\x1b[0m", "子代理 sub-1234… 启动 · 跑全量测试"},
+			wantBlocks: []string{"\x1b[38;5;173m⏺\x1b[0m", "子代理 sub-1234… 启动 · 跑全量测试"},
 			wantState: func(t *testing.T, m *tuiModel) {
 				idx, ok := m.delegCards["sub-12345678"]
 				if !ok || idx != 0 {
@@ -358,7 +358,7 @@ func TestEventRenderMatrix(t *testing.T) {
 				event.DelegationStartedEvent{Seq: 1, SubSessionID: "sub-12345678", Task: "跑全量测试"},
 				event.DelegationFailedEvent{Seq: 2, SubSessionID: "sub-12345678", Reason: "引擎崩溃"},
 			},
-			wantBlocks: []string{"\x1b[31m", "⊘", "子代理 sub-1234… 失败", "引擎崩溃"},
+			wantBlocks: []string{"\x1b[38;5;167m", "⊘", "子代理 sub-1234… 失败", "引擎崩溃"},
 			wantState: func(t *testing.T, m *tuiModel) {
 				if len(m.transcriptState.blocks) != 1 {
 					t.Fatalf("failed lifecycle must upsert one card, blocks = %d", len(m.transcriptState.blocks))

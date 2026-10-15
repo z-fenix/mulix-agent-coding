@@ -25,7 +25,8 @@ import (
 //     其基名即会话 id（sessionx 镜像 <root>/<id>）——与行 1 右侧 id8 重复，
 //     无独立工作区字段，一并省略。
 
-// statusView 双行状态栏（bottomView 尾部消费；styleStatus 由调用方施加）。
+// statusView 双行状态栏（bottomView 尾部消费；styleStatus 由调用方施加——
+// 样式随主题 dim 槽派生，refreshThemeStyles 重铸，T18）。
 func (m *tuiModel) statusView() string {
 	s := m.statusState.snapshot
 	right := shortID(m.selfID)

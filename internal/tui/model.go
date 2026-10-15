@@ -38,6 +38,12 @@ type Options struct {
 // ctrl/selfID 为初始会话的控制面与 mulix 会话 id；swapper 供 /new /resume
 // 换绑。退出后由组合根收口「当前」会话（模型不持句柄——换绑后句柄归 swapper）。
 func Run(o Options, ctrl SessionController, selfID string, swapper SessionSwapper, events <-chan tuiEvent) error {
+	// 启动配色适配（023 FR-014/D8）：按当前环境重建出厂主题（NO_COLOR/COLORTERM/
+	// TERM=dumb 退避）——包级初值为确定性 256 层（单测钉点同源），探测只在此处
+	// 与 /theme 重建点发生。
+	if t, ok := themeByName(defaultThemeName); ok {
+		applyTheme(t)
+	}
 	m := newTuiModel(o, ctrl, events, selfID)
 	m.swapper = swapper
 	_, err := tea.NewProgram(m).Run()
@@ -115,10 +121,8 @@ type tuiModel struct {
 	testMode bool
 }
 
-var (
-	styleStatus = lipgloss.NewStyle().Faint(true)
-	styleCard   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
-)
+// styleStatus/styleCard 已随主题系统（Task 18）迁入 theme.go——包级样式由
+// activeTheme 派生（refreshThemeStyles 重铸），与包级主题单源同址。
 
 // ---- 关注点子结构（D4 骨架）----
 //
@@ -133,7 +137,12 @@ type approvalState struct{} // 审批互斥态（approval 卡）
 type statusState struct {
 	snapshot control.Snapshot
 }
-type themeState struct{} // 样式与配色（styleStatus/styleCard）
+type themeState struct {
+	// name 当前主题名（activeTheme 的会话级镜像——/theme 切换留痕与断言面；
+	// 主题本体驻 theme.go 包级 activeTheme：块渲染 helper 与 lipgloss 样式无
+	// 模型访问路径，换肤经 applyTheme 统一生效，见 theme.go）。
+	name string
+}
 
 func newTuiModel(o Options, ctrl SessionController, events <-chan tuiEvent, sessionID string) *tuiModel {
 	return &tuiModel{
@@ -149,6 +158,7 @@ func newTuiModel(o Options, ctrl SessionController, events <-chan tuiEvent, sess
 		delegCards:      make(map[string]int),
 		transcriptState: newTranscriptState(),
 		composerState:   newComposer(),
+		themeState:      themeState{name: activeTheme.name}, // 主题镜像（Task 18，本体驻 theme.go）
 	}
 }
 
@@ -379,23 +389,24 @@ func (m *tuiModel) handleEvent(ev any) {
 			// D10：本地取消意图优先——引擎中断后的回执形态无 fixture 钉死
 			//（Subtype/IsError 不可信），绝不渲染为「回合失败」；意图消费即清。
 			m.cancelIntent = false
-			m.appendLine("⏹ 回合已取消 t" + fmt.Sprint(e.Turn))
+			m.appendLine(warnLine("⏹ 回合已取消 t" + fmt.Sprint(e.Turn)))
 		} else if e.IsError {
-			// 设计 §6：`✗ 回合失败 tN（subtype）`。
-			m.appendLine("✗ 回合失败 t" + fmt.Sprint(e.Turn) + "（" + e.Subtype + "）")
+			// 设计 §6：`✗ 回合失败 tN（subtype）`（红槽——失败一眼可辨，T18）。
+			m.appendLine(failLine("✗ 回合失败 t" + fmt.Sprint(e.Turn) + "（" + e.Subtype + "）"))
 		} else {
 			// 设计 §6：`✓ 回合完成 tN · Ns`；时长缺席（<=0）整体省略——不渲染
-			// 未知的 0s（D7 同款不造数纪律）。
+			// 未知的 0s（D7 同款不造数纪律）。完成收口行弱化（dim 槽——收口是
+			// 留痕不是内容，与回试行同色阶，T18）。
 			done := "✓ 回合完成 t" + fmt.Sprint(e.Turn)
 			if e.DurationMS > 0 {
 				done += fmt.Sprintf(" · %.1fs", float64(e.DurationMS)/1000)
 			}
-			m.appendLine(done)
+			m.appendLine(dimLine(done))
 		}
 	case event.EngineExitedEvent:
 		m.closeThinking()
 		m.sealAnswer()
-		m.appendLine("✗ 引擎已退出（" + e.Reason + "）")
+		m.appendLine(failLine("✗ 引擎已退出（" + e.Reason + "）"))
 	case event.DelegationStartedEvent:
 		// 委派卡开卡（Task 11 FR-016）：非文本转写事件——块生命周期纪律同工具卡
 		//（先收口思考块、整段冲刷流式答案），再落运行中卡。
@@ -532,8 +543,9 @@ func (m *tuiModel) closeDelegationCard(subID string, apply func(*delegationBlock
 
 // ---- 通知行（023 FR-016 / 设计 §6：NoticeEvent）----
 
-// warnLine warning 级通知的色分样式（黄——与失败红/思考弱化区分）。
-func warnLine(s string) string { return sgrWrap("33", s) }
+// warnLine 告警槽（yellow）色分：warning 级通知与回合取消收口行——与失败红/
+// 思考弱化区分。
+func warnLine(s string) string { return activeTheme.yellow(s) }
 
 // appendNotice 通知行按级别分流（设计 §6：`· 内容`；warning 级 `! 内容` 色分
 // ——告警在转写流里必须一眼可辨）。
@@ -743,9 +755,32 @@ func (m *tuiModel) slash(line string) tea.Cmd {
 			return m.openResumePicker() // 无参 → 交互式选择器（023 FR-009）
 		}
 		return m.swapSession(fields[1])
+	case "/theme":
+		return m.themeCommand(fields) // 023 FR-014/D8：会话级实时换肤
 	default:
-		m.appendLine("[命令] 未知命令 " + fields[0] + "（可用：/new /resume /cache /doctor /agents /rewind /quit）")
+		m.appendLine("[命令] 未知命令 " + fields[0] + "（可用：/new /resume /cache /doctor /agents /rewind /theme /quit）")
 	}
+	return nil
+}
+
+// themeCommand /theme 子命令（023 FR-014/D8）：无参列可用主题（带当前名）；
+// 未知名不切换、列清单留痕（fail-closed 面——静默忽略会让人以为切换成功）；
+// 合法名实时切换——applyTheme 换肤 + 全量失效换行缓存（已渲染块按新主题重排）
+// + themeState.name 镜像。会话级内存态，不写 config（D8：持久化留后续变更）。
+func (m *tuiModel) themeCommand(fields []string) tea.Cmd {
+	if len(fields) < 2 {
+		m.appendLine("[theme] 可用：" + themeCatalogList() + "（当前 " + m.themeState.name + "）")
+		return nil
+	}
+	th, ok := themeByName(fields[1])
+	if !ok {
+		m.appendLine("[theme] 未知主题 " + fields[1] + "（可用：" + themeCatalogList() + "）")
+		return nil
+	}
+	applyTheme(th)
+	m.themeState.name = th.name
+	m.transcriptState.invalidateWrapFrom(0) // live switch：已渲染块整流重排换色
+	m.appendLine("[theme] 已切换 → " + th.name)
 	return nil
 }
 

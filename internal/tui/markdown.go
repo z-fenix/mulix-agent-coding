@@ -21,35 +21,18 @@ import (
 //     段落/列表/围栏/分隔线与 strong/em/codespan/link 行内渲染、
 //     fixCJKEmphasis / isCJKPunct / wrapAnsi。adapted：参考的 GFM 表格扩展、
 //     引用轨、数学解析、copy 模式与 colorprofile 门控不在本任务范围（表格/
-//     引用降级为子节点平铺；围栏中性单一样式，chroma 着色随 Task 19，主题随
-//     Task 18）；围栏内容按可用宽换行（参考放行长行——本仓 viewport 不软换，
-//     溢出行会破帧）。
+//     引用降级为子节点平铺；围栏中性单一样式，chroma 着色随 Task 19；主题
+//     槽已随 Task 18 落地（theme.go，见下方注记））；围栏内容按可用宽换行
+//    （参考放行长行——本仓 viewport 不软换，溢出行会破帧）。
 //   - internal/cli/chat_tui.go:3078 flushableMarkdownPrefix：段落提交语义——
 //     「围栏外空行」才界定完整段落，半开围栏整体滞留。adapted：参考只返回可
 //     提交前缀，本仓 splitFlushablePrefix 同时返回 (stable, tail)。
+//
+// 主题（Task 18）：theme 语义槽类型落地于 theme.go（023 FR-014/D8）——
+// renderMarkdown 的 th 参数即真实主题（nil 仍取中性缺省，见 defaultTheme），
+// 块渲染线程化见 transcript.go assistantBlock（&activeTheme，换肤后重排换色）。
 
-// theme 渲染主题占位（Task 18 主题系统落地前的中性样式；字段为 SGR 参数串，
-// 空串 = 不着色）。renderMarkdown(…, nil) 取中性缺省；Task 18 扩展本类型并
-// 经块渲染线程化真实配色（renderMarkdown 签名保持不变）。
-type theme struct {
-	accentSGR string // 强调色（标题/列表标记/行内代码/围栏内容）
-	dimSGR    string // 弱化（围栏轨/分隔线/链接目标）
-}
-
-func defaultTheme() *theme { return &theme{accentSGR: "36", dimSGR: "2"} }
-
-func (t *theme) accent(s string) string { return sgrWrap(t.accentSGR, s) }
-func (t *theme) dim(s string) string    { return sgrWrap(t.dimSGR, s) }
-
-// sgrWrap 以 SGR 参数串包裹文本（空参数原样返回；对照参考 style.go sgr——
-// colorprofile 门控归 CLI，TUI 恒有色）。
-func sgrWrap(params, s string) string {
-	if params == "" {
-		return s
-	}
-	return "\x1b[" + params + "m" + s + "\x1b[0m"
-}
-
+// bold/italic 文本装饰（no-color.org：NO_COLOR 只禁色不禁装饰——属性恒开）。
 func bold(s string) string   { return sgrWrap("1", s) }
 func italic(s string) string { return sgrWrap("3", s) }
 

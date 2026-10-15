@@ -26,9 +26,8 @@ type slashCmd struct {
 	desc string
 }
 
-// slashCatalog 命令目录（当前命令集；Task 18 /theme 落地时在此追加条目——
-// 菜单/过滤/窗口逻辑零改动；新命令须同步 slash() 分发与未知命令回退行的
-// 清单，目录只负责可见性）。
+// slashCatalog 命令目录（当前命令集；新命令须同步 slash() 分发与未知命令
+// 回退行的清单，目录只负责可见性）。
 var slashCatalog = []slashCmd{
 	{"/new", "开新会话"},
 	{"/resume", "续链会话（无参弹选择器）"},
@@ -36,6 +35,7 @@ var slashCatalog = []slashCmd{
 	{"/doctor", "环境自检"},
 	{"/agents", "子代理列表"},
 	{"/rewind", "引擎 checkpoint 回退（占位）"},
+	{"/theme", "切换配色主题（graphite/ember/aurora/midnight[+ -light]）"},
 	{"/quit", "退出 mulix"},
 }
 

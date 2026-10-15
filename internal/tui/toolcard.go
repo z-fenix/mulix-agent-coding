@@ -256,12 +256,12 @@ func (c *toolCard) tail(width int) []string {
 	return out
 }
 
-// accentLine 工具卡运行/完成态符号（对照参考 toolDot 的类别色——本仓中性
-// 单色，类别配色随 Task 18 主题系统）。
-func accentLine(s string) string { return sgrWrap("36", s) }
+// accentLine 强调槽（accent）色分：工具/委派卡运行/完成态符号（对照参考
+// toolDot 的类别色——T18 接入主题槽）。
+func accentLine(s string) string { return activeTheme.accent(s) }
 
-// failLine 失败卡红样式（FR-005：失败卡显著标红）。
-func failLine(s string) string { return sgrWrap("31", s) }
+// failLine 失败槽（red）色分（FR-005：失败卡显著标红；T18 接入主题槽）。
+func failLine(s string) string { return activeTheme.red(s) }
 
 // clampWidth 按显示宽截断（SGR 零宽计列、全角计两列；超宽补省略号——对照
 // 参考 clampPlain 的按宽收口，经 x/ansi 保持宽度感知）。

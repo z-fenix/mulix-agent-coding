@@ -78,8 +78,9 @@ func (b thinkingBlock) summary() string {
 	return fmt.Sprintf("✓ 已思考 %ds", secs)
 }
 
-// dimLine 思考文本与折叠摘要的弱化样式（对照参考 reasoningBlockLines 的 dim）。
-func dimLine(s string) string { return sgrWrap("2", s) }
+// dimLine 弱化槽（dim）色分：思考文本与折叠摘要（对照参考 reasoningBlockLines
+// 的 dim——T18 接入主题弱化槽）。
+func dimLine(s string) string { return activeTheme.dim(s) }
 
 // utf8SafeTail 有界尾窗：保尾截断——超 maxBytes 从头部丢字节（丢到 RuneStart
 // 边界，不劈半字符），超 maxLines 丢头部行；maxBytes/maxLines <= 0 表示不设
