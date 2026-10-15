@@ -80,6 +80,16 @@ type tuiModel struct {
 	pendingMD     string
 	answerIdx     int
 	answerFlushed int
+	// 思考块状态（Task 8 D14）：thinkingIdx 活块下标（-1 = 无）；thinkingFull
+	// 全文驻留（收口升格进块尾——展开面随 Task 21）；thinkingTail 有界尾窗
+	//（流式渲染源）；thinkStart/thinkEnd 首末思考事件到达的本地钟戳；
+	// thinkingPending 收口前到账的回执 token（Task 17 接缝，收口落槽）。
+	thinkingIdx     int
+	thinkingFull    string
+	thinkingTail    string
+	thinkStart      time.Time
+	thinkEnd        time.Time
+	thinkingPending int64
 	// testMode：单测形态——Update 不回挂阻塞型重挂命令（waitForEvent/Tick，
 	// 单测直接以消息驱动）；submitCmd 仍正常返回（由测试辅助同步执行）。
 	testMode bool
@@ -110,6 +120,7 @@ func newTuiModel(o Options, ctrl SessionController, events <-chan tuiEvent, sess
 		selfID: sessionID,
 		width:  80, height: 24, // WindowSizeMsg 到达前的合理缺省
 		answerIdx:       -1, // 无活块（流式答案游标，Task 7 D17）
+		thinkingIdx:     -1, // 无活思考块（Task 8 D14）
 		transcriptState: newTranscriptState(),
 	}
 }
@@ -169,6 +180,11 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// 异步换绑回执（评审 Important-B/Critical-A）：换绑 ctrl + selfID。
 		m.running = false
 		m.swapping = false
+		// 旧会话的思考块状态一并作废（成败两路都要）：换绑排空丢弃旧残响
+		//（不经 handleEvent），残开的思考块于旧会话收尾折叠定格；pending
+		// token 是旧会话残值，先清再收口（与下方答案缓冲复位同语义）。
+		m.thinkingPending = 0
+		m.closeThinking()
 		if msg.err != nil {
 			m.appendLine("[" + msg.kind + "失败] " + msg.err.Error() + "（旧会话已收口；可重试 " + msg.kind + "）")
 			return m, nil
@@ -258,36 +274,54 @@ func (m *tuiModel) finalize() {
 // 裁决回执清卡/留痕；回合收口与引擎退出留痕。
 func (m *tuiModel) handleEvent(ev any) {
 	switch e := ev.(type) {
+	case event.TurnStartedEvent:
+		// 新回合（D14 接线）：防御性收口残开思考块（正常已由 TurnDone 收口）
+		// 并清 pending token——上回合用量已终结，不得落进新回合的块。
+		m.thinkingPending = 0
+		m.closeThinking()
+	case event.AssistantThinkingEvent:
+		// D14：思考分片入有界尾窗活块（rewrite 同块流式推进）。
+		m.streamThinking(e)
 	case event.AssistantTextEvent:
 		// D17 流式段落提交（Task 7）：分片入 pending 缓冲，仅完整段落（围栏外
-		// 空行界）提交进活块并原地改写——一事件一块的纯文本渲染退役。
+		// 空行界）提交进活块并原地改写——一事件一块的纯文本渲染退役。文本为
+		// 非思考事件——思考块按块生命周期先收口（D14）。
+		m.closeThinking()
 		m.pendingMD += e.Text
 		m.flushAnswer()
 	case event.NoticeEvent:
-		m.sealAnswer() // 其他转写事件打断流式答案——先整段冲刷再落痕
+		m.closeThinking() // 非思考事件打断思考流（D14 块生命周期）
+		m.sealAnswer()    // 其他转写事件打断流式答案——先整段冲刷再落痕
 		m.appendLine("[notice] " + e.Content)
 	case event.ApprovalRequestEvent:
+		m.closeThinking()
 		m.sealAnswer()
 		m.approval = &approvalCard{toolUseID: e.ToolUseID, tool: e.Tool}
 		m.appendLine(fmt.Sprintf("[审批] 工具 %s（%s）需要授权", e.Tool, shortID(e.ToolUseID)))
 	case event.ApprovalResolvedEvent:
+		m.closeThinking()
 		m.sealAnswer()
 		if m.approval != nil && m.approval.toolUseID == e.ToolUseID {
 			m.approval = nil
 		}
 		m.appendLine(fmt.Sprintf("[裁决] %s → %s/%s", shortID(e.ToolUseID), e.Decision, e.Source))
 	case event.TurnDoneEvent:
-		m.sealAnswer() // D17：回合收口冲刷 tail 残留（半开围栏一并落块）
+		m.closeThinking() // D14：回合收口折叠思考块（Ns 定格在末次思考事件到达）
+		m.sealAnswer()    // D17：回合收口冲刷 tail 残留（半开围栏一并落块）
 		if e.IsError {
 			m.appendLine("[回合失败] " + e.Subtype)
 		} else {
 			m.appendLine("[回合完成 t" + fmt.Sprint(e.Turn) + "]")
 		}
 	case event.EngineExitedEvent:
+		m.closeThinking()
 		m.sealAnswer()
 		m.appendLine("[引擎已退出] " + e.Reason)
 	case event.UsageEvent:
-		// 状态栏走 Snapshot 轮询；usage 事件不进 transcript
+		// 状态栏走 Snapshot 轮询；usage 事件不进 transcript。思考块按块生命
+		// 周期收口（usage 边界=参考 commitReasoning 的收口边界之一）；token
+		// 回填 noteThinkingTokens 由 Task 17 回合回执接线。
+		m.closeThinking()
 	}
 }
 

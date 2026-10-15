@@ -1,0 +1,173 @@
+package tui
+
+import (
+	"fmt"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"mulix/internal/event"
+)
+
+// ---- 思考块：有界尾窗与折叠（023 D14 / FR-004，MIT 改编）----
+//
+// 本文件改编自 DeepSeek-Reasonix（MIT License, © 2026 Reasonix Contributors,
+// https://github.com/esengine/DeepSeek-Reasonix）internal/cli：
+//   - reasoningViewMax（chat_tui.go:2345）/ reasoningTailLines（chat_tui.go:2348）：
+//     思考流渲染进有界尾窗——全链思考逐 delta 全量重渲染是 O(n²)（2k token 的
+//     思考搅动 ~4.7GB），只渲染尾窗让每个 delta 有界。
+//   - streamReasoning（chat_tui.go:2353-2365）：头丢弃 + RuneStart 对齐的字节窗。
+//   - reasoningBlockLines（transcript_copy.go:309）：思考文本按宽换行、逐行 dim、
+//     maxLines>0 时只保留尾部视觉行。
+//   - commitReasoning（chat_tui.go:2975）：块收口折叠为单行摘要。
+// adapted：
+//  1. 块形态——参考以 reasoningLineIdx/reasoningTextIdx 分置「标记行 + 文本块」
+//     两个下标；本仓为单语义块（thinkingBlock 经 rewriteLast 整块原地改写）：
+//     流式渲染尾窗文本，收口折叠为单行摘要，无独立标记行。
+//  2. token 口径（D14）——AssistantThinkingEvent.EstimatedTokens 恒零（control
+//     层不提供分片级 token，controller.go:1293-1295 硬编码 0），刻意不读不渲染；
+//     真实 thinking token 在回合末 UsageEvent.ThinkingTokens，经
+//     noteThinkingTokens 回填（接线随 Task 17 回合回执）。
+//  3. 流式期只渲染尾窗文本（无秒数头）；Ns 在收口时按本地钟差定格。
+
+// reasoningViewMax 思考尾窗字节上限（对照参考 chat_tui.go:2345）。
+const reasoningViewMax = 4096
+
+// reasoningTailLines 思考尾窗行数上限（对照参考 chat_tui.go:2348）。
+const reasoningTailLines = 12
+
+// thinkingBlock 思考块：流式渲染有界尾窗（tail），收口折叠为单行摘要。
+// collapsed 块的 tail 承载全文（展开面随 Task 21 Ctrl+O——尾窗只约束流式
+// 渲染成本，不约束收口后的驻留内容）。
+type thinkingBlock struct {
+	tail      string
+	startedAt time.Time
+	endedAt   time.Time
+	tokens    int64
+	collapsed bool
+}
+
+func (b thinkingBlock) render(width int) []string {
+	if b.collapsed {
+		return []string{dimLine(b.summary())}
+	}
+	lines := wrapText(strings.TrimRight(b.tail, "\n"), width)
+	if len(lines) > reasoningTailLines { // 尾窗：只保尾部视觉行（对照参考
+		lines = lines[len(lines)-reasoningTailLines:] // reasoningBlockLines 的 maxLines）
+	}
+	for i, l := range lines {
+		lines[i] = dimLine(l)
+	}
+	return lines
+}
+
+// summary 折叠行：✓ 已思考 Ns[ · N tok]。Ns = 首末思考事件到达的本地钟差
+// （非回合时长按比例摊派）；tok = 回合末 UsageEvent.ThinkingTokens（noteThinking
+// Tokens 回填）。token 未回填时槽位整体省略——EstimatedTokens 恒零，渲染
+// 「0 tok」是死 UI（D14 / TestNoZeroTokenRender）。
+func (b thinkingBlock) summary() string {
+	secs := int64(b.endedAt.Sub(b.startedAt).Seconds())
+	if secs < 0 { // 防御：缺省时间戳的块不得渲染负数
+		secs = 0
+	}
+	if b.tokens > 0 {
+		return fmt.Sprintf("✓ 已思考 %ds · %d tok", secs, b.tokens)
+	}
+	return fmt.Sprintf("✓ 已思考 %ds", secs)
+}
+
+// dimLine 思考文本与折叠摘要的弱化样式（对照参考 reasoningBlockLines 的 dim）。
+func dimLine(s string) string { return sgrWrap("2", s) }
+
+// utf8SafeTail 有界尾窗：保尾截断——超 maxBytes 从头部丢字节（丢到 RuneStart
+// 边界，不劈半字符），超 maxLines 丢头部行；maxBytes/maxLines <= 0 表示不设
+// 该界。（对照参考 streamReasoning 的头丢弃 + RuneStart 对齐。）
+func utf8SafeTail(s string, maxBytes, maxLines int) string {
+	if maxBytes > 0 && len(s) > maxBytes {
+		drop := len(s) - maxBytes
+		for drop < len(s) && !utf8.RuneStart(s[drop]) {
+			drop++
+		}
+		s = s[drop:]
+	}
+	if maxLines > 0 {
+		lines := strings.Split(s, "\n")
+		if len(lines) > maxLines {
+			s = strings.Join(lines[len(lines)-maxLines:], "\n")
+		}
+	}
+	return s
+}
+
+// streamThinking 思考分片入块（D14）：首个分片开块并打本地钟戳，后续分片
+// rewrite 同块（Task 4 rewriteLast——缓存失效内建）。EstimatedTokens 刻意不读
+// ——恒零字段，渲染它是死 UI（D14）。尾窗逐分片有界推进（输入恒 ≤
+// reasoningViewMax + 单分片，与参考的增量窗同形），全文另路驻留供收口升格。
+func (m *tuiModel) streamThinking(e event.AssistantThinkingEvent) {
+	now := time.Now()
+	if m.thinkingIdx < 0 {
+		m.thinkStart = now
+		m.thinkingFull, m.thinkingTail = "", ""
+	}
+	m.thinkEnd = now
+	m.thinkingFull += e.Thinking
+	m.thinkingTail = utf8SafeTail(m.thinkingTail+e.Thinking, reasoningViewMax, reasoningTailLines)
+	b := thinkingBlock{tail: m.thinkingTail, startedAt: m.thinkStart, endedAt: m.thinkEnd}
+	if m.thinkingIdx >= 0 && m.thinkingIdx == len(m.transcriptState.blocks)-1 {
+		m.transcriptState.rewriteLast(b)
+		return
+	}
+	m.transcriptState.append(b) // 防御兜底：活块被顶离末位时退化为新块，不冲他块
+	m.thinkingIdx = len(m.transcriptState.blocks) - 1
+}
+
+// closeThinking 思考块收口折叠（D14）：下一非思考事件或回合收口触发——块
+// 折叠为单行「✓ 已思考 Ns[ · N tok]」，Ns 定格在末次思考事件到达（endedAt
+// 只随思考事件推进，不按回合时长摊派）；tail 升格为全文驻块（Task 21 展开
+// 面）。收口前到账的回执 token（thinkingPending）于此落槽。
+func (m *tuiModel) closeThinking() {
+	if m.thinkingIdx < 0 {
+		return
+	}
+	b := thinkingBlock{
+		tail:      m.thinkingFull,
+		startedAt: m.thinkStart,
+		endedAt:   m.thinkEnd,
+		tokens:    m.thinkingPending,
+		collapsed: true,
+	}
+	m.thinkingPending = 0
+	m.thinkingFull, m.thinkingTail = "", ""
+	if m.thinkingIdx == len(m.transcriptState.blocks)-1 {
+		m.transcriptState.rewriteLast(b)
+	} else { // 防御兜底（与 streamThinking 同形）：活块离位时追加，不冲他块
+		m.transcriptState.append(b)
+	}
+	m.thinkingIdx = -1
+}
+
+// noteThinkingTokens 回填思考 token（Task 17 回合回执接缝，本任务不接线）：
+// UsageEvent.ThinkingTokens 到达时调用。块流式未收口 → 记 pending（收口时
+// 落槽——usage 先于 TurnDone 发布，controller.go:1357→1369）；已收口 → 回填
+// 最近一个思考块（回合用量归属最近思考段）。0 视为未回填哨兵——槽位省略
+// 不渲染（TestNoZeroTokenRender）。
+func (m *tuiModel) noteThinkingTokens(tokens int64) {
+	if tokens <= 0 {
+		return
+	}
+	if m.thinkingIdx >= 0 {
+		m.thinkingPending = tokens
+		return
+	}
+	for i := len(m.transcriptState.blocks) - 1; i >= 0; i-- {
+		if tb, ok := m.transcriptState.blocks[i].(thinkingBlock); ok {
+			if tb.tokens == tokens { // 幂等：重复回执不重复失效缓存
+				return
+			}
+			tb.tokens = tokens
+			m.transcriptState.blocks[i] = tb
+			m.transcriptState.invalidateWrapFrom(i)
+			return
+		}
+	}
+}
