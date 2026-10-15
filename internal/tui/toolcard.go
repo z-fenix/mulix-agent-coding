@@ -57,8 +57,9 @@ type toolCard struct {
 	tool         string
 	arg          string
 	state        toolState
-	outputTail   []string // ≤8 行有界尾（来自 ToolResult.Content）
-	failedDetail string   // IsError 时的失败详情行
+	diff         *diffInput // D9：写类工具可 diff 输入（openToolCard 提取；nil = 无 diff 视图）
+	outputTail   []string   // ≤8 行有界尾（来自 ToolResult.Content）
+	failedDetail string     // IsError 时的失败详情行
 }
 
 // toolArgKeys 各工具的主参 JSON 键（候选序——claude CLI 实况用 file_path，
@@ -196,14 +197,19 @@ func boundedTail(s string, maxLines int) []string {
 	return lines
 }
 
-// render 工具卡按宽渲染（块接口）：头行 ⏺/⊘ 动词(主参) · 状态 + ⎿ 连接槽
-// 输出尾（完成卡）/失败详情行（失败卡）。对照参考 toolCard/toolHead 的头行
-// 组装——动词加粗、主参裸文（括号弱化）、按余宽截断。
+// render 工具卡按宽渲染（块接口）：头行 ⏺/⊘ 动词(主参) · 状态 + diff 视图
+// （D9：写类工具可 diff 输入挂卡——请求即渲染，回执后保留，对照参考
+// diffBlock 于 dispatch 打印、结果不回收）+ ⎿ 连接槽输出尾（完成卡）/失败
+// 详情行（失败卡）。对照参考 toolCard/toolHead 的头行组装——动词加粗、主参
+// 裸文（括号弱化）、按余宽截断。
 func (c *toolCard) render(width int) []string {
 	if width <= 0 {
 		width = 80
 	}
 	lines := []string{c.header(width)}
+	if c.diff != nil {
+		lines = append(lines, renderDiff(*c.diff, width, activeTheme)...)
+	}
 	if c.state == toolFailed {
 		if c.failedDetail != "" {
 			lines = append(lines, failLine(toolConnector+c.failedDetail))
@@ -277,15 +283,20 @@ func clampWidth(s string, w int) string {
 
 // ---- 模型接线（brief：ToolUseRequestedEvent/ToolResultEvent）----
 
-// openToolCard 开运行中卡（ToolUseRequestedEvent）：主参已提取，卡驻块流尾，
-// 索引记 toolUseID → 块下标（回执按同 ID upsert）。
+// openToolCard 开运行中卡（ToolUseRequestedEvent）：主参已提取，写类工具的
+// 可 diff 输入挂 diff 位（D9——diffFromInput false 即普通卡降级），卡驻块流
+// 尾，索引记 toolUseID → 块下标（回执按同 ID upsert）。
 func (m *tuiModel) openToolCard(e event.ToolUseRequestedEvent) {
-	m.transcriptState.append(&toolCard{
+	card := &toolCard{
 		toolUseID: e.ToolUseID,
 		tool:      e.Tool,
 		arg:       toolArgKey(e.Tool, e.Input),
 		state:     toolRunning,
-	})
+	}
+	if d, ok := diffFromInput(e.Tool, e.Input); ok {
+		card.diff = &d
+	}
+	m.transcriptState.append(card)
 	if m.cards == nil {
 		m.cards = make(map[string]int)
 	}
