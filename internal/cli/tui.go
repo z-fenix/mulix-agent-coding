@@ -3,577 +3,70 @@ package cli
 import (
 	"context"
 	"fmt"
-	"strings"
-	"time"
 
-	"charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
-
-	"mulix/internal/cache"
 	"mulix/internal/control"
-	"mulix/internal/event"
-	"mulix/internal/subagent"
+	"mulix/internal/tui"
 )
 
-// channelSink 把事件通道包装回 control.Sink（换绑时复用通道）。
-type channelSink struct{ ch chan<- tuiEvent }
-
-func (s channelSink) Publish(ev any) { s.ch <- tuiEvent{ev: ev} }
-
-// sessionController 是 TUI 消费的会话控制面（*control.Controller 的子集——
-// 状态机单测可注入替身）。
-type sessionController interface {
-	Submit(ctx context.Context, text string) error
-	Approve(toolUseID string, allow bool, resolvedBy string) error
-	ApproveSession(toolUseID, resolvedBy string) error
-	Snapshot() control.Snapshot
-	// Subagent 是子代理编排器的窄消费面（M12/T12.4 /agents 面板）；
-	// nil = 子代理未启用（工厂未接线）。
-	Subagent() *subagent.Manager
+// cliSwapper 是 tui.SessionSwapper 的组合根实现：持装配参数与当前会话句柄，
+// Open 复用 openSession 单一装配路径（TUI /new /resume 与启动同源——防接线
+// 分叉）。事件通道归 tui 所有（换绑排空在 tui 侧）；tui 只见接口。
+type cliSwapper struct {
+	o   Options
+	cur *sessionHandle // 当前会话（nil = 已收口且不可恢复）
 }
 
-// ---- 事件适配（control Sink → tea.Msg） ----
+// CloseCurrent 关当前会话（收尾 publish 入 tui 的 sink 通道；nil 安全）。
+func (s *cliSwapper) CloseCurrent() { s.cur.close() }
 
-// capTuiEventCh 是事件通道容量：满时 Publish 阻塞背压（前端可慢不可丢——
-// 镜像先行的对面；阻塞的是 control 的 publish，天然节流引擎事件流）。
-// 已知限制（T28 评审 Minor-C，P2 权衡）：退出/换绑时若积压 >容量，旧泵的
-// 收尾 publish 会阻塞至新消费者排空——语义为「延迟」而非「丢失/死锁」。
-const capTuiEventCh = 1024
-
-type tuiEvent struct{ ev any }
-
-// tuiSink 把 control 事件流转成 tea 消息（control.Sink 实现）。
-type tuiSink struct {
-	ch chan tuiEvent
-}
-
-func newTuiSink() *tuiSink {
-	return &tuiSink{ch: make(chan tuiEvent, capTuiEventCh)}
-}
-
-func (s *tuiSink) Publish(ev any) {
-	s.ch <- tuiEvent{ev: ev}
-}
-
-func (s *tuiSink) events() <-chan tuiEvent { return s.ch }
-
-func waitForEvent(ch <-chan tuiEvent) tea.Cmd {
-	return func() tea.Msg {
-		return <-ch
-	}
-}
-
-// ---- 模型 ----
-
-type approvalCard struct {
-	toolUseID string
-	tool      string
-}
-
-type tuiModel struct {
-	opts     Options
-	ctrl     sessionController
-	events   <-chan tuiEvent // 只读消费侧
-	sendCh   chan tuiEvent   // 换绑时把新会话的 sink 接回同一通道
-	handle   *sessionHandle  // 当前会话（/new /resume 换绑；nil = 仅单测形态）
-	selfID   string          // 状态栏展示的 mulix 会话 id
-	width    int
-	height   int
-	lines    []string // transcript 渲染行
-	input    string
-	approval *approvalCard // 非 nil = 审批态（与渲染态互斥：composer 冻结）
-	status   control.Snapshot
-	running  bool // 回合进行中（异步 Submit/换绑——Update 循环保持响应）
-	// /agents 面板（M12/T12.4）：列表态独占 composer；agentsSel 是选中行。
-	agentsOpen bool
-	agentsSel  int
-	// testMode：单测形态——Update 不回挂阻塞型重挂命令（waitForEvent/Tick，
-	// 单测直接以消息驱动）；submitCmd 仍正常返回（由测试辅助同步执行）。
-	testMode bool
-}
-
-var (
-	styleStatus = lipgloss.NewStyle().Faint(true)
-	styleCard   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
-)
-
-func newTuiModel(o Options, ctrl sessionController, events <-chan tuiEvent, sessionID string) *tuiModel {
-	return &tuiModel{
-		opts:   o,
-		ctrl:   ctrl,
-		events: events,
-		selfID: sessionID,
-		width:  80, height: 24, // WindowSizeMsg 到达前的合理缺省
-	}
-}
-
-func (m *tuiModel) Init() tea.Cmd {
-	return tea.Batch(waitForEvent(m.events), statusTickCmd())
-}
-
-func statusTickCmd() tea.Cmd {
-	return tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg { return statusTick{} })
-}
-
-type statusTick struct{}
-
-// typedInput 是文本注入消息（测试用它模拟整串输入；Update 按逐字符处理）。
-type typedInput string
-
-// appendLine 追加 transcript 行（渲染层裁剪）。
-func (m *tuiModel) appendLine(s string) {
-	for _, l := range strings.Split(s, "\n") {
-		m.lines = append(m.lines, l)
-	}
-}
-
-func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.width, m.height = msg.Width, msg.Height
-		return m, nil
-	case statusTick:
-		if m.ctrl != nil {
-			m.status = m.ctrl.Snapshot()
-		}
-		if m.testMode {
-			return m, nil
-		}
-		return m, statusTickCmd()
-	case tuiEvent:
-		m.handleEvent(msg.ev)
-		if m.testMode {
-			return m, nil
-		}
-		return m, waitForEvent(m.events)
-	case submitDoneMsg:
-		// 异步 Submit 回执（T28 评审 Critical-1）：回合收口，解锁 composer。
-		m.running = false
-		if msg.err != nil {
-			m.appendLine("[提交失败] " + msg.err.Error())
-		}
-		return m, nil
-	case swapDoneMsg:
-		// 异步换绑回执（评审 Important-B/Critical-A）：换绑 ctrl + handle。
-		m.running = false
-		if msg.err != nil {
-			m.handle = nil // 旧会话已在 goroutine 中收口
-			m.appendLine("[" + msg.kind + "失败] " + msg.err.Error() + "（旧会话已收口；可重试 " + msg.kind + "）")
-			return m, nil
-		}
-		m.handle = msg.h
-		m.ctrl = msg.h.ctrl // Critical-A：换绑后控制面必须指向新控制器
-		m.selfID = msg.h.id
-		m.status = control.Snapshot{}
-		m.approval = nil // 旧会话的审批卡作废（对旧桥的裁决路径已不存在）
-		m.appendLine("[会话] 已切换 → " + msg.h.id)
-		return m, nil
-	case doctorDoneMsg:
-		for _, l := range msg.lines {
-			m.appendLine(l)
-		}
-		return m, nil
-	case agentsCancelDoneMsg:
-		// /agents 面板取消回执（异步）：失败留痕；成功状态由列表刷新呈现
-		//（mgr.List() 以 cancelled 终态渲染）。
-		if msg.err != nil {
-			m.appendLine("[agents] 取消失败: " + msg.err.Error())
-		}
-		return m, nil
-	case tea.KeyPressMsg:
-		return m.handleKey(msg)
-	case typedInput:
-		// 测试注入：整串文本按逐字符输入处理（审批态被 handleKey 忽略——
-		// 与真实键序一致）。
-		for _, r := range string(msg) {
-			var cmd tea.Cmd
-			_, cmd = m.handleKey(tea.KeyPressMsg{Text: string(r), Code: r})
-			_ = cmd
-		}
-		return m, nil
-	case tea.QuitMsg:
-		return m, tea.Quit
-	}
-	return m, nil
-}
-
-// handleEvent 事件路由：文本/通知入 transcript；审批请求置卡（互斥态）；
-// 裁决回执清卡/留痕；回合收口与引擎退出留痕。
-func (m *tuiModel) handleEvent(ev any) {
-	switch e := ev.(type) {
-	case event.AssistantTextEvent:
-		m.appendLine(e.Text)
-	case event.NoticeEvent:
-		m.appendLine("[notice] " + e.Content)
-	case event.ApprovalRequestEvent:
-		m.approval = &approvalCard{toolUseID: e.ToolUseID, tool: e.Tool}
-		m.appendLine(fmt.Sprintf("[审批] 工具 %s（%s）需要授权", e.Tool, shortID(e.ToolUseID)))
-	case event.ApprovalResolvedEvent:
-		if m.approval != nil && m.approval.toolUseID == e.ToolUseID {
-			m.approval = nil
-		}
-		m.appendLine(fmt.Sprintf("[裁决] %s → %s/%s", shortID(e.ToolUseID), e.Decision, e.Source))
-	case event.TurnDoneEvent:
-		if e.IsError {
-			m.appendLine("[回合失败] " + e.Subtype)
-		} else {
-			m.appendLine("[回合完成 t" + fmt.Sprint(e.Turn) + "]")
-		}
-	case event.EngineExitedEvent:
-		m.appendLine("[引擎已退出] " + e.Reason)
-	case event.UsageEvent:
-		// 状态栏走 Snapshot 轮询；usage 事件不进 transcript
-	}
-}
-
-// handleKey 键盘路由。审批态只响应审批键（审批态/渲染态互斥——composer 冻结，
-// 输入与提交都被忽略）+ Ctrl+C 逃生（评审 Minor-4：审批态不可困死用户）；
-// 渲染态输入/提交/命令。
-func (m *tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if msg.Code == 'c' && msg.Mod&tea.ModCtrl != 0 { // Contains(0) 恒真——不能用作零 Mod 判定
-		return m, tea.Quit
-	}
-	if m.approval != nil {
-		switch {
-		case msg.Code == 'a':
-			m.resolve(m.approval.toolUseID, true, false)
-		case msg.Code == 's':
-			m.resolve(m.approval.toolUseID, true, true)
-		case msg.Code == 'd' || msg.Code == tea.KeyEscape:
-			m.resolve(m.approval.toolUseID, false, false)
-		}
-		return m, nil
-	}
-	if m.agentsOpen { // /agents 列表态独占 composer（与审批态同级互斥）
-		return m.handleAgentsKey(msg)
-	}
-	switch {
-	case msg.Code == tea.KeyEnter:
-		return m.submit()
-	case msg.Code == tea.KeyBackspace || msg.Code == tea.KeyDelete:
-		if r := []rune(m.input); len(r) > 0 {
-			m.input = string(r[:len(r)-1])
-		}
-		return m, nil
-	case msg.Text != "" && msg.Mod == 0:
-		m.input += msg.Text
-		return m, nil
-	}
-	return m, nil
-}
-
-// resolve 执行审批动作并立即清卡（回执事件随后到达时幂等跳过）。
-func (m *tuiModel) resolve(toolUseID string, allow, session bool) {
-	var err error
-	if session {
-		err = m.ctrl.ApproveSession(toolUseID, "user")
-	} else {
-		err = m.ctrl.Approve(toolUseID, allow, "user")
-	}
+// Open 以同 sink 开新/续链会话并返回新控制面与 mulix 会话 id。失败时旧会话
+// 已不可恢复（CloseCurrent 先行）——cur 置 nil。
+func (s *cliSwapper) Open(resumeID string, sink control.Sink) (tui.SessionController, string, error) {
+	h, _, err := openSession(s.o, resumeID, true, sink)
 	if err != nil {
-		m.appendLine("[审批失败] " + err.Error())
+		s.cur = nil
+		return nil, "", err
 	}
-	m.approval = nil
+	s.cur = h
+	return h.ctrl, h.id, nil
 }
 
-// submit 渲染态 Enter：/命令分流（/cache /doctor /rewind /new /resume /quit）；
-// 其余提交为回合输入。
-// 异步提交（T28 评审 Critical-1）：Submit 同步等待回合收口，若在 Update 内
-// 直调则事件循环冻结——审批卡不可达（gate 超时 120s 后自动拒绝）、transcript
-// 不流式、事件通道可能填满死锁。改为 tea.Cmd goroutine，submitDoneMsg 回执；
-// running 期间 Enter 被门禁。
-func (m *tuiModel) submit() (tea.Model, tea.Cmd) {
-	if m.running { // 门禁在清空 input 之前——忙期按键不吞文本
-		m.appendLine("[忙] 回合进行中，等待收口…")
-		return m, nil
-	}
-	text := strings.TrimSpace(m.input)
-	m.input = ""
-	if strings.HasPrefix(text, "/") {
-		return m, m.slash(text)
-	}
-	if text == "" {
-		return m, nil
-	}
-	m.running = true
-	return m, submitCmd(m.ctrl, text)
-}
-
-type submitDoneMsg struct{ err error }
-
-// swapDoneMsg 是异步会话换绑回执（h 为新会话；err 非 nil 时 h 为 nil）。
-type swapDoneMsg struct {
-	h    *sessionHandle
-	err  error
-	kind string // "new" | "resume"
-}
-
-func submitCmd(ctrl sessionController, text string) tea.Cmd {
-	return func() tea.Msg {
-		return submitDoneMsg{err: ctrl.Submit(context.Background(), text)}
-	}
-}
-
-// slash 是 `/` 命令分发（brief：/new /resume /cache /doctor /rewind）。
-// 返回 tea.Quit（/quit）或 nil。
-func (m *tuiModel) slash(line string) tea.Cmd {
-	fields := strings.Fields(line)
-	switch fields[0] {
-	case "/quit":
-		return tea.Quit
-	case "/cache":
-		rep, err := cache.ReadUsageReport(m.opts.UsageRoot, m.selfID)
-		if err != nil {
-			m.appendLine("[cache] " + err.Error())
-			return nil
+// tuiDoctorLines 预合成 TUI /doctor 回调（doctorProbes/doctorChecks 均为 cli
+// 未导出——禁止整体搬迁 doctor.go，经闭包把「探针注入 + 检查执行 + 行格式化」
+// 打包注入 tui.Options.Doctor；与 CLI doctor 同一检查清单与注入面）。
+func tuiDoctorLines(o Options) func() []string {
+	return func() []string {
+		probes := realDoctorProbes(o)
+		if o.doctorProbes != nil { // 与 CLI 同一注入面（T29 评审 M-2）
+			probes = *o.doctorProbes
 		}
-		m.appendLine(fmt.Sprintf("[cache] 回合 %d | 命中率 %.1f%% | 成本 $%.4f | 节省 $%.4f | 冷回合 %d",
-			rep.Turns, rep.SessionHit*100, rep.Cost, rep.Saving, rep.ColdTurns))
-	case "/doctor":
-		// T29 接线：与 CLI doctor 共用同一检查清单（探针注入与 CLI 一致）。
-		// 异步（T29 评审 I-1）：claude --version 是引擎时长级子进程——
-		// 同步在 Update 内会冻结事件循环（与 T28 Critical-1 同类）。
-		return m.doctorCmd()
-	case "/rewind":
-		m.appendLine("[rewind] 引擎 checkpoint 透传随 T32 真实引擎联调落地")
-	case "/agents":
-		return m.openAgentsPanel()
-	case "/new":
-		return m.swapSession("")
-	case "/resume":
-		if len(fields) < 2 {
-			m.appendLine("[resume] 用法：/resume <引擎 session id>（无参形态随会话选择器落地）")
-			return nil
-		}
-		return m.swapSession(fields[1])
-	default:
-		m.appendLine("[命令] 未知命令 " + fields[0] + "（可用：/new /resume /cache /doctor /agents /rewind /quit）")
-	}
-	return nil
-}
-
-// ---- /agents 面板（M12/T12.4：子代理列表视图 + c 取消） ----
-
-// openAgentsPanel 打开 /agents 面板：子会话 id/状态/任务/深度 列表视图。
-// 编排器未接线（ctrl.Subagent() == nil）→ 命令提示未启用，不进入面板态。
-func (m *tuiModel) openAgentsPanel() tea.Cmd {
-	if m.ctrl == nil {
-		m.appendLine("[agents] 子代理未启用")
-		return nil
-	}
-	if m.ctrl.Subagent() == nil {
-		m.appendLine("[agents] 子代理未启用（会话未接线子代理工厂）")
-		return nil
-	}
-	m.agentsOpen = true
-	m.agentsSel = 0
-	return nil
-}
-
-// handleAgentsKey /agents 面板键位（列表态独占 composer）：↑/↓ 选择、c 取消
-// 选中运行中子代理（异步——T28 Critical-1 同款，Update 内不阻塞）、esc/q
-// 关闭。审批卡仍优先（handleKey 前置分支）。
-func (m *tuiModel) handleAgentsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch {
-	case msg.Code == tea.KeyEscape || msg.Code == 'q':
-		m.agentsOpen = false
-		return m, nil
-	case msg.Code == tea.KeyUp:
-		if m.agentsSel > 0 {
-			m.agentsSel--
-		}
-	case msg.Code == tea.KeyDown:
-		m.agentsSel++
-	case msg.Code == 'c':
-		mgr := m.ctrl.Subagent()
-		if mgr == nil { // 面板打开期间编排器不会消失；防御性收口
-			m.agentsOpen = false
-			return m, nil
-		}
-		infos := mgr.List()
-		if len(infos) == 0 {
-			return m, nil
-		}
-		if m.agentsSel >= len(infos) {
-			m.agentsSel = len(infos) - 1
-		}
-		sel := infos[m.agentsSel]
-		if sel.Status != subagent.StatusRunning {
-			m.appendLine("[agents] 仅运行中的子代理可取消（当前 " + string(sel.Status) + "）")
-			return m, nil
-		}
-		return m, agentsCancelCmd(mgr, sel.SubSessionID)
-	}
-	return m, nil
-}
-
-// agentsCancelDoneMsg 是 /agents 面板的取消回执（异步；成功态由列表刷新呈现）。
-type agentsCancelDoneMsg struct{ err error }
-
-// agentsCancelCmd 异步取消一个子代理（用户经面板触发）。
-func agentsCancelCmd(mgr *subagent.Manager, subID string) tea.Cmd {
-	return func() tea.Msg {
-		return agentsCancelDoneMsg{err: mgr.Cancel(context.Background(), subID, "user:/agents")}
-	}
-}
-
-// agentsPanelView 渲染 /agents 面板（列表：id | 状态 | 任务 | 深度；选中行
-// 标记；无子代理给空态）。数据源 = mgr.List() 实时快照。
-func (m *tuiModel) agentsPanelView() string {
-	var b strings.Builder
-	mgr := m.ctrl.Subagent()
-	if mgr == nil {
-		return "子代理未启用\n[esc] 关闭\n"
-	}
-	infos := mgr.List()
-	if len(infos) == 0 {
-		return "暂无子代理\n[↑/↓] 选择  [c] 取消  [esc] 关闭\n"
-	}
-	if m.agentsSel >= len(infos) {
-		m.agentsSel = len(infos) - 1
-	}
-	if m.agentsSel < 0 {
-		m.agentsSel = 0
-	}
-	b.WriteString("子代理（ID | 状态 | 任务 | 深度）\n")
-	for i, in := range infos {
-		marker := "  "
-		if i == m.agentsSel {
-			marker = "▸ "
-		}
-		b.WriteString(fmt.Sprintf("%s%-14s | %-9s | %s | 深度 %d\n",
-			marker, shortID(in.SubSessionID), string(in.Status), in.Task, in.Depth))
-	}
-	b.WriteString("[↑/↓] 选择  [c] 取消选中  [esc] 关闭\n")
-	return b.String()
-}
-
-// doctorCmd 异步执行 doctor 检查（T29 评审 I-1）——回执 doctorDoneMsg。
-func (m *tuiModel) doctorCmd() tea.Cmd {
-	probes := realDoctorProbes(m.opts)
-	if m.opts.doctorProbes != nil { // 与 CLI 同一注入面（T29 评审 M-2）
-		probes = *m.opts.doctorProbes
-	}
-	return func() tea.Msg {
-		checks := doctorChecks(probes, m.opts)
+		checks := doctorChecks(probes, o)
 		lines := make([]string, len(checks))
 		for i, c := range checks {
 			lines[i] = fmt.Sprintf("[doctor] %s: %s — %s", c.Name, c.Status, c.Detail)
 		}
-		return doctorDoneMsg{lines: lines}
+		return lines
 	}
 }
 
-type doctorDoneMsg struct{ lines []string }
-
-// swapSession 异步换绑（/new //resume 复用装配路径 openSession）。评审两轮
-// 结论的合成：T28 首轮 Critical-1（Update 内同步等待冻结事件循环）+ 复审
-// Important-B（old.close + 引擎启动是引擎时长级等待，同样不得阻塞 Update，
-// 且阻塞期 Ctrl+C 无法触达）——故在 tea.Cmd goroutine 执行，swapDoneMsg 回执；
-// 期间复用 running 忙门禁。次序：旧会话先收口（Close 阻塞至泵退出——残响
-// 全部入通道），排空通道丢弃旧残响，再开新会话——新 transcript 不受旧事件
-// 污染；openSession 失败时旧会话已不可恢复（handle 置 nil，UI 提示可重试）。
-// 成功回执换绑 ctrl（复审 Critical-A：不换绑则后续 Submit/审批打在已关的
-// 旧控制器上——ErrNoSession / 审批 120s 超时）。
-func (m *tuiModel) swapSession(resumeID string) tea.Cmd {
-	kind := "new"
-	if resumeID != "" {
-		kind = "resume"
-	}
-	old := m.handle
-	m.running = true // 换绑期间门禁（复用忙语义；swapDoneMsg 清除）
-	return func() tea.Msg {
-		if old != nil {
-			old.close()
-		}
-		for drained := true; drained; {
-			select {
-			case <-m.sendCh: // 丢弃旧会话残响
-			default:
-				drained = false
-			}
-		}
-		h, _, err := openSession(m.opts, resumeID, true, channelSink{ch: m.sendCh})
-		return swapDoneMsg{h: h, err: err, kind: kind}
-	}
-}
-
-// View 组装：transcript（尾部裁剪）+ 审批卡或 composer + 状态栏。
-func (m *tuiModel) View() tea.View {
-	var b strings.Builder
-	maxLines := m.height - 3 // 状态栏 + composer + 间隔
-	if m.approval != nil {
-		maxLines -= 4 // 审批卡高度
-	}
-	if m.agentsOpen {
-		maxLines -= 4 // /agents 面板头尾（列表行随 transcript 裁剪让位）
-	}
-	if maxLines < 1 {
-		maxLines = 1
-	}
-	lines := m.lines
-	if len(lines) > maxLines {
-		lines = lines[len(lines)-maxLines:]
-	}
-	for _, l := range lines {
-		b.WriteString(l)
-		b.WriteString("\n")
-	}
-	if m.approval != nil {
-		card := fmt.Sprintf("工具 %s（%s）等待授权\n[a] 本次允许  [s] 本会话允许  [d] 拒绝",
-			m.approval.tool, shortID(m.approval.toolUseID))
-		b.WriteString(styleCard.Render(card))
-		b.WriteString("\n")
-	} else if m.agentsOpen {
-		b.WriteString(styleCard.Render(m.agentsPanelView()))
-		b.WriteString("\n")
-	} else {
-		b.WriteString("> " + m.input)
-		b.WriteString("\n")
-	}
-	b.WriteString(styleStatus.Render(m.statusLine()))
-	return tea.NewView(b.String())
-}
-
-// statusLine 状态栏（brief：模型 | 会话命中率 | 本回合 tokens | 成本；
-// expected_cold 标注）。
-func (m *tuiModel) statusLine() string {
-	rep := m.status.MeterReport
-	cold := ""
-	if rep.ColdTurns > 0 {
-		cold = fmt.Sprintf(" | ❄冷回合 %d", rep.ColdTurns)
-	}
-	turn := m.status.TurnTokens
-	tokens := fmt.Sprintf("回合 t%d %d tok", m.status.Turn, turn.InputTokens+turn.CacheWriteTokens+turn.CacheReadTokens+turn.OutputTokens)
-	running := "空闲"
-	if m.status.Running {
-		running = "运行中"
-	}
-	return fmt.Sprintf("%s | 会话 %s | 命中率 %.1f%% | %s | 成本 $%.4f%s | %s",
-		m.status.Model, shortID(m.selfID), rep.SessionHit*100, tokens, rep.Cost, cold, running)
-}
-
-func shortID(id string) string {
-	if len(id) > 8 {
-		return id[:8] + "…"
-	}
-	return id
-}
-
-// RunTUI 生产 TUI 入口（root 默认命令；attended 会话）。
+// RunTUI 生产 TUI 入口（root 默认命令；attended 会话）。装配顺序：withDefaults
+// → NewSink → openSession（初始会话绑定 sink）→ cliSwapper → tui.Run。
 func RunTUI(ctx context.Context, o Options, resumeID string) error {
 	o = withDefaults(o)
-	sink := newTuiSink()
+	sink := tui.NewSink()
 	h, _, err := openSession(o, resumeID, true, sink)
 	if err != nil {
 		return err
 	}
-	m := newTuiModel(o, h.ctrl, sink.events(), h.id)
-	m.handle = h
-	m.sendCh = sink.ch
-	_, err = tea.NewProgram(m).Run()
-	// 收口「当前」会话而非启动时的 h：/new //resume 换绑后 m.handle 已指向
-	// 新控制器——不收口则宿主不 Close（mcp-config 临时文件泄漏）。
-	m.handle.close()
-	return err
+	sw := &cliSwapper{o: o, cur: h}
+	// 收口「当前」会话而非启动时的 h：/new //resume 换绑后 sw.cur 已指向
+	// 新控制器——不收口则宿主不 Close（mcp-config 临时文件泄漏）。闭包延迟
+	// 取 cur（defer 语句的接收者求值陷阱：直接 defer sw.cur.close() 会钉死
+	// 启动句柄）。
+	defer func() { sw.cur.close() }()
+	return tui.Run(tui.Options{
+		UsageRoot: o.UsageRoot,
+		Doctor:    tuiDoctorLines(o),
+		Sink:      sink,
+	}, h.ctrl, h.id, sw, sink.Events())
 }
