@@ -605,10 +605,11 @@ func (m *tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	// 编辑器键位（023 D12/FR-007，textarea 配置见 composer.go）：裸 Enter 提交
 	//（忙门禁在 submit 内、清空之前——忙期按键不吞文本）；Alt+Enter / Ctrl+J /
-	// Shift+Enter 换行归 textarea（InsertNewline 重绑）；↑/↓ 历史召回优先——
-	// 召回未消费（草稿态 ↓ / 多行项内移动）才落 textarea 移动光标；Esc 取消
-	// 语义阶梯（keys.go）。其余键全量进 textarea（字符插入、词移动/删词、
-	// Home/End 等）。
+	// Shift+Enter 换行归 textarea（InsertNewline 重绑）；↑/↓ 空闲时历史召回
+	// 优先（忙碌期 recallHistory 拒消费——↑/↓ 落 textarea 光标移动，评审
+	// Important-1）；召回未消费（草稿态 ↓ / 多行项内移动）才落 textarea 移动
+	// 光标；Esc 取消语义阶梯（keys.go）。其余键全量进 textarea（字符插入、
+	// 词移动/删词、Home/End 等）。
 	switch {
 	case msg.Code == tea.KeyEnter && msg.Mod&(tea.ModAlt|tea.ModShift) == 0:
 		return m.submit()

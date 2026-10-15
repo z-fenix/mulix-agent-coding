@@ -134,6 +134,62 @@ func TestWordOps(t *testing.T) {
 	}
 }
 
+// TestRecallGatedWhenBusy 钉（评审 Important-1，brief「↑↓ 空闲时历史召回」）：
+// 忙碌期（running/swapping）↑/↓ 不做召回——落 textarea 光标移动（单行首/末行
+// no-op，多行草稿内移动光标）。危害向量：忙碌期在编辑器写多行草稿、光标第 0
+// 行按 ↑（最常见场景）若执行召回，composer 内容被历史条目可见替换（草稿虽在
+// draft 可经 ↓ 找回），回合结束后 Enter 会提交召回文本而非草稿。忙碌解除后
+// 召回恢复。
+func TestRecallGatedWhenBusy(t *testing.T) {
+	m, stub, _ := newTestModel(t)
+	// 种历史：提交一条
+	m = update(t, m, typeStr(m, "hello"))
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if len(m.composerState.history) != 1 {
+		t.Fatalf("precondition: history = %v", m.composerState.history)
+	}
+	// 忙碌期（running）：单行草稿、光标在第 0 行按 ↑——不得替换草稿
+	m.running = true
+	m = update(t, m, typeStr(m, "draft"))
+	m = update(t, m, keyUpKey())
+	if got := m.composerValue(); got != "draft" {
+		t.Fatalf("busy Up must not replace the draft with history: %q", got)
+	}
+	if m.composerState.histIdx != -1 {
+		t.Fatalf("busy Up must not enter recall: histIdx=%d", m.composerState.histIdx)
+	}
+	// 多行草稿内忙碌 ↑：光标移动（textarea 语义，非跨条召回）
+	m = update(t, m, keyAltEnter())
+	m = update(t, m, typeStr(m, "line2"))
+	m = update(t, m, keyUpKey())
+	if m.composerState.ta.Line() != 0 {
+		t.Fatalf("busy Up must move the cursor within the draft: line=%d", m.composerState.ta.Line())
+	}
+	if got := m.composerValue(); got != "draft\nline2" {
+		t.Fatalf("busy Up must keep the draft: %q", got)
+	}
+	// swapping 过渡期同门禁
+	m.swapping = true
+	m.setComposerValue("draft2")
+	m = update(t, m, keyUpKey())
+	if got := m.composerValue(); got != "draft2" {
+		t.Fatalf("swapping Up must not recall: %q", got)
+	}
+	if m.composerState.histIdx != -1 {
+		t.Fatalf("swapping Up must not latch recall: histIdx=%d", m.composerState.histIdx)
+	}
+	m.swapping = false
+	m.running = false
+	// 空闲恢复：↑ 召回生效
+	m = update(t, m, keyUpKey())
+	if got := m.composerValue(); got != "hello" {
+		t.Fatalf("idle Up must recall after busy clears: %q", got)
+	}
+	if len(stub.submits) != 1 {
+		t.Fatalf("submits = %v", stub.submits)
+	}
+}
+
 // TestComposerWheelNesting 钉（Task 6 停车场路由至此的最小实现）：编辑器未
 // 溢出时滚轮落转写视口（既有手势不变）；编辑器溢出（内容超过 MaxHeight 行）
 // 时滚轮归编辑器内滚——textarea 自己裁决可滚性（内建 viewport 空间不足时

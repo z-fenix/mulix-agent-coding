@@ -99,10 +99,18 @@ func (m *tuiModel) rememberSubmitted(text string) {
 }
 
 // recallHistory 历史召回（对照参考 chat_tui.go:768 recallSubmittedInput）：
-// delta<0 = ↑（更旧），delta>0 = ↓（更新）；返回是否消费了该键。首 ↑ 存草稿
-// 并跳最新一条；召回中改稿即以改后为新草稿基线；多行召回项内 ↑/↓ 先归
-// textarea 移动光标（首行 ↑ / 末行 ↓ 才跨条）；越过最新一条还原召回前草稿。
+// delta<0 = ↑（更旧），delta>0 = ↓（更新）；返回是否消费了该键。忙碌期
+// （running/swapping）不做召回——brief「↑↓ 空闲时历史召回」；对照参考
+// chat_tui.go:1455-1470 在 tuiRunning 期间把 ↑/↓ 路由为光标移动：返回 false
+// 落 textarea，多行草稿内是移动光标，单行首/末行 no-op（忙碌期草稿被历史
+// 条目可见替换是危害向量——回合收口后 Enter 会提交召回文本而非草稿）。
+// 首 ↑ 存草稿并跳最新一条；召回中改稿即以改后为新草稿基线；多行召回项内
+// ↑/↓ 先归 textarea 移动光标（首行 ↑ / 末行 ↓ 才跨条）；越过最新一条还原
+// 召回前草稿。
 func (m *tuiModel) recallHistory(delta int) bool {
+	if m.running || m.swapping {
+		return false // 忙碌门禁：↑/↓ 归 textarea 光标移动（见上）
+	}
 	cs := &m.composerState
 	if len(cs.history) == 0 {
 		return false
