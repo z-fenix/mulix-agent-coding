@@ -7,6 +7,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"charm.land/bubbletea/v2"
+
 	"mulix/internal/event"
 )
 
@@ -139,6 +141,62 @@ func TestThinkingCollapse(t *testing.T) {
 	}
 	if !strings.Contains(nb.tail, "again") {
 		t.Fatalf("reopened block lost its stream: %q", nb.tail)
+	}
+}
+
+// TestBusyGateDoesNotSplitThinking pins（终审 Important：appendLine 绕过块生命
+// 周期纪律 → 活思考块被系统行劈裂）：回合进行中（思考流式激活）触发任一本地系
+// 统行（最常见：Enter 撞忙门禁）必须与 handleEvent 同纪律——先收口思考块、封
+// 口流式答案，再落系统行。否则活块被顶离末位永久保持展开，下一思考事件走防御
+// 分支另开新块，收口时同一思考「尾窗 + 折叠行」并存（P3 冒烟 216.0s 帧实证）。
+func TestBusyGateDoesNotSplitThinking(t *testing.T) {
+	// (a) 忙门禁系统行先收口活思考块（原地折叠，不被顶离末位）
+	m, _, _ := newTestModel(t)
+	m = update(t, m, tuiEvent{ev: event.AssistantThinkingEvent{Seq: 1, Turn: 1, Thinking: "deep"}})
+	m.running = true // 回合进行中（生产：submitCmd 置位，收口回执清除）
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.thinkingIdx != -1 {
+		t.Fatalf("system line must close the live thinking block first, thinkingIdx = %d", m.thinkingIdx)
+	}
+	last := m.transcriptState.blocks[len(m.transcriptState.blocks)-1]
+	if pb, ok := last.(plainBlock); !ok || !strings.Contains(pb.text, "[忙]") {
+		t.Fatalf("busy notice must be the last block, got %T", last)
+	}
+
+	// (b) 劈裂的重复思考形态：下一思考事件另开新块 → 回合收口后不得残留
+	// 未折叠思考块（孤儿尾窗）。
+	m = update(t, m, tuiEvent{ev: event.AssistantThinkingEvent{Seq: 2, Turn: 1, Thinking: "more"}})
+	m = update(t, m, tuiEvent{ev: event.TurnDoneEvent{Seq: 3, Turn: 1, Subtype: "success"}})
+	for i, b := range m.transcriptState.blocks {
+		if tb, ok := b.(thinkingBlock); ok && !tb.collapsed {
+			t.Fatalf("turn close must leave no uncollapsed thinking block (orphan at block %d)", i)
+		}
+	}
+
+	// (c) 次序倒挂：先到答文（半段滞留 pending 未落块）后插系统行——答文块
+	// 必须先于系统行落块（封口在前）。
+	m2, _, _ := newTestModel(t)
+	m2 = update(t, m2, tuiEvent{ev: event.AssistantTextEvent{Seq: 1, Turn: 1, Text: "未完段落"}})
+	if m2.pendingMD == "" {
+		t.Fatal("precondition: partial answer text must stay pending before the system line")
+	}
+	m2.running = true
+	m2 = update(t, m2, tea.KeyPressMsg{Code: tea.KeyEnter})
+	ansIdx, busyIdx := -1, -1
+	for i, b := range m2.transcriptState.blocks {
+		switch x := b.(type) {
+		case assistantBlock:
+			if strings.Contains(x.text, "未完段落") && ansIdx < 0 {
+				ansIdx = i
+			}
+		case plainBlock:
+			if strings.Contains(x.text, "[忙]") && busyIdx < 0 {
+				busyIdx = i
+			}
+		}
+	}
+	if ansIdx < 0 || busyIdx < 0 || ansIdx > busyIdx {
+		t.Fatalf("answer text that arrived first must land before the system line: ansIdx=%d busyIdx=%d", ansIdx, busyIdx)
 	}
 }
 

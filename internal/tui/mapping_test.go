@@ -267,7 +267,7 @@ func TestEventRenderMatrix(t *testing.T) {
 				event.TurnDoneEvent{Seq: 1, Turn: 4, Subtype: "interrupted", IsError: true},
 			},
 			wantBlocks: []string{"⏹ 回合已取消 t4"},
-			wantAbsent: []string{"回合失败", "[回合完成"},
+			wantAbsent: []string{"回合失败", "回合完成"},
 			wantState: func(t *testing.T, m *tuiModel) {
 				if m.cancelIntent {
 					t.Fatal("cancelIntent must be consumed by the cancelled close")

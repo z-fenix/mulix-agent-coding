@@ -182,8 +182,15 @@ type statusTick struct{}
 type typedInput string
 
 // appendLine 追加系统行（notice/turn/审批留痕等）——一行一块包装为 plainBlock
-// （块模型迁移：语义行进块流，渲染由 transcriptState 按宽收口）。
+// （块模型迁移：语义行进块流，渲染由 transcriptState 按宽收口）。块生命周期纪
+// 律与 handleEvent 归一（终审 Important）：先收口活思考块、整段冲刷流式答案，
+// 再落系统行——否则回合进行中的系统行（忙门禁/Ctrl+O 留痕/失败回执等）把活块
+// 顶离末位永久展开，下一思考事件另开新块，收口后同一思考「尾窗+折叠行」并存；
+// 顺带修正「先到答文后插系统行却排到答文之后」的次序倒挂。两者幂等（handleEvent
+// 内已收口的调用点不受影响）。
 func (m *tuiModel) appendLine(s string) {
+	m.closeThinking()
+	m.sealAnswer()
 	m.transcriptState.append(plainBlock{text: s})
 }
 
