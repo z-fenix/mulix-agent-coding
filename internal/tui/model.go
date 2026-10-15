@@ -93,6 +93,9 @@ type tuiModel struct {
 	// 工具卡状态（Task 9 FR-005）：cards 索引 toolUseID → 块下标——回执按同
 	// ID upsert 原地关卡（卡片本体指针驻块流，见 toolcard.go）。
 	cards map[string]int
+	// 委派卡状态（Task 11 FR-016）：delegCards 索引 SubSessionID → 块下标——
+	// 生命周期回执按同 ID upsert 原地收口（与工具卡同法）。
+	delegCards map[string]int
 	// 取消语义阶梯状态（Task 10 D10，键位语义见 keys.go）：genCounter 提交
 	// 代际（丢弃递增——迟到收据对账失配即作废）；pendingSubmit 在途提交
 	//（TurnStartedEvent 到达时才上屏气泡）；cancelIntent 本地取消意图（收口
@@ -134,6 +137,7 @@ func newTuiModel(o Options, ctrl SessionController, events <-chan tuiEvent, sess
 		answerIdx:       -1, // 无活块（流式答案游标，Task 7 D17）
 		thinkingIdx:     -1, // 无活思考块（Task 8 D14）
 		cards:           make(map[string]int),
+		delegCards:      make(map[string]int),
 		transcriptState: newTranscriptState(),
 	}
 }
@@ -309,6 +313,9 @@ func (m *tuiModel) handleEvent(ev any) {
 		// 并清 pending token——上回合用量已终结，不得落进新回合的块。
 		m.thinkingPending = 0
 		m.closeThinking()
+		// 重置流式态（设计 §6 TurnStarted 行）：上回合残开答案（回合未正常
+		// 收口的中断路径）整段冲刷落块并复位游标——新回合文本不得续进旧答案块。
+		m.sealAnswer()
 		// D10 上屏时机：用户气泡在回合开始事件到达时才提交（Enter 只置在途；
 		// 丢弃后迟到的 TurnStarted 经 pending 空判为 no-op）。
 		m.commitPendingBubble()
@@ -325,7 +332,7 @@ func (m *tuiModel) handleEvent(ev any) {
 	case event.NoticeEvent:
 		m.closeThinking() // 非思考事件打断思考流（D14 块生命周期）
 		m.sealAnswer()    // 其他转写事件打断流式答案——先整段冲刷再落痕
-		m.appendLine("[notice] " + e.Content)
+		m.appendNotice(e)
 	case event.ApprovalRequestEvent:
 		m.closeThinking()
 		m.sealAnswer()
@@ -367,12 +374,147 @@ func (m *tuiModel) handleEvent(ev any) {
 		m.closeThinking()
 		m.sealAnswer()
 		m.appendLine("[引擎已退出] " + e.Reason)
+	case event.DelegationStartedEvent:
+		// 委派卡开卡（Task 11 FR-016）：非文本转写事件——块生命周期纪律同工具卡
+		//（先收口思考块、整段冲刷流式答案），再落运行中卡。
+		m.closeThinking()
+		m.sealAnswer()
+		m.openDelegationCard(e.SubSessionID, e.Task)
+	case event.DelegationCompletedEvent:
+		// 委派回执关卡（同 SubSessionID upsert 原地收口）：完成态含摘要与
+		// token/成本（设计 §6：完成收口含 token/成本）。
+		m.closeThinking()
+		m.sealAnswer()
+		m.closeDelegationCard(e.SubSessionID, func(b *delegationBlock) {
+			b.state = delegDone
+			b.summary = e.Summary
+			b.tokens = e.TotalTokens
+			b.costCents = e.CostUSDCents
+		})
+	case event.DelegationCancelledEvent:
+		m.closeThinking()
+		m.sealAnswer()
+		m.closeDelegationCard(e.SubSessionID, func(b *delegationBlock) {
+			b.state = delegCancelled
+			b.reason = e.Reason
+		})
+	case event.DelegationFailedEvent:
+		m.closeThinking()
+		m.sealAnswer()
+		m.closeDelegationCard(e.SubSessionID, func(b *delegationBlock) {
+			b.state = delegFailed
+			b.reason = e.Reason
+		})
 	case event.UsageEvent:
 		// 状态栏走 Snapshot 轮询；usage 事件不进 transcript。思考块按块生命
 		// 周期收口（usage 边界=参考 commitReasoning 的收口边界之一）；token
 		// 回填 noteThinkingTokens 由 Task 17 回合回执接线。
 		m.closeThinking()
 	}
+}
+
+// ---- 委派卡（023 FR-016 / 设计 §6：Delegation 四事件）----
+
+// delegState 委派卡状态（生命周期：启动 → 完成/取消/失败）。
+type delegState uint8
+
+const (
+	delegRunning delegState = iota
+	delegDone
+	delegCancelled
+	delegFailed
+)
+
+// delegationBlock 委派卡：一张语义卡随委派生命周期流转状态。DelegationStarted
+// 开卡，Completed/Cancelled/Failed 按 SubSessionID upsert 原地收口（与工具卡
+// 同法）。降级口径（设计 §6 参考对应列）：mulix 无逐条进度流，卡只有开/收两态。
+type delegationBlock struct {
+	subID     string
+	task      string
+	state     delegState
+	summary   string // 完成摘要（DelegationCompletedEvent.Summary）
+	tokens    int64  // 完成用量（TotalTokens）
+	costCents int64  // 完成成本（CostUSDCents，美分）
+	reason    string // 取消/失败原因
+}
+
+// render 委派卡按宽渲染（块接口）：头行 ⏺/⊘ 子代理 <id8> 状态 · 详情；
+// 完成卡附 ⎿ token/成本明细行（设计 §6：完成收口含 token/成本）。
+func (b *delegationBlock) render(width int) []string {
+	if width <= 0 {
+		width = 80
+	}
+	var head, detail string
+	switch b.state {
+	case delegFailed:
+		// 失败卡整段红（⊘ 头 + 状态一体——与工具卡失败详情同色系）。
+		head = failLine("⊘ 子代理 " + shortID(b.subID) + " 失败")
+		detail = b.reason
+	case delegDone:
+		head = accentLine("⏺") + " 子代理 " + shortID(b.subID) + " 完成"
+		detail = b.summary
+	case delegCancelled:
+		head = accentLine("⏺") + " 子代理 " + shortID(b.subID) + " 已取消"
+		detail = b.reason
+	default:
+		head = accentLine("⏺") + " 子代理 " + shortID(b.subID) + " 启动"
+		detail = b.task
+	}
+	if detail != "" {
+		head += " · " + detail
+	}
+	lines := []string{clampWidth(head, width)}
+	if b.state == delegDone && (b.tokens > 0 || b.costCents > 0) {
+		tail := toolConnector + fmt.Sprintf("%d tok · $%.2f", b.tokens, float64(b.costCents)/100)
+		lines = append(lines, dimLine(clampWidth(tail, width)))
+	}
+	return lines
+}
+
+// openDelegationCard 开委派卡（DelegationStartedEvent）：卡驻块流尾，索引记
+// SubSessionID → 块下标（生命周期回执按同 ID upsert——与工具卡同法）。
+func (m *tuiModel) openDelegationCard(subID, task string) {
+	m.transcriptState.append(&delegationBlock{subID: subID, task: task, state: delegRunning})
+	if m.delegCards == nil {
+		m.delegCards = make(map[string]int)
+	}
+	m.delegCards[subID] = len(m.transcriptState.blocks) - 1
+}
+
+// closeDelegationCard 委派回执关卡（同 SubSessionID upsert 原地收口）：apply
+// 落回执字段并失效该块起的换行缓存（运行中槽位的原地改写——wrapcache 契约的
+// 工具尾同型路径）。索引失配（换绑残渍等）或孤儿回执（启动事件缺席——重放
+// 边界）合成新卡留痕，不静默（与 closeToolCard 同纪律）。
+func (m *tuiModel) closeDelegationCard(subID string, apply func(*delegationBlock)) {
+	if idx, ok := m.delegCards[subID]; ok {
+		if b, isCard := m.transcriptState.blocks[idx].(*delegationBlock); isCard && b.subID == subID {
+			apply(b)
+			m.transcriptState.invalidateWrapFrom(idx)
+			return
+		}
+	}
+	b := &delegationBlock{subID: subID, state: delegRunning}
+	apply(b)
+	m.transcriptState.append(b)
+	if m.delegCards == nil {
+		m.delegCards = make(map[string]int)
+	}
+	m.delegCards[subID] = len(m.transcriptState.blocks) - 1
+}
+
+// ---- 通知行（023 FR-016 / 设计 §6：NoticeEvent）----
+
+// warnLine warning 级通知的色分样式（黄——与失败红/思考弱化区分）。
+func warnLine(s string) string { return sgrWrap("33", s) }
+
+// appendNotice 通知行按级别分流（设计 §6：`· 内容`；warning 级 `! 内容` 色分
+// ——告警在转写流里必须一眼可辨）。
+func (m *tuiModel) appendNotice(e event.NoticeEvent) {
+	if e.Level == "warning" {
+		m.appendLine(warnLine("! " + e.Content))
+		return
+	}
+	m.appendLine("· " + e.Content)
 }
 
 // flushAnswer 把 pending 的可提交前缀（splitFlushablePrefix 的 stable——围栏
