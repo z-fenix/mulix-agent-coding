@@ -53,7 +53,7 @@ func TestViewportCloneFeed(t *testing.T) {
 	ts := newTranscriptState()
 	ts.append(plainBlock{text: "line-one"})
 	ts.syncViewport(80, 6)
-	fed := ts.wrapped
+	fed := ts.wrappedLines
 	if len(fed) == 0 {
 		t.Fatal("render cache must hold the fed lines")
 	}
@@ -63,14 +63,14 @@ func TestViewportCloneFeed(t *testing.T) {
 		t.Fatalf("viewport content mutated through internal cache:\n%q", got)
 	}
 	before := ts.vp.TotalLineCount()
-	ts.wrapped = append(ts.wrapped, "grown") // 缓存增长
+	ts.wrappedLines = append(ts.wrappedLines, "grown") // 缓存增长
 	if got := ts.vp.TotalLineCount(); got != before {
 		t.Fatalf("viewport line count changed on cache growth: %d → %d", before, got)
 	}
 	if got := ts.vp.GetContent(); !strings.Contains(got, "line-one") || strings.Contains(got, "POLLUTED") {
 		t.Fatalf("viewport must keep its own copy: %q", got)
 	}
-	// 追加新块后再喂：新内容可见（本任务简单全量同步——Task 5 换 wrapcache）
+	// 追加新块后再喂：新内容可见（增量缓存 suffix 路径——只重排新块）
 	ts.append(plainBlock{text: "line-two"})
 	ts.syncViewport(80, 6)
 	if got := ts.vp.GetContent(); !strings.Contains(got, "line-two") {

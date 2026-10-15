@@ -219,9 +219,16 @@ func (m *tuiModel) drainEvents(first tuiEvent) {
 	m.finalize()
 }
 
-// finalize 一批合并消费的统一收口（本任务占位空实现；Task 5 起放
-// wrapcache sync 等批后工作——每批一次而非每事件一次）。
-func (m *tuiModel) finalize() {}
+// finalize 一批合并消费的统一收口：换行缓存 sync（增量——只重排后缀块，
+// 宽度变更内部自动全量重建），行列表有变才克隆喂给 viewport 并跟随尾部——
+// 一次 re-wrap 覆盖整批而不是每事件一次（对照参考 chat_tui.go:989-997 的
+// sync+feed 收口）。
+func (m *tuiModel) finalize() {
+	if m.transcriptState.syncWrappedLines(m.width, false) {
+		m.transcriptState.feedViewportContent()
+		m.transcriptState.vp.GotoBottom()
+	}
+}
 
 // handleEvent 事件路由：文本/通知入 transcript；审批请求置卡（互斥态）；
 // 裁决回执清卡/留痕；回合收口与引擎退出留痕。
