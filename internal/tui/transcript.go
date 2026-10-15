@@ -81,15 +81,18 @@ func (ts *transcriptState) lines(width int) []string {
 	return ts.wrappedLines
 }
 
-// syncViewport 按宽高同步转写视口：缓存 sync（增量）→ 行列表有变才克隆喂给
-// → 跟随尾部（旧行为等价：尾部跟随；上翻锁定随后续任务）。克隆契约（对照
-// 参考 wrap_cache.go:77-88）：viewport 持有传入切片本体，后续缓存改写/增长
-// 不得波及已持有存储。
-func (ts *transcriptState) syncViewport(width, height int) {
+// syncViewport 按宽高同步转写视口：缓存 sync（增量）→ 行列表有变才克隆喂给。
+// 不再无条件置底——钉底决策归模型层尾随状态机（023 D5：finalize/frame 按
+// shouldFollowTail 钉底；上翻锁定下 offset 不得被拉回，见 scrollstate.go）。
+// 返回行列表是否变化（viewport 已重新喂给）。克隆契约（对照参考
+// wrap_cache.go:77-88）：viewport 持有传入切片本体，后续缓存改写/增长不得
+// 波及已持有存储。
+func (ts *transcriptState) syncViewport(width, height int) bool {
 	ts.vp.SetWidth(width)
 	ts.vp.SetHeight(height)
 	if ts.syncWrappedLines(width, false) {
 		ts.feedViewportContent()
+		return true
 	}
-	ts.vp.GotoBottom()
+	return false
 }

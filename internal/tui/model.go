@@ -83,12 +83,12 @@ var (
 	styleCard   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
 )
 
-// ---- 关注点子结构（D4 骨架占位）----
+// ---- 关注点子结构（D4 骨架）----
 //
-// 根模型按渲染关注点的拆分容器：transcriptState 已落位（transcript.go），
-// 其余仅空结构，字段随后续任务从 tuiModel 平铺平移迁入（迁移完成前
-// tuiModel 平铺字段仍是权威）。
-type scrollState struct{}   // 滚动视口（跟随尾部/上翻锁定）
+// 根模型按渲染关注点的拆分容器：transcriptState 已落位（transcript.go）、
+// scrollState 已落位（scrollstate.go——尾随状态机 023 D5），其余仅空结构，
+// 字段随后续任务从 tuiModel 平铺平移迁入（迁移完成前 tuiModel 平铺字段仍是
+// 权威）。
 type composerState struct{} // 输入行（input）
 type approvalState struct{} // 审批互斥态（approval 卡）
 type statusState struct{}   // 状态栏快照（status）与 busy 门禁
@@ -169,6 +169,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.selfID = msg.id
 		m.status = control.Snapshot{}
 		m.approval = nil // 旧会话的审批卡作废（对旧桥的裁决路径已不存在）
+		// 会话切换单帧强制置底（设计 §7.2：回底恢复跟随；对照参考
+		// resetFreshContextView chat_tui.go:4171 的 forceGotoBottom 武装）。
+		m.scrollState.forceGotoBottom = true
 		m.appendLine("[会话] 已切换 → " + msg.id)
 		return m, nil
 	case doctorDoneMsg:
@@ -185,6 +188,11 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
+	case tea.MouseWheelMsg:
+		// 滚轮手势（023 D5）：模态独占态不泄漏，渲染态滚转写并归位跟随态
+		//（scrollstate.go handleWheel——MouseMode 经 View 声明启用上报）。
+		m.handleWheel(msg)
+		return m, nil
 	case typedInput:
 		// 测试注入：整串文本按逐字符输入处理（审批态被 handleKey 忽略——
 		// 与真实键序一致）。
@@ -220,13 +228,16 @@ func (m *tuiModel) drainEvents(first tuiEvent) {
 }
 
 // finalize 一批合并消费的统一收口：换行缓存 sync（增量——只重排后缀块，
-// 宽度变更内部自动全量重建），行列表有变才克隆喂给 viewport 并跟随尾部——
-// 一次 re-wrap 覆盖整批而不是每事件一次（对照参考 chat_tui.go:989-997 的
-// sync+feed 收口）。
+// 宽度变更内部自动全量重建），行列表有变才克隆喂给 viewport；钉底由尾随
+// 状态机裁决（023 D5）——仅跟随态（或单帧 forceGotoBottom，经
+// shouldFollowTail）GotoBottom，上翻锁定下视口不动——一次 re-wrap 覆盖整批
+// 而不是每事件一次（对照参考 chat_tui.go:989-1012 的 sync+feed+钉底收口）。
 func (m *tuiModel) finalize() {
-	if m.transcriptState.syncWrappedLines(m.width, false) {
+	if m.transcriptState.syncWrappedLines(transcriptContentWidth(m.width), false) {
 		m.transcriptState.feedViewportContent()
-		m.transcriptState.vp.GotoBottom()
+		if m.shouldFollowTail() {
+			m.transcriptState.vp.GotoBottom()
+		}
 	}
 }
 
@@ -281,6 +292,27 @@ func (m *tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.agentsOpen { // /agents 列表态独占 composer（与审批态同级互斥）
 		return m.handleAgentsKey(msg)
+	}
+	// 转写滚动手势（023 D5）：审批/agents 独占态在上方分支拦截——治理独占期
+	// 按键不泄漏（D10/D11；对照参考 chat_tui.go:1316-1333 在任意状态可滚动，
+	// 本仓治理独占语义优先）。PgUp/PgDn/Ctrl+Home/Ctrl+End 均非文本键。
+	switch {
+	case msg.Code == tea.KeyPgUp:
+		m.transcriptState.vp.PageUp()
+		m.syncScrollModeAfterGesture()
+		return m, nil
+	case msg.Code == tea.KeyPgDown:
+		m.transcriptState.vp.PageDown()
+		m.syncScrollModeAfterGesture()
+		return m, nil
+	case msg.Code == tea.KeyHome && msg.Mod&tea.ModCtrl != 0: // 顶格——显式滚离
+		m.transcriptState.vp.GotoTop()
+		m.markUserScrolled()
+		return m, nil
+	case msg.Code == tea.KeyEnd && msg.Mod&tea.ModCtrl != 0: // 回底——恢复跟随
+		m.transcriptState.vp.GotoBottom()
+		m.markFollowTail()
+		return m, nil
 	}
 	switch {
 	case msg.Code == tea.KeyEnter:
@@ -538,6 +570,8 @@ func (m *tuiModel) swapSession(resumeID string) tea.Cmd {
 func (m *tuiModel) View() tea.View {
 	v := tea.NewView(m.frame())
 	v.AltScreen = true
+	// 滚轮/点击上报（023 D5 滚动键）；拖拽选区随 Task 21 升 MouseModeAllMotion。
+	v.MouseMode = tea.MouseModeCellMotion
 	return v
 }
 
