@@ -22,8 +22,8 @@ func TestFrameLayout(t *testing.T) {
 	if got := lipgloss.Height(frame); got != 24 {
 		t.Fatalf("frame height = %d, want 24（alt-screen 满屏）", got)
 	}
-	// 底部固定区构成：编辑器行（composer）+ 状态行
-	if !strings.Contains(m.bottomView(), "> ") {
+	// 底部固定区构成：编辑器行（composer）+ 状态行（023 D12：❯ 提示符仅首行）
+	if !strings.Contains(m.bottomView(), "❯ ") {
 		t.Fatalf("bottom region missing composer:\n%s", m.bottomView())
 	}
 	if !strings.Contains(m.bottomView(), "空闲") {

@@ -281,8 +281,8 @@ func TestEventRenderMatrix(t *testing.T) {
 			},
 			wantBlocks: []string{"[引擎已退出] process exited: exit status 1"},
 			wantState: func(t *testing.T, m *tuiModel) {
-				if m.input != "x" {
-					t.Fatalf("editor must stay usable after engine exit, input = %q", m.input)
+				if m.composerValue() != "x" {
+					t.Fatalf("editor must stay usable after engine exit, input = %q", m.composerValue())
 				}
 			},
 		},

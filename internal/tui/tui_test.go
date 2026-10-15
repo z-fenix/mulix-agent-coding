@@ -164,10 +164,10 @@ func TestApprovalExclusiveState(t *testing.T) {
 		t.Fatal("approval card must render actions")
 	}
 	// 互斥：审批态下输入不进 composer
-	before := m.input
+	before := m.composerValue()
 	m = update(t, m, keyPress('x'))
-	if m.input != before {
-		t.Fatalf("input changed in approval state: %q", m.input)
+	if m.composerValue() != before {
+		t.Fatalf("input changed in approval state: %q", m.composerValue())
 	}
 	// 互斥：审批态下 Enter 不提交
 	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -184,8 +184,8 @@ func TestApprovalExclusiveState(t *testing.T) {
 	}
 	// 回渲染态：输入恢复
 	m = update(t, m, keyPress('y'))
-	if m.input != "y" {
-		t.Fatalf("input = %q, want y", m.input)
+	if m.composerValue() != "y" {
+		t.Fatalf("input = %q, want y", m.composerValue())
 	}
 }
 

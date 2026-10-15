@@ -56,7 +56,6 @@ type tuiModel struct {
 	selfID   string          // 状态栏展示的 mulix 会话 id
 	width    int
 	height   int
-	input    string
 	approval *approvalCard // 非 nil = 审批态（与渲染态互斥：composer 冻结）
 	status   control.Snapshot
 	running  bool // 回合进行中（异步 Submit——Update 循环保持响应）
@@ -66,7 +65,8 @@ type tuiModel struct {
 	agentsSel  int
 	// 关注点子结构（D4 骨架）：transcriptState 已于 FR-001 落位（语义块 +
 	// viewport）；其余字段随后续任务逐块从上方平铺字段迁入——迁移完成前
-	// 平铺字段仍是权威（见各 struct 注释）。
+	// 平铺字段仍是权威（见各 struct 注释）。composerState 已于 FR-007 迁入
+	//（m.input 平铺字段本任务退役）。
 	transcriptState transcriptState
 	scrollState     scrollState
 	composerState   composerState
@@ -118,10 +118,10 @@ var (
 // ---- 关注点子结构（D4 骨架）----
 //
 // 根模型按渲染关注点的拆分容器：transcriptState 已落位（transcript.go）、
-// scrollState 已落位（scrollstate.go——尾随状态机 023 D5），其余仅空结构，
+// scrollState 已落位（scrollstate.go——尾随状态机 023 D5）、composerState 已
+// 落位（composer.go——多行编辑器 + 历史召回 023 D12/FR-007），其余仅空结构，
 // 字段随后续任务从 tuiModel 平铺平移迁入（迁移完成前 tuiModel 平铺字段仍是
 // 权威）。
-type composerState struct{} // 输入行（input）
 type approvalState struct{} // 审批互斥态（approval 卡）
 type statusState struct{}   // 状态栏快照（status）与 busy 门禁
 type themeState struct{}    // 样式与配色（styleStatus/styleCard）
@@ -139,6 +139,7 @@ func newTuiModel(o Options, ctrl SessionController, events <-chan tuiEvent, sess
 		cards:           make(map[string]int),
 		delegCards:      make(map[string]int),
 		transcriptState: newTranscriptState(),
+		composerState:   newComposer(),
 	}
 }
 
@@ -171,6 +172,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		m.composerState.ta.SetWidth(msg.Width) // 重排触发编辑器高度重算
 		return m, nil
 	case statusTick:
 		if m.ctrl != nil {
@@ -601,21 +603,29 @@ func (m *tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.markFollowTail()
 		return m, nil
 	}
+	// 编辑器键位（023 D12/FR-007，textarea 配置见 composer.go）：裸 Enter 提交
+	//（忙门禁在 submit 内、清空之前——忙期按键不吞文本）；Alt+Enter / Ctrl+J /
+	// Shift+Enter 换行归 textarea（InsertNewline 重绑）；↑/↓ 历史召回优先——
+	// 召回未消费（草稿态 ↓ / 多行项内移动）才落 textarea 移动光标；Esc 取消
+	// 语义阶梯（keys.go）。其余键全量进 textarea（字符插入、词移动/删词、
+	// Home/End 等）。
 	switch {
-	case msg.Code == tea.KeyEnter:
+	case msg.Code == tea.KeyEnter && msg.Mod&(tea.ModAlt|tea.ModShift) == 0:
 		return m.submit()
 	case msg.Code == tea.KeyEscape:
-		return m.handleEscapeKey() // D10 取消语义阶梯（keys.go）
-	case msg.Code == tea.KeyBackspace || msg.Code == tea.KeyDelete:
-		if r := []rune(m.input); len(r) > 0 {
-			m.input = string(r[:len(r)-1])
+		return m.handleEscapeKey()
+	case msg.Code == tea.KeyUp:
+		if m.recallHistory(-1) {
+			return m, nil
 		}
-		return m, nil
-	case msg.Text != "" && msg.Mod == 0:
-		m.input += msg.Text
-		return m, nil
+	case msg.Code == tea.KeyDown:
+		if m.recallHistory(+1) {
+			return m, nil
+		}
 	}
-	return m, nil
+	var cmd tea.Cmd
+	m.composerState.ta, cmd = m.composerState.ta.Update(msg)
+	return m, cmd
 }
 
 // resolve 执行审批动作并立即清卡（回执事件随后到达时幂等跳过）。
@@ -643,14 +653,15 @@ func (m *tuiModel) submit() (tea.Model, tea.Cmd) {
 		m.appendLine("[忙] 回合进行中，等待收口…")
 		return m, nil
 	}
-	text := strings.TrimSpace(m.input)
-	m.input = ""
+	text := strings.TrimSpace(m.composerValue())
+	m.clearComposer()
 	if strings.HasPrefix(text, "/") {
 		return m, m.slash(text)
 	}
 	if text == "" {
 		return m, nil
 	}
+	m.rememberSubmitted(text) // FR-007：成功派发入历史（召回游标复位草稿态）
 	m.running = true
 	// D10 上屏时机：Enter 只置在途提交（代际计数 + pending），气泡待
 	// TurnStartedEvent 到达经 commitPendingBubble 上屏。
@@ -870,7 +881,31 @@ func (m *tuiModel) View() tea.View {
 	v.AltScreen = true
 	// 滚轮/点击上报（023 D5 滚动键）；拖拽选区随 Task 21 升 MouseModeAllMotion。
 	v.MouseMode = tea.MouseModeCellMotion
+	// 真实终端光标（023 D12：光标落点即输入点，IME 候选窗锚定）——治理独占态
+	// （审批卡/agents 面板）不渲染 composer，光标一并隐藏。
+	if c := m.composerCursor(); c != nil {
+		v.Cursor = c
+	}
 	return v
+}
+
+// composerCursor 真实终端光标的帧坐标（023 D12）：textarea.Cursor 相对编辑器
+// 视图定位；换算到帧坐标——编辑器驻底部固定区首行，行偏移 = H − 底部区行数
+// （与 frame 的视口高度同口径，下限 1）。
+func (m *tuiModel) composerCursor() *tea.Cursor {
+	if m.approval != nil || m.agentsOpen {
+		return nil
+	}
+	c := m.composerState.ta.Cursor()
+	if c == nil {
+		return nil
+	}
+	y := m.height - lipgloss.Height(m.bottomView())
+	if y < 1 {
+		y = 1
+	}
+	c.Position.Y += y
+	return c
 }
 
 // statusLine 状态栏（brief：模型 | 会话命中率 | 本回合 tokens | 成本；

@@ -84,12 +84,19 @@ func (m *tuiModel) syncScrollModeAfterGesture() {
 const wheelScrollRows = 3
 
 // handleWheel 滚轮手势：模态独占态不泄漏（授权卡/agents 面板——与键位门禁同
-// 语义，D10/D11 治理独占期交互冻结）；渲染态滚轮上/下滚动转写并按落点归位
-// 跟随态（对照参考 chat_tui.go:1095-1118——参考另有 composer 内滚轮续转写的
-// 嵌套滚动，随 Task 13 多行编辑器落地再议）。
+// 语义，D10/D11 治理独占期交互冻结）；渲染态先试编辑器嵌套滚动（023 D12：
+// 编辑器内容超过 MaxHeight 行时 textarea 内建 viewport 可滚——把消息喂给它，
+// ScrollYOffset 前后差即消费凭据；未消费 = 未溢出或已到边，落转写视口续滚，
+// 对照参考 chat_tui.go:1095-1118 的 composer 内滚轮续转写嵌套）；转写滚上/下
+// 并按落点归位跟随态。
 func (m *tuiModel) handleWheel(msg tea.MouseWheelMsg) {
 	if m.modalOpen() {
 		return
+	}
+	before := m.composerState.ta.ScrollYOffset()
+	m.composerState.ta, _ = m.composerState.ta.Update(msg)
+	if m.composerState.ta.ScrollYOffset() != before {
+		return // 编辑器消费了滚轮（溢出内滚）——不透传转写
 	}
 	switch msg.Button {
 	case tea.MouseWheelUp:

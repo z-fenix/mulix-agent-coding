@@ -78,8 +78,8 @@ func TestEscBeforeTurnStartedDiscards(t *testing.T) {
 		t.Fatalf("precondition: in-flight submit (pending=%+v running=%v)", m.pendingSubmit, m.running)
 	}
 	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
-	if m.input != "hi" {
-		t.Fatalf("draft must be restored: %q", m.input)
+	if m.composerValue() != "hi" {
+		t.Fatalf("draft must be restored: %q", m.composerValue())
 	}
 	if m.pendingSubmit != nil {
 		t.Fatal("pendingSubmit must clear on discard")
@@ -190,8 +190,8 @@ func TestCtrlCLadder(t *testing.T) {
 	if _, cmd := m.handleKey(ctrlC); cmd != nil {
 		t.Fatal("Ctrl+C with input must clear, not quit")
 	}
-	if m.input != "" {
-		t.Fatalf("input must clear: %q", m.input)
+	if m.composerValue() != "" {
+		t.Fatalf("input must clear: %q", m.composerValue())
 	}
 	if !m.quitArm.IsZero() {
 		t.Fatal("clearing press must not arm the quit timer")
@@ -222,8 +222,8 @@ func TestEscIdleClearsInput(t *testing.T) {
 	m, stub, _ := newTestModel(t)
 	m = update(t, m, keyPress('a'))
 	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
-	if m.input != "" {
-		t.Fatalf("idle Esc must clear input: %q", m.input)
+	if m.composerValue() != "" {
+		t.Fatalf("idle Esc must clear input: %q", m.composerValue())
 	}
 	if stub.cancels != 0 {
 		t.Fatalf("idle Esc must not Cancel: %v", stub.cancels)

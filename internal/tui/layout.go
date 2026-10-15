@@ -26,6 +26,8 @@ func transcriptContentWidth(termW int) int {
 }
 
 // bottomView 底部固定区：模态面板（有则）→ 授权卡/编辑器（互斥）→ 状态行。
+// 编辑器为多行 textarea（023 D12/FR-007）——动态高度 1→8 行随内容收口，
+// frame 的 lipgloss.Height 量测自动跟随（❯ 提示符仅首行，见 composer.go）。
 func (m *tuiModel) bottomView() string {
 	var b strings.Builder
 	if m.approval != nil {
@@ -37,7 +39,7 @@ func (m *tuiModel) bottomView() string {
 		b.WriteString(styleCard.Render(m.agentsPanelView()))
 		b.WriteString("\n")
 	} else {
-		b.WriteString("> " + m.input)
+		b.WriteString(m.composerState.ta.View())
 		b.WriteString("\n")
 	}
 	b.WriteString(styleStatus.Render(m.statusLine()))

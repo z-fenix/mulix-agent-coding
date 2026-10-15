@@ -46,8 +46,8 @@ func (m *tuiModel) handleEscapeKey() (tea.Model, tea.Cmd) {
 		if m.pendingSubmit != nil {
 			// 丢弃在途提交：还原草稿（忙期窗口内用户未再输入时——已有输入
 			// 以用户键入为准，弃稿不覆盖）；代际递增使迟到收据作废。
-			if m.input == "" {
-				m.input = m.pendingSubmit.text
+			if m.composerValue() == "" {
+				m.restoreComposer(m.pendingSubmit.text)
 			}
 			m.pendingSubmit = nil
 			m.genCounter++
@@ -59,15 +59,15 @@ func (m *tuiModel) handleEscapeKey() (tea.Model, tea.Cmd) {
 		}
 		return m, nil // 取消已在途——幂等
 	}
-	m.input = ""
+	m.clearComposer()
 	return m, nil
 }
 
 // handleCtrlCKey 渲染态 Ctrl+C 阶梯（FR-011 防误触）：有输入 → 清空（清空按
 // 不武装）；空输入首按 → 武装并提示；窗口内二按 → 退出，窗外 → 重武装。
 func (m *tuiModel) handleCtrlCKey() tea.Cmd {
-	if m.input != "" {
-		m.input = ""
+	if m.composerValue() != "" {
+		m.clearComposer()
 		m.quitArm = time.Time{}
 		return nil
 	}
