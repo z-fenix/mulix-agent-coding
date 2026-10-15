@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"mulix/internal/control"
+	"mulix/internal/sessionx"
 	"mulix/internal/tui"
 )
 
@@ -49,6 +50,36 @@ func tuiDoctorLines(o Options) func() []string {
 	}
 }
 
+// tuiListSessions 预合成 TUI /resume 选择器回调（023 FR-009；tuiDoctorLines
+// 同款注入形态——sessionx 未导出面收敛在组合根）：sessionx.ScanSessions 摘要
+// 投影 tui.SessionSummary。口径与 resolveResume 的 "@" 缺省一致——只列当前
+// 工作区且引擎 id 已就位的会话（无链会话不可续——Resume("") 会静默新开；跨
+// 工作区续链需回原工作区，resolveResume 同语义）；排序沿用 ScanSessions（新
+// 在前）。Scan 失败降级为空表（选择器是便利视图——错误面在 /resume <id> 直
+// 连表单与启动恢复门全量呈现；签名无 error 回程，不静默改写语义）。
+func tuiListSessions(o Options) func() []tui.SessionSummary {
+	return func() []tui.SessionSummary {
+		infos, _, err := sessionx.ScanSessions(o.SessionsRoot)
+		if err != nil {
+			return nil
+		}
+		out := make([]tui.SessionSummary, 0, len(infos))
+		for _, in := range infos {
+			if in.EngineID == "" {
+				continue // 引擎 init 未到即退出——无链可续
+			}
+			if o.Workspace != "" && in.Workspace != o.Workspace {
+				continue // 续链需回原工作区（resolveResume 同语义）
+			}
+			out = append(out, tui.SessionSummary{
+				ID: in.ID, EngineID: in.EngineID, Model: in.Model,
+				Workspace: in.Workspace, CreatedAt: in.CreatedAt, Unattended: in.Unattended,
+			})
+		}
+		return out
+	}
+}
+
 // RunTUI 生产 TUI 入口（root 默认命令；attended 会话）。装配顺序：withDefaults
 // → NewSink → openSession（初始会话绑定 sink）→ cliSwapper → tui.Run。
 func RunTUI(ctx context.Context, o Options, resumeID string) error {
@@ -65,8 +96,9 @@ func RunTUI(ctx context.Context, o Options, resumeID string) error {
 	// 启动句柄）。
 	defer func() { sw.cur.close() }()
 	return tui.Run(tui.Options{
-		UsageRoot: o.UsageRoot,
-		Doctor:    tuiDoctorLines(o),
-		Sink:      sink,
+		UsageRoot:    o.UsageRoot,
+		Doctor:       tuiDoctorLines(o),
+		Sink:         sink,
+		ListSessions: tuiListSessions(o),
 	}, h.ctrl, h.id, sw, sink.Events())
 }

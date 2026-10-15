@@ -10,6 +10,7 @@ import (
 	"mulix/internal/config"
 	"mulix/internal/control"
 	"mulix/internal/engine"
+	"mulix/internal/sessionx"
 )
 
 // ---- 真实装配辅助（原 tui_test.go 的 cli 侧留存——服务 TestCliSwapper 与
@@ -129,5 +130,39 @@ func TestCliSwapper(t *testing.T) {
 	}
 	if sw3.cur != nil {
 		t.Fatal("failed open must leave cur nil")
+	}
+}
+
+// TestTuiListSessions pins /resume 选择器的 cli 数据源投影（设计 §7.5）：
+// sessionx.ScanSessions 摘要 → tui.SessionSummary；口径与 resolveResume 的
+// "@" 缺省一致——只列当前工作区且引擎 id 已就位的会话（无链/跨工作区不可
+// 续，列出必错）；新在前沿用 ScanSessions 序。
+func TestTuiListSessions(t *testing.T) {
+	root := t.TempDir()
+	mk := func(id, ws, engineID string) {
+		t.Helper()
+		s, err := sessionx.Create(root, sessionx.Options{ID: id, Workspace: ws, Model: "claude-x", EngineID: engineID})
+		if err != nil {
+			t.Fatalf("seed %s: %v", id, err)
+		}
+		t.Cleanup(func() { _ = s.Close() })
+	}
+	mk("s-old", "w", "eng-old")
+	mk("s-other-ws", "elsewhere", "eng-other")
+	mk("s-nochain", "w", "")
+
+	o := Options{Workspace: "w", SessionsRoot: root}
+	got := tuiListSessions(o)()
+	if len(got) != 1 || got[0].EngineID != "eng-old" {
+		t.Fatalf("list = %+v, want only eng-old", got)
+	}
+	if got[0].ID != "s-old" || got[0].Model != "claude-x" || got[0].Workspace != "w" {
+		t.Fatalf("projection fields = %+v", got[0])
+	}
+
+	// Workspace 未设（缺省前防御面）→ 只按引擎链过滤
+	all := tuiListSessions(Options{SessionsRoot: root})()
+	if len(all) != 2 {
+		t.Fatalf("unfiltered list = %+v, want 2（无链仍排除）", all)
 	}
 }

@@ -15,7 +15,7 @@ import (
 //  1. 接收者——参考方法挂 chatTUI（字段平铺模型本体）；本仓滚动状态收敛为
 //     tuiModel.scrollState 子结构（D4 骨架落位），方法挂 *tuiModel。
 //  2. modalOpen 豁免集——参考为 approval/chooser/rewind/mcp 等 10 项；本仓
-//     现有面板仅授权卡与 /agents，补全菜单与会话选择器随 Task 15/16 扩。
+//     = 授权卡 + /agents + /resume 选择器 + 补全菜单（FR-009 Task 15 增入）。
 //
 // 此前的隐式尾随（syncViewport 无条件 GotoBottom）在"应用消息前的 wasAtBottom
 // 快照"方案下有已知缺陷：开授权卡/面板这类仅改变底部区高度（bottomRows 增大、
@@ -64,10 +64,10 @@ func (m *tuiModel) shouldFollowTail() bool {
 
 // modalOpen 为「抢占底部行数（或整个主区）的面板」激活时的真值。height-only
 // 布局变化不得据此标记 userScrolled（对照参考 scroll_state.go:45-58）。豁免集
-// 随面板落地扩行：本任务 = 授权卡 + /agents 面板；补全菜单与会话选择器随
-// Task 15/16 增入。
+// ：授权卡 + /agents 面板 + /resume 选择器 + 补全菜单（023 FR-009 Task 15 增入
+// ——菜单/选择器都抬高底部区；菜单虽非独占态，同属 height-only 开合）。
 func (m *tuiModel) modalOpen() bool {
-	return m.approval != nil || m.agentsOpen
+	return m.approval != nil || m.agentsOpen || m.picker != nil || m.completeOpen()
 }
 
 // syncScrollModeAfterGesture 在主动滚动命令后按当前视口位置归位跟随态：落在

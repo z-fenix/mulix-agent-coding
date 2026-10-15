@@ -28,6 +28,10 @@ type Options struct {
 	// Sink 是事件汇（组合根创建并已绑定初始会话；必须与 Run 的 events 参数
 	// 同源）。换绑时模型以它供给 SessionSwapper.Open——新会话事件续流同一通道。
 	Sink *Sink
+	// ListSessions 是 /resume 选择器的数据源回调（023 FR-009；组合根注入：
+	// sessionx.ScanSessions 摘要投影 SessionSummary，新在前；nil = 提示未注入，
+	// 防御面不进面板态）。空表视为无可续链会话（留痕）。
+	ListSessions func() []SessionSummary
 }
 
 // Run 生产 TUI 主循环（组合根入口：cli 装配初始会话、换绑器与事件汇后注入）。
@@ -63,6 +67,11 @@ type tuiModel struct {
 	// /agents 面板（M12/T12.4）：列表态独占 composer；agentsSel 是选中行。
 	agentsOpen bool
 	agentsSel  int
+	// 补全菜单 + /resume 选择器（023 FR-009）：complete 是 composer 邻接浮层
+	//（非独占——编辑继续，导航/补全键拦截见 complete.go）；picker 是列表态
+	// 独占模态（composer 冻结，与 agents 同级互斥；nil = 关闭）。
+	complete completeMenu
+	picker   *resumePicker
 	// 关注点子结构（D4 骨架）：transcriptState 已于 FR-001 落位（语义块 +
 	// viewport）；其余字段随后续任务逐块从上方平铺字段迁入——迁移完成前
 	// 平铺字段仍是权威（见各 struct 注释）。composerState 已于 FR-007 迁入
@@ -560,14 +569,16 @@ func (m *tuiModel) commitAnswerBlock(b assistantBlock) {
 	m.answerIdx = len(m.transcriptState.blocks) - 1
 }
 
-// handleKey 键盘路由。Ctrl+C 优先：治理独占态（审批卡 / /agents 面板）单击
-// 退出（Minor-4 逃生口——独占态不可困死用户），渲染态走双击阶梯（keys.go
-// handleCtrlCKey）；审批态只响应审批键（审批态/渲染态互斥——composer 冻结，
-// 输入与提交都被忽略，Esc=拒绝）；/agents 列表态独占 composer；渲染态滚动
-// 手势、输入、Esc 阶梯（keys.go handleEscapeKey）与提交。
+// handleKey 键盘路由。Ctrl+C 优先：治理独占态（审批卡 / /agents 面板 /
+// /resume 选择器）单击退出（Minor-4 逃生口——独占态不可困死用户），渲染态走
+// 双击阶梯（keys.go handleCtrlCKey）；审批态只响应审批键（审批态/渲染态互斥
+// ——composer 冻结，输入与提交都被忽略，Esc=拒绝）；/agents 列表态与 /resume
+// 选择器独占 composer（同级互斥）；补全菜单为 composer 邻接浮层（非独占——
+// 导航/补全键拦截，其余键落编辑器）；渲染态滚动手势、输入、Esc 阶梯（keys.go
+// handleEscapeKey）与提交。
 func (m *tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.Code == 'c' && msg.Mod&tea.ModCtrl != 0 { // Contains(0) 恒真——不能用作零 Mod 判定
-		if m.approval != nil || m.agentsOpen {
+		if m.approval != nil || m.agentsOpen || m.picker != nil {
 			return m, tea.Quit
 		}
 		return m, m.handleCtrlCKey()
@@ -585,6 +596,16 @@ func (m *tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.agentsOpen { // /agents 列表态独占 composer（与审批态同级互斥）
 		return m.handleAgentsKey(msg)
+	}
+	if m.picker != nil { // /resume 选择器（列表态独占 composer，023 FR-009）
+		return m.handlePickerKey(msg)
+	}
+	// 补全菜单（composer 邻接浮层，非独占）：↑/↓/Tab/Enter/Esc 在此消费，
+	// 其余键落 textarea 并随值重过滤（对照参考 chat_tui.go:1424-1459）。
+	if m.completeOpen() {
+		if m2, cmd, consumed := m.handleCompleteKey(msg); consumed {
+			return m2, cmd
+		}
 	}
 	// 转写滚动手势（023 D5）：审批/agents 独占态在上方分支拦截——治理独占期
 	// 按键不泄漏（D10/D11；对照参考 chat_tui.go:1316-1333 在任意状态可滚动，
@@ -631,6 +652,7 @@ func (m *tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.composerState.ta, cmd = m.composerState.ta.Update(msg)
 	m.syncComposerFolds() // FR-008：记号删除/改坏即剪除 fold 账目（正文不残留）
+	m.syncComplete()      // FR-009：补全菜单随值重过滤（键入/删改共用此同步点）
 	return m, cmd
 }
 
@@ -727,8 +749,7 @@ func (m *tuiModel) slash(line string) tea.Cmd {
 		return m.swapSession("")
 	case "/resume":
 		if len(fields) < 2 {
-			m.appendLine("[resume] 用法：/resume <引擎 session id>（无参形态随会话选择器落地）")
-			return nil
+			return m.openResumePicker() // 无参 → 交互式选择器（023 FR-009）
 		}
 		return m.swapSession(fields[1])
 	default:
@@ -897,10 +918,11 @@ func (m *tuiModel) View() tea.View {
 }
 
 // composerCursor 真实终端光标的帧坐标（023 D12）：textarea.Cursor 相对编辑器
-// 视图定位；换算到帧坐标——编辑器驻底部固定区首行，行偏移 = H − 底部区行数
-// （与 frame 的视口高度同口径，下限 1）。
+// 视图定位；换算到帧坐标——编辑器驻底部固定区（补全菜单在其上方，023 FR-009
+// ——行偏移 = H − 底部区行数 + 菜单行数，下限 1）。治理独占态（审批卡
+// /agents 面板//resume 选择器）不渲染 composer，光标一并隐藏。
 func (m *tuiModel) composerCursor() *tea.Cursor {
-	if m.approval != nil || m.agentsOpen {
+	if m.approval != nil || m.agentsOpen || m.picker != nil {
 		return nil
 	}
 	c := m.composerState.ta.Cursor()
@@ -908,6 +930,9 @@ func (m *tuiModel) composerCursor() *tea.Cursor {
 		return nil
 	}
 	y := m.height - lipgloss.Height(m.bottomView())
+	if menu := m.completeMenuView(); menu != "" {
+		y += lipgloss.Height(menu) // 菜单驻 composer 上方——光标跳过菜单行
+	}
 	if y < 1 {
 		y = 1
 	}

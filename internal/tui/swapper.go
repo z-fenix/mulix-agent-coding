@@ -31,3 +31,16 @@ type SessionSwapper interface {
 	CloseCurrent()                                                              // 关当前会话（收尾 publish 入 sink）
 	Open(resumeID string, sink control.Sink) (SessionController, string, error) // 同 sink 开新/续链会话
 }
+
+// SessionSummary 是 /resume 选择器的会话摘要行（023 FR-009；组合根经
+// Options.ListSessions 供给——cli 侧由 sessionx.ScanSessions 的 SessionInfo
+// 投影；tui 不 import sessionx，组合根注入面与 Doctor 同法）。EngineID 是
+// 换绑 Resume 的实参——空链会话不可续（cli 侧投影已滤除；防御面兜底拒绝）。
+type SessionSummary struct {
+	ID         string // mulix 会话 id（镜像目录名）
+	EngineID   string // 引擎 session id（Open(resumeID) 的实参）
+	Model      string
+	Workspace  string
+	CreatedAt  string // RFC3339（ScanSessions 已按新在前排序）
+	Unattended bool   // 无人值守会话标注（选择器行内呈现）
+}

@@ -117,21 +117,24 @@ func (m *tuiModel) composerValue() string {
 }
 
 // clearComposer 清空输入并复位召回态（Esc 空闲档 / Ctrl+C 清空档 / 提交后）。
-// 在册 fold 一并剪除——草稿弃即粘贴正文弃（不残留、不复活）。
+// 在册 fold 一并剪除——草稿弃即粘贴正文弃（不残留、不复活）。补全菜单随值
+// 收口（空值不构成 "/词" 记号，FR-009）。
 func (m *tuiModel) clearComposer() {
 	m.composerState.ta.SetValue("")
 	m.composerState.histIdx = -1
 	m.composerState.draft = ""
 	m.syncComposerFolds()
+	m.syncComplete()
 }
 
 // restoreComposer 还原草稿文本（D10 忙碌 Esc 丢弃在途提交的还原路径）——
-// 光标置尾（SetValue 语义），召回游标复位。
+// 光标置尾（SetValue 语义），召回游标复位；补全菜单随值重过滤（FR-009）。
 func (m *tuiModel) restoreComposer(text string) {
 	m.composerState.ta.SetValue(text)
 	m.composerState.histIdx = -1
 	m.composerState.draft = ""
 	m.syncComposerFolds()
+	m.syncComplete()
 }
 
 // rememberSubmitted 记录成功派发的提交入历史（对照参考 chat_tui.go:757
@@ -199,11 +202,14 @@ func (m *tuiModel) recallHistory(delta int) bool {
 	return true
 }
 
-// setComposerValue 整串替换输入（召回翻页共用）——光标置尾。不剪除 fold：
-// 召回是草稿的临时可见替换，↓ 越过最新一条还原草稿时记号须仍有效（fold 账
-// 目随编辑器逐键同步与清空/还原路径剪除，见 syncComposerFolds）。
+// setComposerValue 整串替换输入（召回翻页 / 补全应用共用，FR-009）——光标
+// 置尾；补全菜单随值重过滤（召回 "/" 起头串重开菜单，与参考「统一重过滤」
+// 同语义）。不剪除 fold：召回是草稿的临时可见替换，↓ 越过最新一条还原草稿时
+// 记号须仍有效（fold 账目随编辑器逐键同步与清空/还原路径剪除，见
+// syncComposerFolds）。
 func (m *tuiModel) setComposerValue(s string) {
 	m.composerState.ta.SetValue(s)
+	m.syncComplete()
 }
 
 // ---- 粘贴折叠（023 FR-008）----
@@ -213,20 +219,23 @@ func (m *tuiModel) setComposerValue(s string) {
 // 周期随编辑器逐键同步：删除或改坏即剪除账目，正文不残留、提交不复活。
 
 // handlePaste bracketed paste 入口（Update 路由 tea.PasteMsg）：治理独占态
-// （审批卡 / agents 面板）composer 冻结——粘贴不泄漏（与 handleKey 同门禁）；
-// 达折叠阈值折叠为可删记号，低于阈值原文直插（textarea 原生粘贴路径）。回合
-// 进行中不设门禁——忙期起草下一条输入与键入同权。
+// （审批卡 / agents 面板 / /resume 选择器）composer 冻结——粘贴不泄漏（与
+// handleKey 同门禁）；达折叠阈值折叠为可删记号，低于阈值原文直插（textarea
+// 原生粘贴路径）。回合进行中不设门禁——忙期起草下一条输入与键入同权。粘贴
+// 后补全菜单随值重过滤（FR-009——粘贴 "/" 起头短文本重开菜单，词界粘贴收口）。
 func (m *tuiModel) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
-	if m.approval != nil || m.agentsOpen {
+	if m.approval != nil || m.agentsOpen || m.picker != nil {
 		return m, nil
 	}
 	if shouldFoldPaste(msg.Content) {
 		m.insertPasteFold(msg.Content)
+		m.syncComplete()
 		return m, nil
 	}
 	var cmd tea.Cmd
 	m.composerState.ta, cmd = m.composerState.ta.Update(msg)
 	m.syncComposerFolds() // 选区覆盖记号的原生粘贴路径——记号可能随选区被替换
+	m.syncComplete()
 	return m, cmd
 }
 

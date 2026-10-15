@@ -25,20 +25,30 @@ func transcriptContentWidth(termW int) int {
 	return 1
 }
 
-// bottomView 底部固定区：模态面板（有则）→ 授权卡/编辑器（互斥）→ 状态行。
-// 编辑器为多行 textarea（023 D12/FR-007）——动态高度 1→8 行随内容收口，
-// frame 的 lipgloss.Height 量测自动跟随（❯ 提示符仅首行，见 composer.go）。
+// bottomView 底部固定区：模态面板（有则）→ 授权卡/选择器/编辑器（互斥）→
+// 状态行。编辑器为多行 textarea（023 D12/FR-007）——动态高度 1→8 行随内容
+// 收口，frame 的 lipgloss.Height 量测自动跟随（❯ 提示符仅首行，见 composer.go）；
+// 补全菜单浮在编辑器上方（023 FR-009——无框行列表紧贴输入行，对照参考
+// renderCompletion；菜单是邻接浮层，编辑器保持活跃）。
 func (m *tuiModel) bottomView() string {
 	var b strings.Builder
-	if m.approval != nil {
+	switch {
+	case m.approval != nil:
 		card := fmt.Sprintf("工具 %s（%s）等待授权\n[a] 本次允许  [s] 本会话允许  [d] 拒绝",
 			m.approval.tool, shortID(m.approval.toolUseID))
 		b.WriteString(styleCard.Render(card))
 		b.WriteString("\n")
-	} else if m.agentsOpen {
+	case m.agentsOpen:
 		b.WriteString(styleCard.Render(m.agentsPanelView()))
 		b.WriteString("\n")
-	} else {
+	case m.picker != nil:
+		b.WriteString(styleCard.Render(m.pickerView()))
+		b.WriteString("\n")
+	default:
+		if menu := m.completeMenuView(); menu != "" {
+			b.WriteString(menu)
+			b.WriteString("\n")
+		}
 		b.WriteString(m.composerState.ta.View())
 		b.WriteString("\n")
 	}
