@@ -257,6 +257,10 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		//（scrollstate.go handleWheel——MouseMode 经 View 声明启用上报）。
 		m.handleWheel(msg)
 		return m, nil
+	case tea.PasteMsg:
+		// bracketed paste（023 FR-008）：达折叠阈值折叠为可删记号，低于阈值
+		// 原文直插（composer.go handlePaste——治理独占态同门禁不泄漏）。
+		return m.handlePaste(msg)
 	case typedInput:
 		// 测试注入：整串文本按逐字符输入处理（审批态被 handleKey 忽略——
 		// 与真实键序一致）。
@@ -626,6 +630,7 @@ func (m *tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	var cmd tea.Cmd
 	m.composerState.ta, cmd = m.composerState.ta.Update(msg)
+	m.syncComposerFolds() // FR-008：记号删除/改坏即剪除 fold 账目（正文不残留）
 	return m, cmd
 }
 
@@ -655,6 +660,7 @@ func (m *tuiModel) submit() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	text := strings.TrimSpace(m.composerValue())
+	text = m.expandFolds(text) // FR-008：记号还原全文——派发/历史/镜像只见全文
 	m.clearComposer()
 	if strings.HasPrefix(text, "/") {
 		return m, m.slash(text)
