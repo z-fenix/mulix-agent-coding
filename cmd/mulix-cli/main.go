@@ -1,4 +1,4 @@
-// Command mulix 是 mulix CLI 的入口：命令路由在 internal/cli（design §5.2）。
+// Command mulix-cli 是 mulix CLI 的入口：命令路由在 internal/cli（design §5.2）。
 package main
 
 import (

@@ -3,7 +3,7 @@ package cli
 // mulix lint layers（M17 / design 002 §6）：分层检查门禁子命令。
 //
 // 口径：repoRoot = Options.Workspace（命令在模块根运行——CI 于 checkout 根
-// 执行 go run ./cmd/mulix lint layers，自食其力）。棘轮基线默认在
+// 执行 go run ./cmd/mulix-cli lint layers，自食其力）。棘轮基线默认在
 // docs/lint/ratchet.json（入库文件；--fix 重生成，只紧不松）。违规 → 返回
 // error（main.go 打印并 exit 1）；干净 → nil（exit 0）。
 

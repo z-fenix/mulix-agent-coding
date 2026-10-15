@@ -114,8 +114,8 @@ func NewRootCommand(opts Options) *cobra.Command {
 	var allowDrift bool
 
 	root := &cobra.Command{
-		Use:           "mulix",
-		Short:         "mulix — 缓存感知的编码代理 harness",
+		Use:           "mulix-cli",
+		Short:         "mulix-cli — 缓存感知的编码代理 harness",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Version:       Version,

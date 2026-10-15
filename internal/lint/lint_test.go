@@ -289,7 +289,7 @@ func TestCleanTreeZeroViolations(t *testing.T) {
 		"internal/control/ctl.go":        "package control\n\nimport (\n\t_ \"mulix/internal/cache\"\n\t_ \"mulix/internal/config\"\n\t_ \"mulix/internal/engine\"\n\t_ \"mulix/internal/event\"\n\t_ \"mulix/internal/guard\"\n\t_ \"mulix/internal/memory\"\n\t_ \"mulix/internal/sessionx\"\n\t_ \"mulix/internal/subagent\"\n)\n",
 		"internal/cli/ui.go":             "package cli\n\nimport (\n\t_ \"mulix/internal/control\"\n\t_ \"mulix/internal/registry\"\n\t_ \"mulix/internal/tools/mulixusage\"\n)\n",
 		"internal/tools/mulixusage/u.go": "package mulixusage\n\nimport (\n\t_ \"mulix/internal/cache\"\n\t_ \"mulix/internal/registry\"\n)\n",
-		"cmd/mulix/main.go":              "package main\n\nimport (\n\t_ \"mulix/internal/cli\"\n\t_ \"mulix/internal/tools/mulixusage\"\n)\n",
+		"cmd/mulix-cli/main.go":          "package main\n\nimport (\n\t_ \"mulix/internal/cli\"\n\t_ \"mulix/internal/tools/mulixusage\"\n)\n",
 	})
 	for _, ratchet := range []string{"", filepath.Join(root, "ratchet.json")} {
 		vs, err := RunLayers(root, ratchet)
