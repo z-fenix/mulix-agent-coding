@@ -141,7 +141,7 @@ func TestEscRunningCancels(t *testing.T) {
 // TestCancelledTurnRendersPausedLine 钉：本地取消意图下回合收口渲染
 // 「⏹ 回合已取消 tN」——不看 TurnDone.Subtype/IsError（引擎中断后的回执形态
 // 无 fixture 钉死，绝不渲染为「回合失败」）；意图消费即清。对照组：无取消
-// 意图时既有 [回合完成] 行不变。
+// 意图时既有回合完成行（设计 §6：✓ 回合完成 tN）不变。
 func TestCancelledTurnRendersPausedLine(t *testing.T) {
 	m, _, _ := newTestModel(t)
 	m.cancelIntent = true
@@ -161,7 +161,7 @@ func TestCancelledTurnRendersPausedLine(t *testing.T) {
 	// 对照组：无取消意图 → 既有收口语义不变。
 	m2, _, _ := newTestModel(t)
 	m2 = update(t, m2, tuiEvent{ev: event.TurnDoneEvent{Seq: 2, Turn: 8, Subtype: "success"}})
-	if !strings.Contains(m2.View().Content, "[回合完成 t8]") {
+	if !strings.Contains(m2.View().Content, "✓ 回合完成 t8") {
 		t.Fatalf("normal close line missing:\n%s", m2.View().Content)
 	}
 }

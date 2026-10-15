@@ -56,9 +56,8 @@ type tuiModel struct {
 	width    int
 	height   int
 	approval *approvalCard // 非 nil = 审批态（与渲染态互斥：composer 冻结）
-	status   control.Snapshot
-	running  bool // 回合进行中（异步 Submit——Update 循环保持响应）
-	swapping bool // 换绑进行中（/new /resume 异步——与 running 同门禁语义）
+	running  bool          // 回合进行中（异步 Submit——Update 循环保持响应）
+	swapping bool          // 换绑进行中（/new /resume 异步——与 running 同门禁语义）
 	// /agents 面板（M12/T12.4）：列表态独占 composer；agentsSel 是选中行。
 	agentsOpen bool
 	agentsSel  int
@@ -87,13 +86,15 @@ type tuiModel struct {
 	// 思考块状态（Task 8 D14）：thinkingIdx 活块下标（-1 = 无）；thinkingFull
 	// 全文驻留（收口升格进块尾——展开面随 Task 21）；thinkingTail 有界尾窗
 	//（流式渲染源）；thinkStart/thinkEnd 首末思考事件到达的本地钟戳；
-	// thinkingPending 收口前到账的回执 token（Task 17 接缝，收口落槽）。
+	// thinkingPending 收口前到账的回执 token（Task 17 接缝，收口落槽）；
+	// thinkingTurn 活块回合归属（noteThinkingTokens 回填的回合守卫凭据）。
 	thinkingIdx     int
 	thinkingFull    string
 	thinkingTail    string
 	thinkStart      time.Time
 	thinkEnd        time.Time
 	thinkingPending int64
+	thinkingTurn    int64
 	// 工具卡状态（Task 9 FR-005）：cards 索引 toolUseID → 块下标——回执按同
 	// ID upsert 原地关卡（卡片本体指针驻块流，见 toolcard.go）。
 	cards map[string]int
@@ -127,8 +128,12 @@ var (
 // 字段随后续任务从 tuiModel 平铺平移迁入（迁移完成前 tuiModel 平铺字段仍是
 // 权威）。
 type approvalState struct{} // 审批互斥态（approval 卡）
-type statusState struct{}   // 状态栏快照（status）与 busy 门禁
-type themeState struct{}    // 样式与配色（styleStatus/styleCard）
+// statusState 状态栏关注点（Task 17 迁入）：snapshot 为 500ms 轮询的快照
+// （D7 状态数据——状态栏唯一数据源），statusView 渲染见 status.go。
+type statusState struct {
+	snapshot control.Snapshot
+}
+type themeState struct{} // 样式与配色（styleStatus/styleCard）
 
 func newTuiModel(o Options, ctrl SessionController, events <-chan tuiEvent, sessionID string) *tuiModel {
 	return &tuiModel{
@@ -180,7 +185,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case statusTick:
 		if m.ctrl != nil {
-			m.status = m.ctrl.Snapshot()
+			m.statusState.snapshot = m.ctrl.Snapshot()
 		}
 		if m.testMode {
 			return m, nil
@@ -221,7 +226,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.ctrl = msg.ctrl // Critical-A：换绑后控制面必须指向新控制器
 		m.selfID = msg.id
-		m.status = control.Snapshot{}
+		m.statusState.snapshot = control.Snapshot{}
 		m.approval = nil // 旧会话的审批卡作废（对旧桥的裁决路径已不存在）
 		// 旧会话的流式答案缓冲一并作废：换绑排空丢弃旧残响（不经 handleEvent），
 		// 残留 pending 若不清会把新会话文本续进旧答案块。
@@ -376,14 +381,21 @@ func (m *tuiModel) handleEvent(ev any) {
 			m.cancelIntent = false
 			m.appendLine("⏹ 回合已取消 t" + fmt.Sprint(e.Turn))
 		} else if e.IsError {
-			m.appendLine("[回合失败] " + e.Subtype)
+			// 设计 §6：`✗ 回合失败 tN（subtype）`。
+			m.appendLine("✗ 回合失败 t" + fmt.Sprint(e.Turn) + "（" + e.Subtype + "）")
 		} else {
-			m.appendLine("[回合完成 t" + fmt.Sprint(e.Turn) + "]")
+			// 设计 §6：`✓ 回合完成 tN · Ns`；时长缺席（<=0）整体省略——不渲染
+			// 未知的 0s（D7 同款不造数纪律）。
+			done := "✓ 回合完成 t" + fmt.Sprint(e.Turn)
+			if e.DurationMS > 0 {
+				done += fmt.Sprintf(" · %.1fs", float64(e.DurationMS)/1000)
+			}
+			m.appendLine(done)
 		}
 	case event.EngineExitedEvent:
 		m.closeThinking()
 		m.sealAnswer()
-		m.appendLine("[引擎已退出] " + e.Reason)
+		m.appendLine("✗ 引擎已退出（" + e.Reason + "）")
 	case event.DelegationStartedEvent:
 		// 委派卡开卡（Task 11 FR-016）：非文本转写事件——块生命周期纪律同工具卡
 		//（先收口思考块、整段冲刷流式答案），再落运行中卡。
@@ -416,10 +428,16 @@ func (m *tuiModel) handleEvent(ev any) {
 			b.reason = e.Reason
 		})
 	case event.UsageEvent:
-		// 状态栏走 Snapshot 轮询；usage 事件不进 transcript。思考块按块生命
-		// 周期收口（usage 边界=参考 commitReasoning 的收口边界之一）；token
-		// 回填 noteThinkingTokens 由 Task 17 回合回执接线。
+		// D16 回合回执（Task 17）：usage 先于 TurnDone 发布（controller.go:1357
+		// →1369）——先按块生命周期收口思考块，再整段冲刷流式答案（不冲刷则
+		// 尾段落块会排到回执之后），然后落回试行于该回合答案下方。思考 token
+		// 同步回填（Task 8 接缝闭环）：usage 已收口思考块，回填落最近一个同
+		// 回合思考块（回合守卫见 noteThinkingTokens）。状态栏照旧走 Snapshot
+		// 轮询（D7），两者并存不冲突。
 		m.closeThinking()
+		m.sealAnswer()
+		m.noteThinkingTokens(e.Turn, e.ThinkingTokens)
+		m.appendReceipt(e)
 	}
 }
 
@@ -913,22 +931,10 @@ func (m *tuiModel) composerCursor() *tea.Cursor {
 	return c
 }
 
-// statusLine 状态栏（brief：模型 | 会话命中率 | 本回合 tokens | 成本；
-// expected_cold 标注）。
-func (m *tuiModel) statusLine() string {
-	rep := m.status.MeterReport
-	cold := ""
-	if rep.ColdTurns > 0 {
-		cold = fmt.Sprintf(" | ❄冷回合 %d", rep.ColdTurns)
-	}
-	turn := m.status.TurnTokens
-	tokens := fmt.Sprintf("回合 t%d %d tok", m.status.Turn, turn.InputTokens+turn.CacheWriteTokens+turn.CacheReadTokens+turn.OutputTokens)
-	running := "空闲"
-	if m.status.Running {
-		running = "运行中"
-	}
-	return fmt.Sprintf("%s | 会话 %s | 命中率 %.1f%% | %s | 成本 $%.4f%s | %s",
-		m.status.Model, shortID(m.selfID), rep.SessionHit*100, tokens, rep.Cost, cold, running)
+// appendReceipt 落回合回试行（D16）：UsageEvent 驱动的块驻块流尾（该回合答案
+// 已先行冲刷落块——见 handleEvent UsageEvent 次序），块本体见 status.go。
+func (m *tuiModel) appendReceipt(e event.UsageEvent) {
+	m.transcriptState.append(receipt{turn: e.Turn, usage: e})
 }
 
 func shortID(id string) string {

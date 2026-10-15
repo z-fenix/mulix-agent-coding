@@ -14,9 +14,10 @@ import (
 //
 // 设计 §6 映射表逐行断言：15 种前端可见事件 × 输入序列 → 转写块序列（子串）
 // /状态谓词。语义按 P1 落地面钉住——语义升级（P2/P3）只改渲染不改本骨架
-//（设计 §6 覆盖纪律）。两处已知后续任务接缝，本矩阵只钉现状：
-//   - Usage 回执行（D16）随 Task 17 接线：此处只断言不进转写、收口思考块；
-//   - TurnDone 收口行沿用 P1 三分支（完成/⏹ 取消/失败），回执明细随 D16。
+//（设计 §6 覆盖纪律）。Task 17（D16）已把两处 P1 接缝升级为设计形态：
+//   - Usage 落回合回试行（字段见 status_test.go TestTurnReceipt）+ 思考 token
+//     回填同回合块；
+//   - TurnDone/EngineExited 收口行升级为设计 §6 形态（✓/⏹/✗ + 时长）。
 
 // matrixCase 一行矩阵：events 依序驱动（tea.KeyPressMsg 直通 Update、
 // func(*tuiModel) 白盒布置前置态、其余按事件包 tuiEvent）；wantBlocks 为
@@ -196,24 +197,30 @@ func TestEventRenderMatrix(t *testing.T) {
 				}
 			},
 		},
-		// 9. UsageEvent（P1 现状接缝）：不进转写（回执行随 Task 17/D16 接线）、
-		//    按块生命周期收口思考块。
+		// 9. UsageEvent（D16）：回合回试行落转写（答案下方）+ 收口思考块 +
+		//    思考 token 回填同回合块（Task 8 接缝闭环）。状态栏照旧走 Snapshot
+		//    轮询（D7），两者并存不冲突。
 		{
-			name: "Usage 不进转写且收口思考块（回执随 Task 17）",
+			name: "Usage 回执落转写、收口思考块并回填 token",
 			events: []any{
-				event.AssistantThinkingEvent{Seq: 1, Thinking: "推理"},
-				event.UsageEvent{Seq: 2, Turn: 1, ThinkingTokens: 42},
+				event.AssistantThinkingEvent{Seq: 1, Turn: 1, Thinking: "推理"},
+				event.UsageEvent{Seq: 2, Turn: 1, UncachedInputTokens: 10, WriteTokens: 20,
+					ReadTokens: 30, OutputTokens: 40, ThinkingTokens: 42, CostUSD: 0.5, HitRate: 0.5},
 			},
-			wantAbsent: []string{"回执"},
+			wantBlocks: []string{"✓ 回合 t1", "入10/写20/读30/出40/思42 tok", "$0.5000", "命中50%"},
 			wantState: func(t *testing.T, m *tuiModel) {
-				if len(m.transcriptState.blocks) != 1 {
-					t.Fatalf("Usage must not add transcript blocks, blocks = %d", len(m.transcriptState.blocks))
-				}
 				if m.thinkingIdx != -1 {
 					t.Fatalf("Usage must close the thinking block, thinkingIdx = %d", m.thinkingIdx)
 				}
-				if _, ok := m.transcriptState.blocks[0].(thinkingBlock); !ok {
-					t.Fatalf("only block must be the thinking block, got %#v", m.transcriptState.blocks[0])
+				if len(m.transcriptState.blocks) != 2 {
+					t.Fatalf("thinking + receipt = 2 blocks, got %d", len(m.transcriptState.blocks))
+				}
+				tb, ok := m.transcriptState.blocks[0].(thinkingBlock)
+				if !ok || tb.tokens != 42 {
+					t.Fatalf("thinking block must be backfilled from same-turn usage, got %#v", m.transcriptState.blocks[0])
+				}
+				if _, ok := m.transcriptState.blocks[1].(receipt); !ok {
+					t.Fatalf("second block must be the receipt, got %#v", m.transcriptState.blocks[1])
 				}
 			},
 		},
@@ -231,15 +238,16 @@ func TestEventRenderMatrix(t *testing.T) {
 			wantBlocks: []string{"! 引擎漂移", "\x1b[33m"},
 			wantAbsent: []string{"[notice]"},
 		},
-		// 12. TurnDoneEvent（完成）：折叠思考块 + 冲刷流式残留 + 收口行。
+		// 12. TurnDoneEvent（完成）：折叠思考块 + 冲刷流式残留 + 收口行
+		//     （设计 §6：✓ + 时长，DurationMS 来自 TurnDoneEvent）。
 		{
 			name: "TurnDone 完成：折叠思考、冲刷残留、收口行",
 			events: []any{
 				event.AssistantThinkingEvent{Seq: 1, Thinking: "想清楚"},
 				event.AssistantTextEvent{Seq: 2, Turn: 1, Text: "未完段落"},
-				event.TurnDoneEvent{Seq: 3, Turn: 6, Subtype: "success"},
+				event.TurnDoneEvent{Seq: 3, Turn: 6, Subtype: "success", DurationMS: 4500},
 			},
-			wantBlocks: []string{"✓ 已思考", "未完段落", "[回合完成 t6]"},
+			wantBlocks: []string{"✓ 已思考", "未完段落", "✓ 回合完成 t6 · 4.5s"},
 			wantState: func(t *testing.T, m *tuiModel) {
 				if m.pendingMD != "" || m.thinkingIdx != -1 {
 					t.Fatalf("turn close must flush residue and collapse thinking: pending=%q idx=%d",
@@ -266,20 +274,21 @@ func TestEventRenderMatrix(t *testing.T) {
 				}
 			},
 		},
-		// 14. TurnDoneEvent（失败）。
+		// 14. TurnDoneEvent（失败）：设计 §6 形态 `✗ 回合失败 tN（subtype）`。
 		{
 			name:       "TurnDone 失败收口",
 			events:     []any{event.TurnDoneEvent{Seq: 1, Turn: 5, IsError: true, Subtype: "error_max_turns"}},
-			wantBlocks: []string{"[回合失败] error_max_turns"},
+			wantBlocks: []string{"✗ 回合失败 t5（error_max_turns）"},
 		},
-		// 15. EngineExitedEvent：退出留痕行；编辑器保持可用。
+		// 15. EngineExitedEvent：退出留痕行（设计 §6：✗ 引擎已退出（reason））；
+		//     编辑器保持可用。
 		{
 			name: "EngineExited 留痕且编辑器保持可用",
 			events: []any{
 				event.EngineExitedEvent{Seq: 1, Code: 1, Reason: "process exited: exit status 1"},
 				keyPress('x'),
 			},
-			wantBlocks: []string{"[引擎已退出] process exited: exit status 1"},
+			wantBlocks: []string{"✗ 引擎已退出（process exited: exit status 1）"},
 			wantState: func(t *testing.T, m *tuiModel) {
 				if m.composerValue() != "x" {
 					t.Fatalf("editor must stay usable after engine exit, input = %q", m.composerValue())

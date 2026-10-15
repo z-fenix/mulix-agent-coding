@@ -105,10 +105,10 @@ func TestComposerDynamicHeight(t *testing.T) {
 	if got := composerRows(m); got != composerMaxRows {
 		t.Fatalf("9-line content must cap at %d rows: %d", composerMaxRows, got)
 	}
-	// 底部固定区 = 编辑器 8 行 + 状态行 1 行
-	if got := lipgloss.Height(m.bottomView()); got != composerMaxRows+1 {
-		t.Fatalf("bottom region height = %d, want %d (editor %d + status 1)",
-			got, composerMaxRows+1, composerMaxRows)
+	// 底部固定区 = 编辑器 8 行 + 状态栏 2 行（FR-012 双行状态栏，Task 17）
+	if got := lipgloss.Height(m.bottomView()); got != composerMaxRows+2 {
+		t.Fatalf("bottom region height = %d, want %d (editor %d + status 2)",
+			got, composerMaxRows+2, composerMaxRows)
 	}
 }
 

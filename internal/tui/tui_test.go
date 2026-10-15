@@ -199,26 +199,6 @@ func TestBusyGate(t *testing.T) {
 
 func typeStr(_ *tuiModel, s string) tea.Msg { return typedInput(s) }
 
-// TestStatusBar pins：状态栏含模型 | 会话命中率 | 本回合 tokens | 成本；
-// expected_cold 有冷回合时标注。
-func TestStatusBar(t *testing.T) {
-	m, _, _ := newTestModel(t)
-	m = update(t, m, statusTick{}) // 状态栏数据由 tick 拉快照
-	view := m.View().Content
-	for _, want := range []string{"fake-model", "82.0%", "420 tok", "$1.25", "冷"} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("status bar missing %q:\n%s", want, view)
-		}
-	}
-	// 无冷回合 → 无标注
-	m, _, _ = newTestModel(t)
-	m = update(t, m, statusTick{})
-	m.status.MeterReport.ColdTurns = 0
-	if strings.Contains(m.View().Content, "冷") {
-		t.Fatal("cold marker must be absent without cold turns")
-	}
-}
-
 // TestSlashCache pins：/cache 把跨进程权威汇总写进 transcript。种子直连
 // cache.NewMeter 播种（不需要会话——tui 不得 import cli 的 openSession
 // 装配路径，循环依赖）。

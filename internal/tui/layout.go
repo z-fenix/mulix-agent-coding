@@ -50,7 +50,7 @@ func (m *tuiModel) bottomView() string {
 		b.WriteString(m.composerState.ta.View())
 		b.WriteString("\n")
 	}
-	b.WriteString(styleStatus.Render(m.statusLine()))
+	b.WriteString(styleStatus.Render(m.statusView()))
 	return b.String()
 }
 

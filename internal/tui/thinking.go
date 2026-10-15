@@ -27,7 +27,7 @@ import (
 //  2. token 口径（D14）——AssistantThinkingEvent.EstimatedTokens 恒零（control
 //     层不提供分片级 token，controller.go:1293-1295 硬编码 0），刻意不读不渲染；
 //     真实 thinking token 在回合末 UsageEvent.ThinkingTokens，经
-//     noteThinkingTokens 回填（接线随 Task 17 回合回执）。
+//     noteThinkingTokens 回填（Task 17 回合回执接线）。
 //  3. 流式期只渲染尾窗文本（无秒数头）；Ns 在收口时按本地钟差定格。
 
 // reasoningViewMax 思考尾窗字节上限（对照参考 chat_tui.go:2345）。
@@ -38,12 +38,14 @@ const reasoningTailLines = 12
 
 // thinkingBlock 思考块：流式渲染有界尾窗（tail），收口折叠为单行摘要。
 // collapsed 块的 tail 承载全文（展开面随 Task 21 Ctrl+O——尾窗只约束流式
-// 渲染成本，不约束收口后的驻留内容）。
+// 渲染成本，不约束收口后的驻留内容）；turn 为回合归属（noteThinkingTokens
+// 回填的守卫凭据——用量只落同回合块）。
 type thinkingBlock struct {
 	tail      string
 	startedAt time.Time
 	endedAt   time.Time
 	tokens    int64
+	turn      int64
 	collapsed bool
 }
 
@@ -107,12 +109,13 @@ func (m *tuiModel) streamThinking(e event.AssistantThinkingEvent) {
 	now := time.Now()
 	if m.thinkingIdx < 0 {
 		m.thinkStart = now
+		m.thinkingTurn = e.Turn // 活块回合归属（Task 17 回填守卫凭据）
 		m.thinkingFull, m.thinkingTail = "", ""
 	}
 	m.thinkEnd = now
 	m.thinkingFull += e.Thinking
 	m.thinkingTail = utf8SafeTail(m.thinkingTail+e.Thinking, reasoningViewMax, reasoningTailLines)
-	b := thinkingBlock{tail: m.thinkingTail, startedAt: m.thinkStart, endedAt: m.thinkEnd}
+	b := thinkingBlock{tail: m.thinkingTail, startedAt: m.thinkStart, endedAt: m.thinkEnd, turn: m.thinkingTurn}
 	if m.thinkingIdx >= 0 && m.thinkingIdx == len(m.transcriptState.blocks)-1 {
 		m.transcriptState.rewriteLast(b)
 		return
@@ -134,6 +137,7 @@ func (m *tuiModel) closeThinking() {
 		startedAt: m.thinkStart,
 		endedAt:   m.thinkEnd,
 		tokens:    m.thinkingPending,
+		turn:      m.thinkingTurn,
 		collapsed: true,
 	}
 	m.thinkingPending = 0
@@ -146,21 +150,25 @@ func (m *tuiModel) closeThinking() {
 	m.thinkingIdx = -1
 }
 
-// noteThinkingTokens 回填思考 token（Task 17 回合回执接缝，本任务不接线）：
-// UsageEvent.ThinkingTokens 到达时调用。块流式未收口 → 记 pending（收口时
-// 落槽——usage 先于 TurnDone 发布，controller.go:1357→1369）；已收口 → 回填
-// 最近一个思考块（回合用量归属最近思考段）。0 视为未回填哨兵——槽位省略
-// 不渲染（TestNoZeroTokenRender）。
-func (m *tuiModel) noteThinkingTokens(tokens int64) {
+// noteThinkingTokens 回填思考 token（Task 17 D16 接线：UsageEvent → 回执 +
+// 回填）：UsageEvent.ThinkingTokens 到达时调用。块流式未收口 → 记 pending
+// （收口时落槽——usage 先于 TurnDone 发布，controller.go:1357→1369）；已收口
+// → 回填同回合最近一个思考块（turn 守卫：自尾搜索首个思考块，回合失配即止
+// ——本回合无思考块时不得把用量挂到别回合约，典型如 tN+1 无思考、tN 的块
+// 仍在块流尾）。0 视为未回填哨兵——槽位省略不渲染（TestNoZeroTokenRender）。
+func (m *tuiModel) noteThinkingTokens(turn, tokens int64) {
 	if tokens <= 0 {
 		return
 	}
-	if m.thinkingIdx >= 0 {
+	if m.thinkingIdx >= 0 { // 活块即当前回合流——无需守卫
 		m.thinkingPending = tokens
 		return
 	}
 	for i := len(m.transcriptState.blocks) - 1; i >= 0; i-- {
 		if tb, ok := m.transcriptState.blocks[i].(thinkingBlock); ok {
+			if tb.turn != turn { // 回合守卫：首个思考块即失配 → 本回合无思考块
+				return
+			}
 			if tb.tokens == tokens { // 幂等：重复回执不重复失效缓存
 				return
 			}

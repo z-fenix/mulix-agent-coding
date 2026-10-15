@@ -72,7 +72,7 @@ func TestTailWindowBound(t *testing.T) {
 
 // TestThinkingCollapse pins（D14 块生命周期）：思考流 rewrite 同块不增块 →
 // 下一非思考事件或回合收口折叠为单行「✓ 已思考 Ns · N tok」——Ns = 首末思考
-// 事件到达的本地钟差，tok = 回执回填（Task 17 接缝 noteThinkingTokens）。
+// 事件到达的本地钟差，tok = 回执回填（Task 17 D16 接线 noteThinkingTokens）。
 func TestThinkingCollapse(t *testing.T) {
 	// (a) 流式：分片 rewrite 同一块（Task 4 rewriteLast 路径），尾窗含全文尾部
 	m, _, _ := newTestModel(t)
@@ -92,9 +92,9 @@ func TestThinkingCollapse(t *testing.T) {
 	// (b) 回合收口折叠：Ns = 本地钟差、tok = 回执回填（收口前到账 → pending 落槽）
 	m.thinkStart = m.thinkStart.Add(-3 * time.Second) // 白盒：把首事件到达拨回 3s
 	m = update(t, m, tuiEvent{ev: event.AssistantThinkingEvent{Seq: 3, Thinking: "more"}})
-	m.noteThinkingTokens(45)
+	m.noteThinkingTokens(0, 45) // 思考事件 Turn 未设（0）——同回合守卫放行
 	m = update(t, m, tuiEvent{ev: event.TurnDoneEvent{Seq: 4, Subtype: "success"}})
-	if len(m.transcriptState.blocks) != 2 { // 折叠块 + [回合完成] 系统行
+	if len(m.transcriptState.blocks) != 2 { // 折叠块 + 回合完成收口行
 		t.Fatalf("collapse must not add blocks beyond the system line, blocks = %d", len(m.transcriptState.blocks))
 	}
 	tb, ok = m.transcriptState.blocks[0].(thinkingBlock)
@@ -119,7 +119,7 @@ func TestThinkingCollapse(t *testing.T) {
 	}
 
 	// (d) 收口后 token 回填（Task 17 到账晚于收口的路径：usage → done 已折叠）
-	m2.noteThinkingTokens(7)
+	m2.noteThinkingTokens(0, 7) // 思考事件 Turn 未设（0）——同回合守卫放行
 	tb2, ok = m2.transcriptState.blocks[0].(thinkingBlock)
 	if !ok || tb2.tokens != 7 {
 		t.Fatalf("post-collapse backfill must stamp the latest thinking block, tokens = %d", tb2.tokens)
