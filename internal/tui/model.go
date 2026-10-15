@@ -90,6 +90,9 @@ type tuiModel struct {
 	thinkStart      time.Time
 	thinkEnd        time.Time
 	thinkingPending int64
+	// 工具卡状态（Task 9 FR-005）：cards 索引 toolUseID → 块下标——回执按同
+	// ID upsert 原地关卡（卡片本体指针驻块流，见 toolcard.go）。
+	cards map[string]int
 	// testMode：单测形态——Update 不回挂阻塞型重挂命令（waitForEvent/Tick，
 	// 单测直接以消息驱动）；submitCmd 仍正常返回（由测试辅助同步执行）。
 	testMode bool
@@ -121,6 +124,7 @@ func newTuiModel(o Options, ctrl SessionController, events <-chan tuiEvent, sess
 		width:  80, height: 24, // WindowSizeMsg 到达前的合理缺省
 		answerIdx:       -1, // 无活块（流式答案游标，Task 7 D17）
 		thinkingIdx:     -1, // 无活思考块（Task 8 D14）
+		cards:           make(map[string]int),
 		transcriptState: newTranscriptState(),
 	}
 }
@@ -270,8 +274,9 @@ func (m *tuiModel) finalize() {
 	}
 }
 
-// handleEvent 事件路由：文本/通知入 transcript；审批请求置卡（互斥态）；
-// 裁决回执清卡/留痕；回合收口与引擎退出留痕。
+// handleEvent 事件路由：文本/通知入 transcript；工具事件落卡（FR-005，同
+// ToolUseID upsert）；审批请求置卡（互斥态）；裁决回执清卡/留痕；回合收口
+// 与引擎退出留痕。
 func (m *tuiModel) handleEvent(ev any) {
 	switch e := ev.(type) {
 	case event.TurnStartedEvent:
@@ -305,6 +310,18 @@ func (m *tuiModel) handleEvent(ev any) {
 			m.approval = nil
 		}
 		m.appendLine(fmt.Sprintf("[裁决] %s → %s/%s", shortID(e.ToolUseID), e.Decision, e.Source))
+	case event.ToolUseRequestedEvent:
+		// 工具卡开卡（Task 9 FR-005）：非文本转写事件——先收口思考块（D14 块
+		// 生命周期）与流式答案（Task 7 裁定：非文本事件封口），再落运行中卡。
+		m.closeThinking()
+		m.sealAnswer()
+		m.openToolCard(e)
+	case event.ToolResultEvent:
+		// 工具卡回执关卡（FR-005：同 ToolUseID upsert——运行中卡原地转完成/
+		// 失败）；收口纪律同上。
+		m.closeThinking()
+		m.sealAnswer()
+		m.closeToolCard(e)
 	case event.TurnDoneEvent:
 		m.closeThinking() // D14：回合收口折叠思考块（Ns 定格在末次思考事件到达）
 		m.sealAnswer()    // D17：回合收口冲刷 tail 残留（半开围栏一并落块）
