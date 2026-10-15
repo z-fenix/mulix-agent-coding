@@ -13,3 +13,10 @@ coverage.html
 # Editors
 .idea/
 .vscode/
+
+# mulix runtime state (never commit)
+.mulix/.runtime/
+.mulix/.installed/
+.mulix/.backups/
+.mulix/active
+.mulix/install-state.json
