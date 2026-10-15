@@ -65,6 +65,14 @@ type tuiModel struct {
 	// /agents 面板（M12/T12.4）：列表态独占 composer；agentsSel 是选中行。
 	agentsOpen bool
 	agentsSel  int
+	// 关注点子结构占位（D4 骨架）：本任务仅声明结构，字段随后续任务逐块
+	// 从上方平铺字段迁入——迁移完成前平铺字段仍是权威（见各 struct 注释）。
+	transcriptState transcriptState
+	scrollState     scrollState
+	composerState   composerState
+	approvalState   approvalState
+	statusState     statusState
+	themeState      themeState
 	// testMode：单测形态——Update 不回挂阻塞型重挂命令（waitForEvent/Tick，
 	// 单测直接以消息驱动）；submitCmd 仍正常返回（由测试辅助同步执行）。
 	testMode bool
@@ -74,6 +82,17 @@ var (
 	styleStatus = lipgloss.NewStyle().Faint(true)
 	styleCard   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
 )
+
+// ---- 关注点子结构（D4 骨架占位）----
+//
+// 根模型按渲染关注点的拆分容器：本任务仅建空结构，字段随后续任务从
+// tuiModel 平铺平移迁入（迁移完成前 tuiModel 平铺字段仍是权威）。
+type transcriptState struct{} // transcript 渲染行与尾部裁剪（lines）
+type scrollState struct{}     // 滚动视口（跟随尾部/上翻锁定）
+type composerState struct{}   // 输入行（input）
+type approvalState struct{}   // 审批互斥态（approval 卡）
+type statusState struct{}     // 状态栏快照（status）与 busy 门禁
+type themeState struct{}      // 样式与配色（styleStatus/styleCard）
 
 func newTuiModel(o Options, ctrl SessionController, events <-chan tuiEvent, sessionID string) *tuiModel {
 	return &tuiModel{
@@ -85,6 +104,12 @@ func newTuiModel(o Options, ctrl SessionController, events <-chan tuiEvent, sess
 		width:  80, height: 24, // WindowSizeMsg 到达前的合理缺省
 	}
 }
+
+// maxEventDrain 封顶一次 Update 内合并消费的事件数（含首条；对照参考
+// DeepSeek-Reasonix chat_tui.go:501 / turn_lifecycle.go:147——参考的 512
+// 计首条后的缓冲量，本仓口径含首条，以 TestDrainCoalescing 钉死）：一次
+// re-wrap 覆盖整批而不是每事件一条命令——洪峰下 Update 次数以常数封顶。
+const maxEventDrain = 512
 
 func (m *tuiModel) Init() tea.Cmd {
 	return tea.Batch(waitForEvent(m.events), statusTickCmd())
@@ -120,7 +145,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, statusTickCmd()
 	case tuiEvent:
-		m.handleEvent(msg.ev)
+		m.drainEvents(msg)
 		if m.testMode {
 			return m, nil
 		}
@@ -174,6 +199,29 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	return m, nil
 }
+
+// drainEvents 事件合并消费（D4 洪峰合并，对照参考 turn_lifecycle.go:147）：
+// 处理首条后，非阻塞排水通道中已缓冲的事件（首条计入预算——一次 Update
+// 合并消费至多 maxEventDrain 条），随后统一 finalize() 收口——一次 re-wrap
+// 覆盖整批而不是每事件一条命令。超出上限的余量留通道，由后续 Update 继续
+// 消费（不丢）。
+func (m *tuiModel) drainEvents(first tuiEvent) {
+	m.handleEvent(first.ev)
+	for i := 1; i < maxEventDrain; i++ {
+		select {
+		case ev := <-m.events:
+			m.handleEvent(ev.ev)
+		default:
+			m.finalize()
+			return
+		}
+	}
+	m.finalize()
+}
+
+// finalize 一批合并消费的统一收口（本任务占位空实现；Task 5 起放
+// wrapcache sync 等批后工作——每批一次而非每事件一次）。
+func (m *tuiModel) finalize() {}
 
 // handleEvent 事件路由：文本/通知入 transcript；审批请求置卡（互斥态）；
 // 裁决回执清卡/留痕；回合收口与引擎退出留痕。
