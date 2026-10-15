@@ -73,6 +73,13 @@ type tuiModel struct {
 	approvalState   approvalState
 	statusState     statusState
 	themeState      themeState
+	// 流式答案缓冲（Task 7 D13/D17）：AssistantTextEvent 分片累积进 pendingMD，
+	// 仅完整段落（围栏外空行界）经 flushAnswer 提交；answerIdx 活块下标
+	//（-1 = 无）、answerFlushed 已提交前缀字节数。其他转写事件与回合收口经
+	// sealAnswer 整段冲刷（半开围栏一并落块）。
+	pendingMD     string
+	answerIdx     int
+	answerFlushed int
 	// testMode：单测形态——Update 不回挂阻塞型重挂命令（waitForEvent/Tick，
 	// 单测直接以消息驱动）；submitCmd 仍正常返回（由测试辅助同步执行）。
 	testMode bool
@@ -102,6 +109,7 @@ func newTuiModel(o Options, ctrl SessionController, events <-chan tuiEvent, sess
 		sink:   o.Sink,
 		selfID: sessionID,
 		width:  80, height: 24, // WindowSizeMsg 到达前的合理缺省
+		answerIdx:       -1, // 无活块（流式答案游标，Task 7 D17）
 		transcriptState: newTranscriptState(),
 	}
 }
@@ -169,6 +177,11 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.selfID = msg.id
 		m.status = control.Snapshot{}
 		m.approval = nil // 旧会话的审批卡作废（对旧桥的裁决路径已不存在）
+		// 旧会话的流式答案缓冲一并作废：换绑排空丢弃旧残响（不经 handleEvent），
+		// 残留 pending 若不清会把新会话文本续进旧答案块。
+		m.pendingMD = ""
+		m.answerIdx = -1
+		m.answerFlushed = 0
 		// 会话切换单帧强制置底（设计 §7.2：回底恢复跟随；对照参考
 		// resetFreshContextView chat_tui.go:4171 的 forceGotoBottom 武装）。
 		m.scrollState.forceGotoBottom = true
@@ -246,30 +259,73 @@ func (m *tuiModel) finalize() {
 func (m *tuiModel) handleEvent(ev any) {
 	switch e := ev.(type) {
 	case event.AssistantTextEvent:
-		// 助手文本一事件一块（Task 4 纯文本渲染；Task 7 换 markdown——届时
-		// 流式改写走 rewriteLast）。
-		m.transcriptState.append(assistantBlock{text: e.Text})
+		// D17 流式段落提交（Task 7）：分片入 pending 缓冲，仅完整段落（围栏外
+		// 空行界）提交进活块并原地改写——一事件一块的纯文本渲染退役。
+		m.pendingMD += e.Text
+		m.flushAnswer()
 	case event.NoticeEvent:
+		m.sealAnswer() // 其他转写事件打断流式答案——先整段冲刷再落痕
 		m.appendLine("[notice] " + e.Content)
 	case event.ApprovalRequestEvent:
+		m.sealAnswer()
 		m.approval = &approvalCard{toolUseID: e.ToolUseID, tool: e.Tool}
 		m.appendLine(fmt.Sprintf("[审批] 工具 %s（%s）需要授权", e.Tool, shortID(e.ToolUseID)))
 	case event.ApprovalResolvedEvent:
+		m.sealAnswer()
 		if m.approval != nil && m.approval.toolUseID == e.ToolUseID {
 			m.approval = nil
 		}
 		m.appendLine(fmt.Sprintf("[裁决] %s → %s/%s", shortID(e.ToolUseID), e.Decision, e.Source))
 	case event.TurnDoneEvent:
+		m.sealAnswer() // D17：回合收口冲刷 tail 残留（半开围栏一并落块）
 		if e.IsError {
 			m.appendLine("[回合失败] " + e.Subtype)
 		} else {
 			m.appendLine("[回合完成 t" + fmt.Sprint(e.Turn) + "]")
 		}
 	case event.EngineExitedEvent:
+		m.sealAnswer()
 		m.appendLine("[引擎已退出] " + e.Reason)
 	case event.UsageEvent:
 		// 状态栏走 Snapshot 轮询；usage 事件不进 transcript
 	}
+}
+
+// flushAnswer 把 pending 的可提交前缀（splitFlushablePrefix 的 stable——围栏
+// 外空行界定的完整段落）提交进活块；前缀未前进（半开围栏滞留）则不动。
+// 对照参考 chat_tui.go:3030 streamAnswer——参考对前缀整块重渲染，本仓同法
+// （活块携带完整 stable 源，D6 换行缓存只重排该块）。
+func (m *tuiModel) flushAnswer() {
+	stable, _ := splitFlushablePrefix(m.pendingMD)
+	if len(stable) <= m.answerFlushed {
+		return
+	}
+	m.commitAnswerBlock(assistantBlock{text: stable})
+	m.answerFlushed = len(stable)
+}
+
+// sealAnswer 整段冲刷 pending（其他转写事件打断 / 回合收口——D17 消息级粒度
+// 下 TurnDone 是主冲刷点）：半开围栏的 tail 一并落块，复位游标（对照参考
+// chat_tui.go:3055 commitPending）。
+func (m *tuiModel) sealAnswer() {
+	if m.pendingMD != "" {
+		m.commitAnswerBlock(assistantBlock{text: m.pendingMD})
+	}
+	m.pendingMD = ""
+	m.answerIdx = -1
+	m.answerFlushed = 0
+}
+
+// commitAnswerBlock 落答案块：活块仍是末块则 rewriteLast 原地改写（流式增量，
+// 块数不变）；否则追加新块（首提交，或防御性兜底——活块被中间事件顶离末位时
+// 退化为新块，不冲掉他块；正常路径下中间事件先经 sealAnswer 复位游标）。
+func (m *tuiModel) commitAnswerBlock(b assistantBlock) {
+	if m.answerIdx >= 0 && m.answerIdx == len(m.transcriptState.blocks)-1 {
+		m.transcriptState.rewriteLast(b)
+		return
+	}
+	m.transcriptState.append(b)
+	m.answerIdx = len(m.transcriptState.blocks) - 1
 }
 
 // handleKey 键盘路由。审批态只响应审批键（审批态/渲染态互斥——composer 冻结，

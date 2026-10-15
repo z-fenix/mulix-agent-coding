@@ -31,11 +31,13 @@ func TestBlockAppendRewrite(t *testing.T) {
 		t.Fatalf("rewriteLast not reflected in lines: %q", lines[2])
 	}
 
-	// 多行语义块逐行展平（事件→可见行的块级等价：一事件一块，行数随语义源）
+	// 多行语义块按 markdown 渲染：段内软换行合并为空格（CommonMark 语义，
+	// Task 7 起 assistantBlock 走 renderMarkdown——对照参考 md.go appendInline
+	// SoftLineBreak→' '；硬断行走 fixCJKEmphasis 前源不受影响）
 	ts2 := newTranscriptState()
 	ts2.append(assistantBlock{text: "l1\nl2"})
-	if got := ts2.lines(80); len(got) != 2 || strings.TrimSpace(got[0]) != "l1" || strings.TrimSpace(got[1]) != "l2" {
-		t.Fatalf("multiline block render = %q, want [l1 l2]", got)
+	if got := ts2.lines(80); len(got) != 1 || strings.TrimSpace(got[0]) != "l1 l2" {
+		t.Fatalf("soft line break must merge to a space (markdown): %q", got)
 	}
 
 	// 防御：空块流上 rewriteLast 视为追加（不 panic）

@@ -82,7 +82,7 @@ make lint                   # golangci-lint（本机工具链不匹配，不可�
 make cross                  # 三平台交叉编译
 ```
 
-环境限制：Go 1.27；第三方依赖：NATS（nats-server/nats.go，010 裁定批准）为唯一例外，其余零第三方；golangci-lint 因工具链不匹配在本机不可用——以 go vet ./... + gofmt -l 兜底；-race 因 CGO_ENABLED=0 不可用，如实记录。
+环境限制：Go 1.27；第三方依赖按清单治理（见各 change spec 裁定；现状：cobra/bubbletea/lipgloss/toml/goja/NATS/MCP SDK/bubbles/goldmark/chroma/go-udiff/clipboard）；『零第三方』的准确范围是 kernel leaf 级；golangci-lint 因工具链不匹配在本机不可用——以 go vet ./... + gofmt -l 兜底；-race 因 CGO_ENABLED=0 不可用，如实记录。
 
 引擎治理
 

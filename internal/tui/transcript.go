@@ -38,10 +38,12 @@ type userBlock struct{ text string }
 
 func (b userBlock) render(width int) []string { return wrapText(b.text, width) }
 
-// assistantBlock 助手文本块（本任务纯文本渲染；Task 7 换 markdown）。
+// assistantBlock 助手文本块：markdown 源经 renderMarkdown 按宽渲染（标题/
+// 加粗/行内代码/围栏/列表 + CJK 强调修正；nil 主题 = 中性缺省，真实配色随
+// Task 18 主题系统经块渲染线程化）。
 type assistantBlock struct{ text string }
 
-func (b assistantBlock) render(width int) []string { return wrapText(b.text, width) }
+func (b assistantBlock) render(width int) []string { return renderMarkdown(b.text, width, nil) }
 
 // transcriptState 是 transcript 渲染关注点容器：语义块流 + 按块换行缓存
 // （wrapCache，023 D6）+ bubbles viewport。

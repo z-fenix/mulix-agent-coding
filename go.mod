@@ -3,21 +3,22 @@ module mulix
 go 1.26.0
 
 require (
+	charm.land/bubbles/v2 v2.2.1
 	charm.land/bubbletea/v2 v2.0.10
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/BurntSushi/toml v1.6.0
+	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/dop251/goja v0.0.0-20261012133230-fac44d5949be
 	github.com/nats-io/nats-server/v2 v2.15.1
 	github.com/nats-io/nats.go v1.54.0
 	github.com/spf13/cobra v1.10.2
+	github.com/yuin/goldmark v1.8.6
 )
 
 require (
-	charm.land/bubbles/v2 v2.2.1 // indirect
 	github.com/antithesishq/antithesis-sdk-go v0.8.0-default-no-op // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
 	github.com/charmbracelet/ultraviolet v0.0.0-20260811164956-006e29f97886 // indirect
-	github.com/charmbracelet/x/ansi v0.11.8 // indirect
 	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect
 	github.com/charmbracelet/x/windows v0.2.2 // indirect
