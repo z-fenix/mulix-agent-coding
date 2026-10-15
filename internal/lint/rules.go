@@ -27,6 +27,7 @@ var layerMatrix = map[string][]string{
 	"cmd/*":          {"internal/*"},
 	"internal/cli":   {"internal/*"},
 	"internal/serve": {"internal/*"},
+	"internal/tui":   {"internal/*"}, // TUI 前端（023 重构：与 cli 同级组合根，cli 只留装配）
 
 	// control：回合唯一驱动器（不得 import frontends——design 001 §5.3 第 2 条；
 	// 现况 = cache/config/engine/event/guard/memory/sessionx/subagent）。

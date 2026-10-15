@@ -546,3 +546,16 @@ func TestScanImportsCommentEdges(t *testing.T) {
 		})
 	}
 }
+
+// 023 重构前置钉（Task 1）：internal/tui 须登记为组合根级——缺席时
+// fail-closed leaf 缺省会静默禁止一切内部导入，后续迁移任务无从落码。
+func TestLayerMatrixHasTUI(t *testing.T) {
+	allow, ok := allowFor("internal/tui")
+	if !ok {
+		t.Fatal("internal/tui 未登记 layerMatrix（fail-closed leaf 缺省会静默禁止一切内部导入）")
+	}
+	_ = allow // 清单内容由下方 pkgAllowed 断言（与 allowFor 同源；brief 原文未消费 allow 编译不过）
+	if !pkgAllowed("internal/tui", "internal/control") {
+		t.Fatal("internal/tui 应为组合根级（internal/*）")
+	}
+}
