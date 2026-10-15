@@ -190,6 +190,11 @@ func (m *tuiModel) appendLine(s string) {
 func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		if msg.Width != m.width {
+			// 设计 §7.4：宽度变更 → 全量重排，绝对列坐标失效——选区重置
+			//（阅读锚点仍延后，见任务报告 deferred 路由）。
+			m.transcriptState.sel = selection{}
+		}
 		m.width, m.height = msg.Width, msg.Height
 		m.composerState.ta.SetWidth(msg.Width) // 重排触发编辑器高度重算
 		return m, nil
@@ -275,6 +280,24 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// 滚轮手势（023 D5）：模态独占态不泄漏，渲染态滚转写并归位跟随态
 		//（scrollstate.go handleWheel——MouseMode 经 View 声明启用上报）。
 		m.handleWheel(msg)
+		return m, nil
+	case tea.MouseClickMsg:
+		// 左键拖选/滚动条拖拽起点（023 Story4 Task 21，transcript.go 接线
+		// ——治理独占态门禁在 handler 内，与滚轮同语义）。
+		m.handleMouseClick(msg)
+		return m, nil
+	case tea.MouseMotionMsg:
+		// 拖拽步进（CellMotion 仅按键期间上报——即拖拽）。
+		m.handleMouseMotion(msg)
+		return m, nil
+	case tea.MouseReleaseMsg:
+		// 拖选松开复制 / 滚动条拖拽收口（复制异步——copyCmd）。
+		return m, m.handleMouseRelease(msg)
+	case copyDoneMsg:
+		// 剪贴板写回执：失败留痕（fail-visible——静默会让人以为已复制）。
+		if msg.err != nil {
+			m.appendLine("[复制失败] " + msg.err.Error())
+		}
 		return m, nil
 	case tea.PasteMsg:
 		// bracketed paste（023 FR-008）：达折叠阈值折叠为可删记号，低于阈值
@@ -608,6 +631,9 @@ func (m *tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.handleCtrlCKey()
 	}
+	// 任意击键散选区（对照参考：松开复制后高亮是「已选」残影——击键即散；
+	// Ctrl+C 复制档已在上方分支优先消费）。模态态无选区，清之无碍。
+	m.transcriptState.sel = selection{}
 	if m.approval != nil { // 审批独占态（键位与参数摘要见 approval.go，023 D11）
 		return m.handleApprovalKey(msg)
 	}
@@ -643,6 +669,14 @@ func (m *tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case msg.Code == tea.KeyEnd && msg.Mod&tea.ModCtrl != 0: // 回底——恢复跟随
 		m.transcriptState.vp.GotoBottom()
 		m.markFollowTail()
+		return m, nil
+	case msg.Code == 'o' && msg.Mod&tea.ModCtrl != 0:
+		// Ctrl+O 思考全文开关（023 Story4 Task 21，thinking.go——目标外 no-op）
+		m.toggleThinkingVerbose()
+		return m, nil
+	case msg.Code == 'b' && msg.Mod&tea.ModCtrl != 0:
+		// Ctrl+B 工具卡输出尾展开（023 Story4 Task 21，toolcard.go——同上）
+		m.toggleToolExpand()
 		return m, nil
 	}
 	// 编辑器键位（023 D12/FR-007，textarea 配置见 composer.go）：裸 Enter 提交
@@ -933,7 +967,9 @@ func (m *tuiModel) swapSession(resumeID string) tea.Cmd {
 func (m *tuiModel) View() tea.View {
 	v := tea.NewView(m.frame())
 	v.AltScreen = true
-	// 滚轮/点击上报（023 D5 滚动键）；拖拽选区随 Task 21 升 MouseModeAllMotion。
+	// 滚轮/点击/拖拽上报（023 D5 滚动键 + Story4 Task 21 选区/滚动条拖拽）：
+	// CellMotion 已覆盖拖拽语义（按键期间即上报 motion）——无需 AllMotion
+	//（hover 无消费方；对照参考同用 CellMotion）。
 	v.MouseMode = tea.MouseModeCellMotion
 	// 真实终端光标（023 D12：光标落点即输入点，IME 候选窗锚定）——治理独占态
 	// （审批卡/agents 面板）不渲染 composer，光标一并隐藏。

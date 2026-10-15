@@ -22,8 +22,8 @@ import (
 //     mcp__*），动词映射按 brief 本地化为单字动词（读/写/改/运行/搜）。
 //  2. 卡片形态——参考渲染无状态派发行（流式输出走独立 toolStream 槽，失败
 //     打独立红行）；本仓一张语义卡随事件流转状态（运行中→完成/失败，同
-//     ToolUseID upsert 原地改写），输出尾有界 ≤8 行驻留卡内（Ctrl+B 展开面
-//     随 Task 21——尾窗只约束渲染，不约束驻留）。
+//     ToolUseID upsert 原地改写），输出尾驻留 ≤200 行（Ctrl+B 展开面 Task
+//     21：折叠渲染尾 8 行、展开至驻留全量——有界驻留同 D14 尾窗纪律）。
 //  3. 状态显式渲染（FR-005：运行/完成/失败状态）——运行中 dim「· 运行中」、
 //     完成 dim「· 完成」、失败红卡「⊘ · 失败」+ 详情行。参考失败是头行内联
 //     ⊘ errText；本仓详情独立成行——详情可能远长于头行余宽，截在头里不可读。
@@ -31,8 +31,13 @@ import (
 //     collapseToolOutput 的 dim 预览——整行弱化）。
 
 const (
-	// toolTailLines 输出尾行数上限（FR-005 有界尾；展开面随 Task 21 分离）。
+	// toolTailLines 输出尾折叠渲染行数上限（FR-005 有界尾；展开面 = Ctrl+B，
+	// 渲染上限 toolExpandMaxLines——Task 21）。
 	toolTailLines = 8
+	// toolExpandMaxLines Ctrl+B 展开行数上限（023 Story4 Task 21 / 设计 §6
+	// 「输出尾（≤8 行，Ctrl+B 展开 ≤200 行）」）——驻留同此界（有界驻留纪律
+	// 同 D14 尾窗：超限内容保尾弃头，不无界驻内存）。
+	toolExpandMaxLines = 200
 	// toolConnector 卡片连接槽（对照参考 toolcard.go:18 connector "  ⎿  "——
 	// 本仓块模型无 2 列缩进，槽 = ⎿ + 2 空格）。
 	toolConnector = "⎿  "
@@ -58,8 +63,9 @@ type toolCard struct {
 	arg          string
 	state        toolState
 	diff         *diffInput // D9：写类工具可 diff 输入（openToolCard 提取；nil = 无 diff 视图）
-	outputTail   []string   // ≤8 行有界尾（来自 ToolResult.Content）
+	outputTail   []string   // 输出驻留（保尾 ≤toolExpandMaxLines；折叠渲染只出保尾 8 行——Ctrl+B 展开面，Task 21）
 	failedDetail string     // IsError 时的失败详情行
+	expanded     bool       // Ctrl+B 展开态（false = 折叠尾 8 行；true = 驻留全量 ≤200 行）
 }
 
 // toolArgKeys 各工具的主参 JSON 键（候选序——claude CLI 实况用 file_path，
@@ -161,8 +167,9 @@ func jsonSummary(input json.RawMessage) string {
 	return clampWidth(buf.String(), toolArgSummaryMax)
 }
 
-// setResult 回执落卡：IsError → 失败态 + 详情行；输出尾一律保尾 ≤8 行
-// （失败卡渲染只出详情行，尾驻卡供 Task 21 展开面）。
+// setResult 回执落卡：IsError → 失败态 + 详情行；输出驻留保尾 ≤200 行
+// （toolExpandMaxLines——折叠卡渲染只出尾 8 行与失败详情，驻留供 Ctrl+B
+// 展开面，Task 21）。
 func (c *toolCard) setResult(e event.ToolResultEvent) {
 	if e.IsError {
 		c.state = toolFailed
@@ -170,7 +177,7 @@ func (c *toolCard) setResult(e event.ToolResultEvent) {
 	} else {
 		c.state = toolDone
 	}
-	c.outputTail = boundedTail(e.Content, toolTailLines)
+	c.outputTail = boundedTail(e.Content, toolExpandMaxLines)
 }
 
 // failureDetail 失败详情行：Content 首个非空行（截断——详情是摘要行，
@@ -241,18 +248,23 @@ func (c *toolCard) header(width int) string {
 	return head + status
 }
 
-// tail 连接槽输出尾：首行携 ⎿ 槽、续行按槽宽对齐（对照参考
+// tail 连接槽输出尾：折叠态出保尾 toolTailLines 行，展开态（Ctrl+B）出驻留
+// 全量（≤toolExpandMaxLines）；首行携 ⎿ 槽、续行按槽宽对齐（对照参考
 // renderConnectorBlock）；整行弱化（对照参考 collapseToolOutput 的 dim
 // 预览），逐行按余宽截断。
 func (c *toolCard) tail(width int) []string {
-	if len(c.outputTail) == 0 {
+	lines := c.outputTail
+	if !c.expanded && len(lines) > toolTailLines {
+		lines = lines[len(lines)-toolTailLines:]
+	}
+	if len(lines) == 0 {
 		return nil
 	}
 	slot := ansi.StringWidth(toolConnector)
 	indent := strings.Repeat(" ", slot)
 	avail := max(width-slot, 4)
-	out := make([]string, 0, len(c.outputTail))
-	for i, l := range c.outputTail {
+	out := make([]string, 0, len(lines))
+	for i, l := range lines {
 		prefix := indent
 		if i == 0 {
 			prefix = toolConnector
@@ -323,4 +335,21 @@ func (m *tuiModel) closeToolCard(e event.ToolResultEvent) {
 		m.cards = make(map[string]int)
 	}
 	m.cards[e.ToolUseID] = len(m.transcriptState.blocks) - 1
+}
+
+// toggleToolExpand Ctrl+B 输出尾展开开关（023 Story4 Task 21）：目标 = 最近
+// 一张有输出驻留的非失败卡（失败卡渲染只有详情行，展开无可见效果——排除；
+// 对照参考 toggleShellOutput 的最近输出定位）。无目标 no-op（brief：目标外
+// 不动作）。切换原地改卡 + 自该块失效换行缓存（无留痕行——展开本身即反馈，
+// 对照参考不通知）。
+func (m *tuiModel) toggleToolExpand() {
+	for i := len(m.transcriptState.blocks) - 1; i >= 0; i-- {
+		card, ok := m.transcriptState.blocks[i].(*toolCard)
+		if !ok || card.state == toolFailed || len(card.outputTail) == 0 {
+			continue
+		}
+		card.expanded = !card.expanded
+		m.transcriptState.invalidateWrapFrom(i)
+		return
+	}
 }

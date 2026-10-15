@@ -91,7 +91,9 @@ func TestToolCardFailure(t *testing.T) {
 	}
 }
 
-// TestToolCardTailBound 钉死（brief c）：超长输出保尾 ≤8 行；短输出原样。
+// TestToolCardTailBound 钉死（brief c）：超长输出驻留保尾 ≤200 行（Task 21
+// 展开面——原 T9 钉的 ≤8 行驻留已随 Ctrl+B 展开面升级为「驻留 ≤200、折叠
+// 渲染尾 8」）；折叠渲染保尾 8 行；短输出原样。
 func TestToolCardTailBound(t *testing.T) {
 	var lines []string
 	for i := range 20 {
@@ -105,15 +107,19 @@ func TestToolCardTailBound(t *testing.T) {
 		Seq: 2, ToolUseID: "c", Content: strings.Join(lines, "\n"),
 	}})
 	card := m.transcriptState.blocks[0].(*toolCard)
-	if len(card.outputTail) != toolTailLines {
-		t.Fatalf("tail = %d lines, want %d", len(card.outputTail), toolTailLines)
+	// 驻留：20 行 ≤ toolExpandMaxLines 全量保尾驻卡（展开面可用）
+	if len(card.outputTail) != 20 || card.outputTail[0] != "l00" || card.outputTail[19] != "l19" {
+		t.Fatalf("retention must keep up to %d lines: %d (first=%q last=%q)",
+			toolExpandMaxLines, len(card.outputTail), card.outputTail[0], card.outputTail[19])
 	}
-	if card.outputTail[0] != "l12" || card.outputTail[toolTailLines-1] != "l19" {
-		t.Fatalf("tail must keep the trailing window, first=%q last=%q",
-			card.outputTail[0], card.outputTail[toolTailLines-1])
-	}
-	if got := len(card.render(80)); got != 1+toolTailLines {
+	// 折叠渲染：头 + 保尾 8 行（l12..l19）
+	rendered := card.render(80)
+	if got := len(rendered); got != 1+toolTailLines {
 		t.Fatalf("rendered = %d lines, want 1 header + %d tail", got, toolTailLines)
+	}
+	if !strings.Contains(rendered[1], "l12") || !strings.Contains(rendered[toolTailLines], "l19") {
+		t.Fatalf("collapsed render must keep the trailing window, first=%q last=%q",
+			rendered[1], rendered[toolTailLines])
 	}
 
 	// 短输出不截，尾空行修剪。

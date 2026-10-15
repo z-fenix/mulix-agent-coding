@@ -15,9 +15,9 @@ import (
 //	Esc（忙碌）  pendingSubmit 在途 → 丢弃提交（代际递增作废迟到收据）+ 还原草稿
 //	            否则回合进行中    → 本地取消意图 + 异步 ctrl.Cancel（幂等）
 //	Esc（空闲）  清空输入
-//	Ctrl+C      有输入 → 清空输入（清空按不武装）
-//	            空输入 → 窗口内二按退出（首按武装并提示）；选区复制随
-//	            Task 21 接入（P3 前恒走本阶梯）
+//	Ctrl+C      活跃选区 → 复制选区（消费高亮；Task 21 接入第一档）
+//	            有输入 → 清空输入（清空按不武装）
+//	            空输入 → 窗口内二按退出（首按武装并提示）
 //
 // 忙碌判定键 off m.running（回合生命周期）；m.swapping 过渡期旧控制器已收口，
 // 取消/丢弃无处可打，Esc 为 no-op。
@@ -63,9 +63,16 @@ func (m *tuiModel) handleEscapeKey() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// handleCtrlCKey 渲染态 Ctrl+C 阶梯（FR-011 防误触）：有输入 → 清空（清空按
-// 不武装）；空输入首按 → 武装并提示；窗口内二按 → 退出，窗外 → 重武装。
+// handleCtrlCKey 渲染态 Ctrl+C 阶梯（FR-011 防误触）：第一档——活跃转写
+// 选区非空 → 复制并消费高亮（不清输入、不武装退出——Task 21 接入，对照参考
+// 「Ctrl+C copies the selection」惯例）；无选区：有输入 → 清空（清空按不武装
+// ）；空输入首按 → 武装并提示；窗口内二按 → 退出，窗外 → 重武装。
 func (m *tuiModel) handleCtrlCKey() tea.Cmd {
+	if sel := m.transcriptState.sel; sel.active && !sel.empty() {
+		text := m.transcriptState.selectedText()
+		m.transcriptState.sel = selection{}
+		return m.copyCmd(text)
+	}
 	if m.composerValue() != "" {
 		m.clearComposer()
 		m.quitArm = time.Time{}

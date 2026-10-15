@@ -36,9 +36,16 @@ const reasoningViewMax = 4096
 // reasoningTailLines 思考尾窗行数上限（对照参考 chat_tui.go:2348）。
 const reasoningTailLines = 12
 
+// verboseThinking 思考全文开关（会话级，Ctrl+O 切换——023 Story4 Task 21；
+// 对照参考 chat_tui.go:178 showReasoning「Ctrl+O / /verbose: show raw thinking
+// text」）。包级变量与 activeTheme 同形（块渲染无模型访问路径）；true 时折叠
+// 块渲染 tail 驻留全文，false 时折叠块渲染单行摘要。流式期尾窗有界渲染不受
+// 此开关影响（D14 有界成本纪律只豁免收口后的一次性展开，渲染结果入换行缓存）。
+var verboseThinking bool
+
 // thinkingBlock 思考块：流式渲染有界尾窗（tail），收口折叠为单行摘要。
-// collapsed 块的 tail 承载全文（展开面随 Task 21 Ctrl+O——尾窗只约束流式
-// 渲染成本，不约束收口后的驻留内容）；turn 为回合归属（noteThinkingTokens
+// collapsed 块的 tail 承载全文（展开面 = Ctrl+O verboseThinking——尾窗只约束
+// 流式渲染成本，不约束收口后的驻留内容）；turn 为回合归属（noteThinkingTokens
 // 回填的守卫凭据——用量只落同回合块）。
 type thinkingBlock struct {
 	tail      string
@@ -50,11 +57,11 @@ type thinkingBlock struct {
 }
 
 func (b thinkingBlock) render(width int) []string {
-	if b.collapsed {
+	if b.collapsed && !verboseThinking {
 		return []string{dimLine(b.summary())}
 	}
 	lines := wrapText(strings.TrimRight(b.tail, "\n"), width)
-	if len(lines) > reasoningTailLines { // 尾窗：只保尾部视觉行（对照参考
+	if !b.collapsed && len(lines) > reasoningTailLines { // 流式期仍走尾窗（对照参考
 		lines = lines[len(lines)-reasoningTailLines:] // reasoningBlockLines 的 maxLines）
 	}
 	for i, l := range lines {
@@ -179,4 +186,28 @@ func (m *tuiModel) noteThinkingTokens(turn, tokens int64) {
 			return
 		}
 	}
+}
+
+// toggleThinkingVerbose Ctrl+O 思考全文开关（023 Story4 Task 21）：无思考块
+// 时 no-op（brief：目标外不动作——不切开关、不留痕）；有则翻转包级开关并全量
+// 失效换行缓存（折叠/展开面随渲染即变），留痕行报告新态（对照参考
+// toggleVerboseReasoning 的 notify——本仓通知走转写留痕）。
+func (m *tuiModel) toggleThinkingVerbose() {
+	has := false
+	for _, b := range m.transcriptState.blocks {
+		if _, ok := b.(thinkingBlock); ok {
+			has = true
+			break
+		}
+	}
+	if !has {
+		return
+	}
+	verboseThinking = !verboseThinking
+	m.transcriptState.invalidateWrapFrom(0)
+	if verboseThinking {
+		m.appendLine("[思考] 已展开思考全文")
+		return
+	}
+	m.appendLine("[思考] 已折叠为摘要")
 }

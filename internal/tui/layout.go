@@ -12,7 +12,8 @@ import (
 // 区自上而下：模态面板（/agents，有则）→ 授权卡/编辑器（互斥）→ 状态行。
 // 模态面板渲染沿用迁移前形态（023 Task 2 逐字节迁移件）；授权卡键位与参数
 // 摘要见 approval.go（023 D11）。本文件负责把它们与视口合成满屏帧；末列滚动
-// 条为静态呈现（023 D5 布局面，拖拽随 Task 21）。
+// 条拖拽与选区高亮随 Task 21 落地（023 Story4——transcript.go transcriptView
+// 绘制可见窗口）。
 
 // transcriptContentWidth 转写内容宽度：末列保留给滚动条（对照参考
 // chat_tui.go:693-698 transcriptContentWidth），下限 1。换行缓存与 viewport
@@ -73,14 +74,17 @@ func (m *tuiModel) frame() string {
 		m.markFollowTail() // force 消费即恢复跟随（对照参考 chat_tui.go:998-1012）
 	}
 	m.scrollState.forceGotoBottom = false
-	return lipgloss.JoinHorizontal(lipgloss.Top, m.transcriptState.vp.View(), m.scrollbarView()) + "\n" + bottom
+	// 可见窗口经 transcriptView 绘制（选区高亮内建）——viewport 只持滚动状态，
+	// 帧面按 h 行绘制（对照参考 renderTranscript；023 Story4 Task 21）。
+	return lipgloss.JoinHorizontal(lipgloss.Top, m.transcriptState.transcriptView(), m.scrollbarView()) + "\n" + bottom
 }
 
-// scrollbarView 末列滚动条的静态呈现（023 D5；拖拽随 Task 21）：无溢出给
-// 空白列；溢出时 thumb=█（随 offset 移动）/track=│。行数与视口一致，经
-// JoinHorizontal 拼在内容右列（对照参考 transcript.go:429-455 renderTranscript
-// 的滚动条列——参考经 theme 着色，T18 接入主题槽：thumb=accent / track=dim，
-// 对照参考 scrollThumbStyle/scrollTrackStyle）。
+// scrollbarView 末列滚动条（023 D5；拖拽随 Task 21 落地——transcript.go
+// inScrollbar/dragScrollbar 接线）：无溢出给空白列；溢出时 thumb=█（随
+// offset 移动）/track=│。行数与视口一致，经 JoinHorizontal 拼在内容右列
+// （对照参考 transcript.go:429-455 renderTranscript 的滚动条列——参考经
+// theme 着色，T18 接入主题槽：thumb=accent / track=dim，对照参考
+// scrollThumbStyle/scrollTrackStyle）。
 func (m *tuiModel) scrollbarView() string {
 	h := m.transcriptState.vp.Height()
 	total := len(m.transcriptState.wrappedLines)
