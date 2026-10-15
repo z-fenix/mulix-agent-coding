@@ -56,7 +56,6 @@ type tuiModel struct {
 	selfID   string          // 状态栏展示的 mulix 会话 id
 	width    int
 	height   int
-	lines    []string // transcript 渲染行
 	input    string
 	approval *approvalCard // 非 nil = 审批态（与渲染态互斥：composer 冻结）
 	status   control.Snapshot
@@ -65,8 +64,9 @@ type tuiModel struct {
 	// /agents 面板（M12/T12.4）：列表态独占 composer；agentsSel 是选中行。
 	agentsOpen bool
 	agentsSel  int
-	// 关注点子结构占位（D4 骨架）：本任务仅声明结构，字段随后续任务逐块
-	// 从上方平铺字段迁入——迁移完成前平铺字段仍是权威（见各 struct 注释）。
+	// 关注点子结构（D4 骨架）：transcriptState 已于 FR-001 落位（语义块 +
+	// viewport）；其余字段随后续任务逐块从上方平铺字段迁入——迁移完成前
+	// 平铺字段仍是权威（见各 struct 注释）。
 	transcriptState transcriptState
 	scrollState     scrollState
 	composerState   composerState
@@ -85,14 +85,14 @@ var (
 
 // ---- 关注点子结构（D4 骨架占位）----
 //
-// 根模型按渲染关注点的拆分容器：本任务仅建空结构，字段随后续任务从
-// tuiModel 平铺平移迁入（迁移完成前 tuiModel 平铺字段仍是权威）。
-type transcriptState struct{} // transcript 渲染行与尾部裁剪（lines）
-type scrollState struct{}     // 滚动视口（跟随尾部/上翻锁定）
-type composerState struct{}   // 输入行（input）
-type approvalState struct{}   // 审批互斥态（approval 卡）
-type statusState struct{}     // 状态栏快照（status）与 busy 门禁
-type themeState struct{}      // 样式与配色（styleStatus/styleCard）
+// 根模型按渲染关注点的拆分容器：transcriptState 已落位（transcript.go），
+// 其余仅空结构，字段随后续任务从 tuiModel 平铺平移迁入（迁移完成前
+// tuiModel 平铺字段仍是权威）。
+type scrollState struct{}   // 滚动视口（跟随尾部/上翻锁定）
+type composerState struct{} // 输入行（input）
+type approvalState struct{} // 审批互斥态（approval 卡）
+type statusState struct{}   // 状态栏快照（status）与 busy 门禁
+type themeState struct{}    // 样式与配色（styleStatus/styleCard）
 
 func newTuiModel(o Options, ctrl SessionController, events <-chan tuiEvent, sessionID string) *tuiModel {
 	return &tuiModel{
@@ -102,6 +102,7 @@ func newTuiModel(o Options, ctrl SessionController, events <-chan tuiEvent, sess
 		sink:   o.Sink,
 		selfID: sessionID,
 		width:  80, height: 24, // WindowSizeMsg 到达前的合理缺省
+		transcriptState: newTranscriptState(),
 	}
 }
 
@@ -124,11 +125,10 @@ type statusTick struct{}
 // typedInput 是文本注入消息（测试用它模拟整串输入；Update 按逐字符处理）。
 type typedInput string
 
-// appendLine 追加 transcript 行（渲染层裁剪）。
+// appendLine 追加系统行（notice/turn/审批留痕等）——一行一块包装为 plainBlock
+// （块模型迁移：语义行进块流，渲染由 transcriptState 按宽收口）。
 func (m *tuiModel) appendLine(s string) {
-	for _, l := range strings.Split(s, "\n") {
-		m.lines = append(m.lines, l)
-	}
+	m.transcriptState.append(plainBlock{text: s})
 }
 
 func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -228,7 +228,9 @@ func (m *tuiModel) finalize() {}
 func (m *tuiModel) handleEvent(ev any) {
 	switch e := ev.(type) {
 	case event.AssistantTextEvent:
-		m.appendLine(e.Text)
+		// 助手文本一事件一块（Task 4 纯文本渲染；Task 7 换 markdown——届时
+		// 流式改写走 rewriteLast）。
+		m.transcriptState.append(assistantBlock{text: e.Text})
 	case event.NoticeEvent:
 		m.appendLine("[notice] " + e.Content)
 	case event.ApprovalRequestEvent:
@@ -522,41 +524,14 @@ func (m *tuiModel) swapSession(resumeID string) tea.Cmd {
 	}
 }
 
-// View 组装：transcript（尾部裁剪）+ 审批卡或 composer + 状态栏。
+// View 帧合成（FR-001 alt-screen 全接管）：frame() = 转写视口 + 底部固定区
+// （模态面板/授权卡/编辑器 + 状态行）。AltScreen 以 View 字段声明——bubbletea
+// v2 无 WithAltScreen 程序选项（v1 API），按 v2 升级指南等价替换（brief 形态
+// 偏差 Ruling，见任务报告）。
 func (m *tuiModel) View() tea.View {
-	var b strings.Builder
-	maxLines := m.height - 3 // 状态栏 + composer + 间隔
-	if m.approval != nil {
-		maxLines -= 4 // 审批卡高度
-	}
-	if m.agentsOpen {
-		maxLines -= 4 // /agents 面板头尾（列表行随 transcript 裁剪让位）
-	}
-	if maxLines < 1 {
-		maxLines = 1
-	}
-	lines := m.lines
-	if len(lines) > maxLines {
-		lines = lines[len(lines)-maxLines:]
-	}
-	for _, l := range lines {
-		b.WriteString(l)
-		b.WriteString("\n")
-	}
-	if m.approval != nil {
-		card := fmt.Sprintf("工具 %s（%s）等待授权\n[a] 本次允许  [s] 本会话允许  [d] 拒绝",
-			m.approval.tool, shortID(m.approval.toolUseID))
-		b.WriteString(styleCard.Render(card))
-		b.WriteString("\n")
-	} else if m.agentsOpen {
-		b.WriteString(styleCard.Render(m.agentsPanelView()))
-		b.WriteString("\n")
-	} else {
-		b.WriteString("> " + m.input)
-		b.WriteString("\n")
-	}
-	b.WriteString(styleStatus.Render(m.statusLine()))
-	return tea.NewView(b.String())
+	v := tea.NewView(m.frame())
+	v.AltScreen = true
+	return v
 }
 
 // statusLine 状态栏（brief：模型 | 会话命中率 | 本回合 tokens | 成本；

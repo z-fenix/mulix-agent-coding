@@ -11,8 +11,15 @@ import (
 // sinkPub 直塞事件通道（绕过 tea runtime；满则阻塞背压——同生产 Publish）。
 func (m *tuiModel) sinkPub(ev any) { m.sink.Publish(ev) }
 
-// transcriptLineCount 是排水消费量的直接观测面（每条 notice 恰好一行）。
-func (m *tuiModel) transcriptLineCount() int { return len(m.lines) }
+// transcriptLineCount 是排水消费量的直接观测面（每条 notice 恰好一行——
+// 块模型迁移下按渲染行计数，语义不变：事件→可见行）。
+func (m *tuiModel) transcriptLineCount() int {
+	n := 0
+	for _, b := range m.transcriptState.blocks {
+		n += len(b.render(m.width))
+	}
+	return n
+}
 
 // drainOne 从通道取下一条事件（测试循环驱动后续 Update）。
 func (m *tuiModel) drainOne(t *testing.T) tuiEvent {
