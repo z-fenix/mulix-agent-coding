@@ -1,0 +1,103 @@
+package tui
+
+import (
+	"context"
+	"time"
+
+	"charm.land/bubbletea/v2"
+)
+
+// ---- 键位语义（023 D10 取消语义阶梯；集中此文件）----
+//
+// 渲染态键位阶梯（FR-011：语义无歧义；审批卡与 /agents 面板为治理独占态，
+// 在 handleKey 前置分支拦截，不走本阶梯）：
+//
+//	Esc（忙碌）  pendingSubmit 在途 → 丢弃提交（代际递增作废迟到收据）+ 还原草稿
+//	            否则回合进行中    → 本地取消意图 + 异步 ctrl.Cancel（幂等）
+//	Esc（空闲）  清空输入
+//	Ctrl+C      有输入 → 清空输入（清空按不武装）
+//	            空输入 → 窗口内二按退出（首按武装并提示）；选区复制随
+//	            Task 21 接入（P3 前恒走本阶梯）
+//
+// 忙碌判定键 off m.running（回合生命周期）；m.swapping 过渡期旧控制器已收口，
+// 取消/丢弃无处可打，Esc 为 no-op。
+
+// quitArmWindow 是 Ctrl+C 双击退出的确认窗口（D10 防误触）。
+const quitArmWindow = 1500 * time.Millisecond
+
+// pendingSubmit 是 Enter 已派发、TurnStartedEvent 未到的在途提交（D10 上屏
+// 时机：用户气泡在回合开始事件到达时才上屏——中断窗口内气泡不进转写）。gen
+// 记录派发时的模型代际计数：丢弃路径递增计数，使迟到的提交收据（submitDoneMsg）
+// 与本代际失配而作废（气泡不上屏由 pending 置 nil 保证——同刻至多一笔在途）。
+type pendingSubmit struct {
+	text string // TurnStarted 上屏的用户气泡文本（Enter 时的裁剪输入）
+	gen  uint64 // 派发时代际计数（与 submitDoneMsg.gen 对账）
+}
+
+// handleEscapeKey 渲染态 Esc 阶梯（D10）：忙碌且气泡未上屏 → 丢弃在途提交并
+// 还原草稿（代际递增——迟到的 TurnStarted 不上屏、迟到的收据不渲染失败行）；
+// 忙碌且回合进行中 → 本地取消意图 + 异步 Cancel（已在途则幂等不重发）；换绑
+// 过渡期 no-op；空闲 → 清空输入。
+func (m *tuiModel) handleEscapeKey() (tea.Model, tea.Cmd) {
+	if m.swapping {
+		return m, nil
+	}
+	if m.running {
+		if m.pendingSubmit != nil {
+			// 丢弃在途提交：还原草稿（忙期窗口内用户未再输入时——已有输入
+			// 以用户键入为准，弃稿不覆盖）；代际递增使迟到收据作废。
+			if m.input == "" {
+				m.input = m.pendingSubmit.text
+			}
+			m.pendingSubmit = nil
+			m.genCounter++
+			return m, nil
+		}
+		if !m.cancelIntent {
+			m.cancelIntent = true
+			return m, m.cancelCmd()
+		}
+		return m, nil // 取消已在途——幂等
+	}
+	m.input = ""
+	return m, nil
+}
+
+// handleCtrlCKey 渲染态 Ctrl+C 阶梯（FR-011 防误触）：有输入 → 清空（清空按
+// 不武装）；空输入首按 → 武装并提示；窗口内二按 → 退出，窗外 → 重武装。
+func (m *tuiModel) handleCtrlCKey() tea.Cmd {
+	if m.input != "" {
+		m.input = ""
+		m.quitArm = time.Time{}
+		return nil
+	}
+	now := time.Now()
+	if !m.quitArm.IsZero() && now.Sub(m.quitArm) <= quitArmWindow {
+		return tea.Quit
+	}
+	m.quitArm = now
+	m.appendLine("[退出] 再按一次 Ctrl+C 退出（1.5s 内）")
+	return nil
+}
+
+// commitPendingBubble 在 TurnStartedEvent 到达时上屏在途用户气泡（D10 上屏
+// 时机）。无 pending（丢弃后迟到的 TurnStarted、或换绑清账后的新会话回合）为
+// no-op。
+func (m *tuiModel) commitPendingBubble() {
+	if m.pendingSubmit == nil {
+		return
+	}
+	m.transcriptState.append(userBlock{text: m.pendingSubmit.text})
+	m.pendingSubmit = nil
+}
+
+// cancelDoneMsg 是回合取消的异步回执（Cancel 是控制协议时长级调用——Update 内
+// 不阻塞，与 submitCmd/agentsCancelCmd 同纪律，T28 评审 Critical-1 同类）。
+type cancelDoneMsg struct{ err error }
+
+// cancelCmd 异步取消当前回合（D10 Esc 阶梯；快照 ctrl——回执到达前换绑也不
+// 得把取消打给新控制器）。
+func (m *tuiModel) cancelCmd() tea.Cmd {
+	ctrl := m.ctrl
+	return func() tea.Msg { return cancelDoneMsg{err: ctrl.Cancel(context.Background())} }
+}

@@ -93,6 +93,15 @@ type tuiModel struct {
 	// 工具卡状态（Task 9 FR-005）：cards 索引 toolUseID → 块下标——回执按同
 	// ID upsert 原地关卡（卡片本体指针驻块流，见 toolcard.go）。
 	cards map[string]int
+	// 取消语义阶梯状态（Task 10 D10，键位语义见 keys.go）：genCounter 提交
+	// 代际（丢弃递增——迟到收据对账失配即作废）；pendingSubmit 在途提交
+	//（TurnStartedEvent 到达时才上屏气泡）；cancelIntent 本地取消意图（收口
+	// 行 ⏹ 的唯一凭据——引擎中断后回执形态无 fixture，不看 Subtype/IsError）；
+	// quitArm Ctrl+C 双击武装时刻（零值 = 未武装）。
+	genCounter    uint64
+	pendingSubmit *pendingSubmit
+	cancelIntent  bool
+	quitArm       time.Time
 	// testMode：单测形态——Update 不回挂阻塞型重挂命令（waitForEvent/Tick，
 	// 单测直接以消息驱动）；submitCmd 仍正常返回（由测试辅助同步执行）。
 	testMode bool
@@ -176,7 +185,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case submitDoneMsg:
 		// 异步 Submit 回执（T28 评审 Critical-1）：回合收口，解锁 composer。
 		m.running = false
-		if msg.err != nil {
+		// D10 代际纪律：丢弃提交的迟到收据（gen 失配）作废——running 仍清除
+		//（回合确实收口），但失败留痕不渲染（用户已弃稿）。
+		if msg.err != nil && msg.gen == m.genCounter {
 			m.appendLine("[提交失败] " + msg.err.Error())
 		}
 		return m, nil
@@ -189,6 +200,11 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// token 是旧会话残值，先清再收口（与下方答案缓冲复位同语义）。
 		m.thinkingPending = 0
 		m.closeThinking()
+		// D10：旧会话的取消/在途提交状态一并作废（成败两路）：旧 pendingSubmit
+		// 不清则新会话首个 TurnStarted 会把旧稿错挂上新转写（旧会话事件已被
+		// 排空，气泡等不到正确的回合）；旧 cancelIntent 不清则新会话收口错渲染 ⏹。
+		m.pendingSubmit = nil
+		m.cancelIntent = false
 		if msg.err != nil {
 			m.appendLine("[" + msg.kind + "失败] " + msg.err.Error() + "（旧会话已收口；可重试 " + msg.kind + "）")
 			return m, nil
@@ -217,6 +233,15 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		//（mgr.List() 以 cancelled 终态渲染）。
 		if msg.err != nil {
 			m.appendLine("[agents] 取消失败: " + msg.err.Error())
+		}
+		return m, nil
+	case cancelDoneMsg:
+		// D10 回合取消回执：失败撤回本地意图并留痕（回合仍在途时）——取消
+		// 未生效，收口按引擎形态渲染；成功静默（⏹ 随 TurnDone 凭 cancelIntent
+		// 渲染）。回执迟到（回合已收口）则静默——失败行失去上下文反成噪音。
+		if msg.err != nil && m.running {
+			m.cancelIntent = false
+			m.appendLine("[取消失败] " + msg.err.Error())
 		}
 		return m, nil
 	case tea.KeyPressMsg:
@@ -284,6 +309,9 @@ func (m *tuiModel) handleEvent(ev any) {
 		// 并清 pending token——上回合用量已终结，不得落进新回合的块。
 		m.thinkingPending = 0
 		m.closeThinking()
+		// D10 上屏时机：用户气泡在回合开始事件到达时才提交（Enter 只置在途；
+		// 丢弃后迟到的 TurnStarted 经 pending 空判为 no-op）。
+		m.commitPendingBubble()
 	case event.AssistantThinkingEvent:
 		// D14：思考分片入有界尾窗活块（rewrite 同块流式推进）。
 		m.streamThinking(e)
@@ -325,7 +353,12 @@ func (m *tuiModel) handleEvent(ev any) {
 	case event.TurnDoneEvent:
 		m.closeThinking() // D14：回合收口折叠思考块（Ns 定格在末次思考事件到达）
 		m.sealAnswer()    // D17：回合收口冲刷 tail 残留（半开围栏一并落块）
-		if e.IsError {
+		if m.cancelIntent {
+			// D10：本地取消意图优先——引擎中断后的回执形态无 fixture 钉死
+			//（Subtype/IsError 不可信），绝不渲染为「回合失败」；意图消费即清。
+			m.cancelIntent = false
+			m.appendLine("⏹ 回合已取消 t" + fmt.Sprint(e.Turn))
+		} else if e.IsError {
 			m.appendLine("[回合失败] " + e.Subtype)
 		} else {
 			m.appendLine("[回合完成 t" + fmt.Sprint(e.Turn) + "]")
@@ -379,12 +412,17 @@ func (m *tuiModel) commitAnswerBlock(b assistantBlock) {
 	m.answerIdx = len(m.transcriptState.blocks) - 1
 }
 
-// handleKey 键盘路由。审批态只响应审批键（审批态/渲染态互斥——composer 冻结，
-// 输入与提交都被忽略）+ Ctrl+C 逃生（评审 Minor-4：审批态不可困死用户）；
-// 渲染态输入/提交/命令。
+// handleKey 键盘路由。Ctrl+C 优先：治理独占态（审批卡 / /agents 面板）单击
+// 退出（Minor-4 逃生口——独占态不可困死用户），渲染态走双击阶梯（keys.go
+// handleCtrlCKey）；审批态只响应审批键（审批态/渲染态互斥——composer 冻结，
+// 输入与提交都被忽略，Esc=拒绝）；/agents 列表态独占 composer；渲染态滚动
+// 手势、输入、Esc 阶梯（keys.go handleEscapeKey）与提交。
 func (m *tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.Code == 'c' && msg.Mod&tea.ModCtrl != 0 { // Contains(0) 恒真——不能用作零 Mod 判定
-		return m, tea.Quit
+		if m.approval != nil || m.agentsOpen {
+			return m, tea.Quit
+		}
+		return m, m.handleCtrlCKey()
 	}
 	if m.approval != nil {
 		switch {
@@ -424,6 +462,8 @@ func (m *tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case msg.Code == tea.KeyEnter:
 		return m.submit()
+	case msg.Code == tea.KeyEscape:
+		return m.handleEscapeKey() // D10 取消语义阶梯（keys.go）
 	case msg.Code == tea.KeyBackspace || msg.Code == tea.KeyDelete:
 		if r := []rune(m.input); len(r) > 0 {
 			m.input = string(r[:len(r)-1])
@@ -470,10 +510,19 @@ func (m *tuiModel) submit() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.running = true
-	return m, submitCmd(m.ctrl, text)
+	// D10 上屏时机：Enter 只置在途提交（代际计数 + pending），气泡待
+	// TurnStartedEvent 到达经 commitPendingBubble 上屏。
+	m.genCounter++
+	m.pendingSubmit = &pendingSubmit{text: text, gen: m.genCounter}
+	return m, submitCmd(m.ctrl, text, m.genCounter)
 }
 
-type submitDoneMsg struct{ err error }
+// submitDoneMsg 是异步 Submit 的回执；gen 为派发时代际——与模型代际失配 =
+// 该提交已被 Esc 丢弃，收据作废（running 仍清、失败行不渲染）。
+type submitDoneMsg struct {
+	err error
+	gen uint64
+}
 
 // swapDoneMsg 是异步会话换绑回执（ctrl/id 为新会话；err 非 nil 时为空）。
 type swapDoneMsg struct {
@@ -483,9 +532,9 @@ type swapDoneMsg struct {
 	kind string // "new" | "resume"
 }
 
-func submitCmd(ctrl SessionController, text string) tea.Cmd {
+func submitCmd(ctrl SessionController, text string, gen uint64) tea.Cmd {
 	return func() tea.Msg {
-		return submitDoneMsg{err: ctrl.Submit(context.Background(), text)}
+		return submitDoneMsg{err: ctrl.Submit(context.Background(), text), gen: gen}
 	}
 }
 

@@ -13,6 +13,10 @@ type SessionController interface {
 	Submit(ctx context.Context, text string) error
 	Approve(toolUseID string, allow bool, resolvedBy string) error
 	ApproveSession(toolUseID, resolvedBy string) error
+	// Cancel 取消当前回合（D10 Esc 取消阶梯的唯一引擎触点；签名与语义 =
+	// control.Controller.Cancel——控制协议 interrupt，等待裁决的待审请求一并
+	// fail-closed 拒绝）。组合根直供 *control.Controller，无需转发层。
+	Cancel(ctx context.Context) error
 	Snapshot() control.Snapshot
 	// Subagent 是子代理编排器的窄消费面（M12/T12.4 /agents 面板）；
 	// nil = 子代理未启用（工厂未接线）。

@@ -20,6 +20,7 @@ import (
 // stubController 记录 TUI 对会话控制面的调用（状态机单测不跑 tea runtime）。
 type stubController struct {
 	submits       []string
+	cancels       int         // Task 10 D10：Cancel 调用次数（Esc 取消阶梯「恰一次」断言）
 	approves      [][3]string // id, allow, by
 	sessionGrants [][2]string // id, by
 	snap          control.Snapshot
@@ -28,6 +29,12 @@ type stubController struct {
 }
 
 func (s *stubController) Subagent() *subagent.Manager { return s.sub }
+
+// Cancel 记录取消调用（SessionController 接口成员——Task 10 D10 扩面）。
+func (s *stubController) Cancel(_ context.Context) error {
+	s.cancels++
+	return nil
+}
 
 func (s *stubController) Submit(_ context.Context, text string) error {
 	if s.failSubmit {
@@ -121,6 +128,8 @@ func update(t *testing.T, m *tuiModel, msg tea.Msg) *tuiModel {
 		case swapDoneMsg:
 			next, _ = next.Update(done)
 		case agentsCancelDoneMsg:
+			next, _ = next.Update(done)
+		case cancelDoneMsg: // Task 10 D10：Esc 取消回执（同步执行——纪律同上）
 			next, _ = next.Update(done)
 		}
 	}
