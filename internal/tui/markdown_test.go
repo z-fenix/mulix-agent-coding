@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -153,7 +154,9 @@ func TestStreamingParagraphCommit(t *testing.T) {
 		t.Fatalf("after TurnDone want answer block + done line, blocks = %d", got)
 	}
 	joined := strings.Join(m.transcriptState.lines(80), "\n")
-	if !strings.Contains(joined, "fmt.Println()") {
+	// Task 19 起 go 围栏经 chroma 高亮——token 间夹 SGR，内容比对先剥样式
+	//（chroma 不改文本，见 TestFenceChromaHighlight 的 strip 钉点）。
+	if !strings.Contains(ansi.Strip(joined), "fmt.Println()") {
 		t.Fatalf("tail must be flushed into the block on TurnDone:\n%q", joined)
 	}
 	// 下一条消息从新块开始（游标复位后 append 而非续写旧块）
@@ -161,5 +164,131 @@ func TestStreamingParagraphCommit(t *testing.T) {
 	m.handleEvent(event.TurnDoneEvent{Turn: 2})
 	if got := len(m.transcriptState.blocks); got != 4 {
 		t.Fatalf("second message must open a fresh block (answer + done), blocks = %d", got)
+	}
+}
+
+// TestFenceChromaHighlight pins（Task 19：FR-014/Story4）：
+//
+//	(a) go 围栏经 chroma 高亮——terminal256 SGR 直出，关键字 func 以独立
+//	    token 着色（SGR+reset 包裹），内容混 ≥3 种色（轨 245 + ≥2 token
+//	    类），SGR 剥离后源码逐字无损；暗/亮主题输出不同（暗族 github-dark /
+//	    亮族 github——映射裁定见 markdown.go fenceChromaStyle 注记）；
+//	(b) 未知语言降级 accent 铺色——内容色只允许 accent(173)/轨(245)；
+//	(c) nil 中性缺省保持 Task 7 单一样式契约（go 围栏同为 accent 铺色）；
+//	(d) 无色层（tierNone）围栏零 SGR——与 NO_COLOR 退避同路径，内容仍在。
+func TestFenceChromaHighlight(t *testing.T) {
+	goFence := "```go\nfunc main() {\n\tfmt.Println(\"hi\")\n}\n```"
+	codeRE := regexp.MustCompile(`\x1b\[38;5;(\d+)m`)
+	distinct := func(s string) map[string]bool {
+		set := map[string]bool{}
+		for _, m := range codeRE.FindAllStringSubmatch(s, -1) {
+			set[m[1]] = true
+		}
+		return set
+	}
+
+	// (a) 暗底主题（graphite 暗 · 确定性 256 层，与包级初值同源）
+	dark := defaultActiveTheme()
+	out := strings.Join(renderMarkdown(goFence, 80, &dark), "\n")
+	if !strings.Contains(out, "\x1b[38;5;") {
+		t.Fatalf("go fence must carry chroma 256-color SGR:\n%q", out)
+	}
+	if !regexp.MustCompile(`\x1b\[[0-9;]*mfunc\x1b\[0m`).MatchString(out) {
+		t.Fatalf("keyword func must be chroma-colored as its own token:\n%q", out)
+	}
+	if got := distinct(out); len(got) < 3 {
+		t.Fatalf("fence must mix >=3 distinct colors (rail + >=2 token classes), got %v:\n%q", got, out)
+	}
+	if plain := ansi.Strip(out); !strings.Contains(plain, "func main() {") || !strings.Contains(plain, `fmt.Println("hi")`) {
+		t.Fatalf("chroma must not alter code text:\n%q", plain)
+	}
+	// 亮底变体：同样 chroma 高亮，但样式族不同 → 与暗底输出不同
+	light, ok := buildTheme("graphite", false, tierANSI256)
+	if !ok {
+		t.Fatal("graphite-light must resolve")
+	}
+	outL := strings.Join(renderMarkdown(goFence, 80, &light), "\n")
+	if !strings.Contains(outL, "\x1b[38;5;") || outL == out {
+		t.Fatalf("light theme must chroma-highlight with a different style family:\ndark=%q\nlight=%q", out, outL)
+	}
+
+	// (b) 未知语言：降级 accent 铺色，不携带 chroma 内容色
+	outU := strings.Join(renderMarkdown("```notalang\nplain text\n```", 80, &dark), "\n")
+	if !strings.Contains(outU, "\x1b[38;5;173mplain text\x1b[0m") {
+		t.Fatalf("unknown language must degrade to accent fill:\n%q", outU)
+	}
+	for c := range distinct(outU) {
+		if c != "173" && c != "245" {
+			t.Fatalf("unknown-language fence must not carry chroma colors, got %s:\n%q", c, outU)
+		}
+	}
+
+	// (c) nil 中性缺省：Task 7 契约——accent 铺色（36）+ 轨（90）之外无色
+	outN := strings.Join(renderMarkdown(goFence, 80, nil), "\n")
+	for c := range distinct(outN) {
+		if c != "36" && c != "90" {
+			t.Fatalf("neutral default must keep single-style fence, got %s:\n%q", c, outN)
+		}
+	}
+
+	// (d) 无色层：围栏零 SGR（NO_COLOR 退避同路径），内容与轨仍在
+	nc, ok := buildTheme("graphite", true, tierNone)
+	if !ok {
+		t.Fatal("graphite no-color theme must resolve")
+	}
+	outC := strings.Join(renderMarkdown(goFence, 80, &nc), "\n")
+	if strings.Contains(outC, "\x1b[") || !strings.Contains(outC, "func") || !strings.Contains(outC, "│ ") {
+		t.Fatalf("no-color tier must render fences unstyled:\n%q", outC)
+	}
+}
+
+// TestTableRender pins（Task 19：FR-014/Story4）：goldmark 表格 AST → 对齐
+// 表格——列宽取单元格显示宽（CJK 计两列），dim 竖轨分隔、表头加粗、表头下
+// ─┼─ 规则线；各行（含规则线）显示宽相等 ⇒ 轨不因 CJK 错位（若按 rune 数
+// 计宽，含 CJK 的行会宽出 2 列）；窄宽下列宽按比例封顶、长单元格换行不截断
+// 且整表不超可用宽；对齐冒号（:---:）读入不生效（对照参考——左对齐）。
+func TestTableRender(t *testing.T) {
+	src := "| Name | 数量 | Note |\n" +
+		"|---|---|---|\n" +
+		"| alpha | 3 | ok |\n" +
+		"| beta | 42 | 中文注释 |"
+	out := renderMarkdown(src, 80, nil)
+	joined := strings.Join(out, "\n")
+	for _, cell := range []string{"Name", "数量", "Note", "alpha", "beta", "中文注释"} {
+		if !strings.Contains(joined, cell) {
+			t.Fatalf("table cell %q lost:\n%q", cell, joined)
+		}
+	}
+	if !strings.Contains(joined, "\x1b[1mName") {
+		t.Fatalf("header must be bold:\n%q", joined)
+	}
+	if !strings.Contains(joined, "─┼─") {
+		t.Fatalf("header rule missing:\n%q", joined)
+	}
+	var widths []int
+	for _, l := range out {
+		if strings.Contains(l, "│") || strings.Contains(l, "┼") {
+			widths = append(widths, ansi.StringWidth(l))
+		}
+	}
+	if len(widths) != 4 { // 表头 + 规则线 + 2 数据行
+		t.Fatalf("want 4 aligned table lines, got %d:\n%q", len(widths), joined)
+	}
+	for _, w := range widths {
+		if w != widths[0] {
+			t.Fatalf("table rows misaligned (CJK width?): widths=%v\n%q", widths, joined)
+		}
+	}
+
+	// 窄宽封顶：整表不超可用宽，长 CJK 单元格换行不截断
+	outN := renderMarkdown(src, 22, nil)
+	for _, l := range outN {
+		if w := ansi.StringWidth(l); (strings.Contains(l, "│") || strings.Contains(l, "┼")) && w > 22 {
+			t.Fatalf("narrow table overflows width 22: %d cols (%q)", w, l)
+		}
+	}
+	joinedN := strings.Join(outN, "\n")
+	if !strings.Contains(joinedN, "中文注") || !strings.Contains(joinedN, "释") {
+		t.Fatalf("narrow table must wrap long cells, not truncate:\n%q", joinedN)
 	}
 }
