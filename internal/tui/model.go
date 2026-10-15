@@ -46,11 +46,6 @@ func Run(o Options, ctrl SessionController, selfID string, swapper SessionSwappe
 
 // ---- 模型 ----
 
-type approvalCard struct {
-	toolUseID string
-	tool      string
-}
-
 type tuiModel struct {
 	opts     Options
 	ctrl     SessionController
@@ -351,7 +346,7 @@ func (m *tuiModel) handleEvent(ev any) {
 	case event.ApprovalRequestEvent:
 		m.closeThinking()
 		m.sealAnswer()
-		m.approval = &approvalCard{toolUseID: e.ToolUseID, tool: e.Tool}
+		m.approval = &approvalCard{toolUseID: e.ToolUseID, tool: e.Tool, input: e.Input}
 		m.appendLine(fmt.Sprintf("[审批] 工具 %s（%s）需要授权", e.Tool, shortID(e.ToolUseID)))
 	case event.ApprovalResolvedEvent:
 		m.closeThinking()
@@ -572,10 +567,10 @@ func (m *tuiModel) commitAnswerBlock(b assistantBlock) {
 // handleKey 键盘路由。Ctrl+C 优先：治理独占态（审批卡 / /agents 面板 /
 // /resume 选择器）单击退出（Minor-4 逃生口——独占态不可困死用户），渲染态走
 // 双击阶梯（keys.go handleCtrlCKey）；审批态只响应审批键（审批态/渲染态互斥
-// ——composer 冻结，输入与提交都被忽略，Esc=拒绝）；/agents 列表态与 /resume
-// 选择器独占 composer（同级互斥）；补全菜单为 composer 邻接浮层（非独占——
-// 导航/补全键拦截，其余键落编辑器）；渲染态滚动手势、输入、Esc 阶梯（keys.go
-// handleEscapeKey）与提交。
+// ——composer 冻结，键位见 approval.go handleApprovalKey，023 D11）；/agents
+// 列表态与 /resume 选择器独占 composer（同级互斥）；补全菜单为 composer 邻接
+// 浮层（非独占——导航/补全键拦截，其余键落编辑器）；渲染态滚动手势、输入、
+// Esc 阶梯（keys.go handleEscapeKey）与提交。
 func (m *tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.Code == 'c' && msg.Mod&tea.ModCtrl != 0 { // Contains(0) 恒真——不能用作零 Mod 判定
 		if m.approval != nil || m.agentsOpen || m.picker != nil {
@@ -583,16 +578,8 @@ func (m *tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.handleCtrlCKey()
 	}
-	if m.approval != nil {
-		switch {
-		case msg.Code == 'a':
-			m.resolve(m.approval.toolUseID, true, false)
-		case msg.Code == 's':
-			m.resolve(m.approval.toolUseID, true, true)
-		case msg.Code == 'd' || msg.Code == tea.KeyEscape:
-			m.resolve(m.approval.toolUseID, false, false)
-		}
-		return m, nil
+	if m.approval != nil { // 审批独占态（键位与参数摘要见 approval.go，023 D11）
+		return m.handleApprovalKey(msg)
 	}
 	if m.agentsOpen { // /agents 列表态独占 composer（与审批态同级互斥）
 		return m.handleAgentsKey(msg)
@@ -654,20 +641,6 @@ func (m *tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	m.syncComposerFolds() // FR-008：记号删除/改坏即剪除 fold 账目（正文不残留）
 	m.syncComplete()      // FR-009：补全菜单随值重过滤（键入/删改共用此同步点）
 	return m, cmd
-}
-
-// resolve 执行审批动作并立即清卡（回执事件随后到达时幂等跳过）。
-func (m *tuiModel) resolve(toolUseID string, allow, session bool) {
-	var err error
-	if session {
-		err = m.ctrl.ApproveSession(toolUseID, "user")
-	} else {
-		err = m.ctrl.Approve(toolUseID, allow, "user")
-	}
-	if err != nil {
-		m.appendLine("[审批失败] " + err.Error())
-	}
-	m.approval = nil
 }
 
 // submit 渲染态 Enter：/命令分流（/cache /doctor /rewind /new /resume /quit）；
