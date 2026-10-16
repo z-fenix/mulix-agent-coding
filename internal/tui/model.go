@@ -449,16 +449,9 @@ func (m *tuiModel) handleEvent(ev any) {
 		} else if e.IsError {
 			// 设计 §6：`✗ 回合失败 tN（subtype）`（红槽——失败一眼可辨，T18）。
 			m.appendLine(failLine("✗ 回合失败 t" + fmt.Sprint(e.Turn) + "（" + e.Subtype + "）"))
-		} else {
-			// 设计 §6：`✓ 回合完成 tN · Ns`；时长缺席（<=0）整体省略——不渲染
-			// 未知的 0s（D7 同款不造数纪律）。完成收口行弱化（dim 槽——收口是
-			// 留痕不是内容，与回试行同色阶，T18）。
-			done := "✓ 回合完成 t" + fmt.Sprint(e.Turn)
-			if e.DurationMS > 0 {
-				done += fmt.Sprintf(" · %.1fs", float64(e.DurationMS)/1000)
-			}
-			m.appendLine(dimLine(done))
 		}
+		// 025 FR-005：正常完成不再渲染收口行——回执（分隔线 + 本轮字段序）
+		// 即收口标记（对照基线：reasonix 无「回合完成」行）。⏹/✗ 保留。
 	case event.EngineExitedEvent:
 		m.closeThinking()
 		m.sealAnswer()

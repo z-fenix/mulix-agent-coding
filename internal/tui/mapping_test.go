@@ -207,7 +207,7 @@ func TestEventRenderMatrix(t *testing.T) {
 				event.UsageEvent{Seq: 2, Turn: 1, UncachedInputTokens: 10, WriteTokens: 20,
 					ReadTokens: 30, OutputTokens: 40, ThinkingTokens: 42, CostUSD: 0.5, HitRate: 0.5},
 			},
-			wantBlocks: []string{"✓ 回合 t1", "入10/写20/读30/出40/思42 tok", "$0.5000", "命中50%"},
+			wantBlocks: []string{"────", "本轮 142 tok · in 10 · cached 30 · new 20 · out 40 · reasoning 42 · ≈$0.5000"},
 			wantState: func(t *testing.T, m *tuiModel) {
 				if m.thinkingIdx != -1 {
 					t.Fatalf("Usage must close the thinking block, thinkingIdx = %d", m.thinkingIdx)
@@ -247,14 +247,15 @@ func TestEventRenderMatrix(t *testing.T) {
 				event.AssistantTextEvent{Seq: 2, Turn: 1, Text: "未完段落"},
 				event.TurnDoneEvent{Seq: 3, Turn: 6, Subtype: "success", DurationMS: 4500},
 			},
-			wantBlocks: []string{"▸ 思考了", "未完段落", "✓ 回合完成 t6 · 4.5s"},
+			wantBlocks: []string{"▸ 思考了", "未完段落"},
+			wantAbsent: []string{"回合完成"},
 			wantState: func(t *testing.T, m *tuiModel) {
 				if m.pendingMD != "" || m.thinkingIdx != -1 {
 					t.Fatalf("turn close must flush residue and collapse thinking: pending=%q idx=%d",
 						m.pendingMD, m.thinkingIdx)
 				}
-				if len(m.transcriptState.blocks) != 3 {
-					t.Fatalf("折叠思考+冲刷残留+收口行 = 3 blocks（无 TurnStarted 不发头行）, got %d", len(m.transcriptState.blocks))
+				if len(m.transcriptState.blocks) != 2 {
+					t.Fatalf("折叠思考+冲刷残留 = 2 blocks（无 Usage 无回执；无 TurnStarted 不发头行）, got %d", len(m.transcriptState.blocks))
 				}
 			},
 		},

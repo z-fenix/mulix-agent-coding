@@ -33,7 +33,7 @@ func TestTurnReceipt(t *testing.T) {
 			ThinkingTokens: 42, CostUSD: 0.0123, HitRate: 0.72}})
 		joined := strings.Join(flattenTranscript(&m.transcriptState, 80), "\n")
 		for _, want := range []string{
-			"✓ 回合 t1", "入100/写20/读300/出50/思42 tok", "$0.0123", "命中72%",
+			"────", "本轮 512 tok · in 100 · cached 300 · new 20 · out 50 · reasoning 42 · ≈$0.0123",
 		} {
 			if !strings.Contains(joined, want) {
 				t.Fatalf("receipt missing %q\n--- transcript ---\n%s", want, joined)
@@ -66,7 +66,7 @@ func TestTurnReceipt(t *testing.T) {
 			t.Fatalf("turn-1 block must keep its own tokens, got %#v", m.transcriptState.blocks[0])
 		}
 		joined := strings.Join(flattenTranscript(&m.transcriptState, 80), "\n")
-		if !strings.Contains(joined, "✓ 回合 t2") || !strings.Contains(joined, "思7") {
+		if !strings.Contains(joined, "本轮 42 tok") || !strings.Contains(joined, "本轮 7 tok") {
 			t.Fatalf("turn-2 receipt missing:\n%s", joined)
 		}
 	})

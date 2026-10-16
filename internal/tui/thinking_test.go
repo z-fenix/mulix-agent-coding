@@ -96,7 +96,7 @@ func TestThinkingCollapse(t *testing.T) {
 	m = update(t, m, tuiEvent{ev: event.AssistantThinkingEvent{Seq: 3, Thinking: "more"}})
 	m.noteThinkingTokens(0, 45) // 思考事件 Turn 未设（0）——同回合守卫放行
 	m = update(t, m, tuiEvent{ev: event.TurnDoneEvent{Seq: 4, Subtype: "success"}})
-	if len(m.transcriptState.blocks) != 2 { // 折叠块 + 回合完成收口行
+	if len(m.transcriptState.blocks) != 1 { // 025 FR-005：完成行移除——仅折叠思考块
 		t.Fatalf("collapse must not add blocks beyond the system line, blocks = %d", len(m.transcriptState.blocks))
 	}
 	tb, ok = m.transcriptState.blocks[0].(thinkingBlock)
