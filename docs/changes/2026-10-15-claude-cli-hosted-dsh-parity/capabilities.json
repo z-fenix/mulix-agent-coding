@@ -1,0 +1,117 @@
+{
+  "schema": "mulix.parity-roadmap.v1",
+  "scope": "umbrella-tracking-only",
+  "overall_status": "unverified",
+  "baseline": {
+    "dsh_commit": "571902028a75c64c1d767f4ae5fd099485f0ddf0",
+    "dsh_version": "0.2.1-alpha.3",
+    "mulix_commit": "3b309100fdf7ac5170865c334b640b003e63749d",
+    "engine_lock": "2.1.296"
+  },
+  "cross_cutting_requirements": [
+    "FR-002", "FR-003", "FR-004", "FR-006", "FR-007",
+    "FR-028", "FR-029", "FR-030", "FR-031"
+  ],
+  "deliveries": [
+    {"id": "B0", "title": "参考契约与引擎能力记录", "depends_on": [], "conditional_dependencies": []},
+    {"id": "B1", "title": "恢复与真实上下文 fork", "depends_on": ["B0"], "conditional_dependencies": []},
+    {"id": "B2", "title": "自动压缩与 overflow 恢复", "depends_on": ["B0"], "conditional_dependencies": ["B1"]},
+    {"id": "B3", "title": "可续接子代理生命周期", "depends_on": ["B1"], "conditional_dependencies": []},
+    {"id": "B4", "title": "agent 级工具面与生效边界", "depends_on": ["B0"], "conditional_dependencies": ["B1"]},
+    {"id": "B5", "title": "动态插件生命周期", "depends_on": ["B4"], "conditional_dependencies": []},
+    {"id": "B6", "title": "profiles/presets 组合", "depends_on": ["B5"], "conditional_dependencies": []},
+    {"id": "B7", "title": "外部 MCP 两种传输", "depends_on": ["B4"], "conditional_dependencies": []},
+    {"id": "B8", "title": "产品技能运行时", "depends_on": ["B0", "B4"], "conditional_dependencies": ["B6"]},
+    {"id": "B9", "title": "受治理的拦截链", "depends_on": ["B4"], "conditional_dependencies": []},
+    {"id": "B10", "title": "PTC 覆盖与执行生命周期", "depends_on": ["B9"], "conditional_dependencies": ["B11"]},
+    {"id": "B11", "title": "执行隔离平台系列", "depends_on": ["B0"], "conditional_dependencies": []},
+    {"id": "B12", "title": "真实多供应商兼容", "depends_on": ["B0"], "conditional_dependencies": []},
+    {"id": "B13", "title": "公共会话服务", "depends_on": ["B0", "B1"], "conditional_dependencies": ["B4", "B9"]},
+    {"id": "B14", "title": "Web 产品入口", "depends_on": ["B13"], "conditional_dependencies": []},
+    {"id": "B15", "title": "程序客户端及 ACP", "depends_on": ["B13"], "conditional_dependencies": []},
+    {"id": "B16", "title": "跨会话搜索", "depends_on": ["B0"], "conditional_dependencies": []},
+    {"id": "B17", "title": "用户回放入口", "depends_on": ["B0"], "conditional_dependencies": ["B1"]}
+  ],
+  "capabilities": [
+    {
+      "id": "loop", "requirements": ["FR-001", "FR-005"], "deliveries": ["B0"],
+      "planned_provider": "engine", "verification": "unverified",
+      "child_changes": [], "reference_contracts": [], "evidence": []
+    },
+    {
+      "id": "providers", "requirements": ["FR-027"], "deliveries": ["B12"],
+      "planned_provider": "joint", "verification": "unverified",
+      "child_changes": [], "reference_contracts": [], "evidence": []
+    },
+    {
+      "id": "plugins", "requirements": ["FR-013", "FR-015"], "deliveries": ["B4", "B5"],
+      "planned_provider": "host", "verification": "unverified",
+      "child_changes": [], "reference_contracts": [], "evidence": []
+    },
+    {
+      "id": "profiles", "requirements": ["FR-014"], "deliveries": ["B6"],
+      "planned_provider": "host", "verification": "unverified",
+      "child_changes": [], "reference_contracts": [], "evidence": []
+    },
+    {
+      "id": "tools-mcp", "requirements": ["FR-016", "FR-017"], "deliveries": ["B4", "B7"],
+      "planned_provider": "joint", "verification": "unverified",
+      "child_changes": [], "reference_contracts": [], "evidence": []
+    },
+    {
+      "id": "skills", "requirements": ["FR-018"], "deliveries": ["B8"],
+      "planned_provider": "joint", "verification": "unverified",
+      "child_changes": [], "reference_contracts": [], "evidence": []
+    },
+    {
+      "id": "compaction", "requirements": ["FR-011"], "deliveries": ["B2"],
+      "planned_provider": "joint", "verification": "unverified",
+      "child_changes": [], "reference_contracts": [], "evidence": []
+    },
+    {
+      "id": "context-authority", "requirements": ["FR-008"], "deliveries": ["B0", "B1"],
+      "planned_provider": "joint", "verification": "unverified",
+      "child_changes": [], "reference_contracts": [], "evidence": []
+    },
+    {
+      "id": "fork", "requirements": ["FR-009", "FR-010"], "deliveries": ["B1"],
+      "planned_provider": "joint", "verification": "unverified",
+      "child_changes": [], "reference_contracts": [], "evidence": []
+    },
+    {
+      "id": "subagents", "requirements": ["FR-012"], "deliveries": ["B3"],
+      "planned_provider": "joint", "verification": "unverified",
+      "child_changes": [], "reference_contracts": [], "evidence": []
+    },
+    {
+      "id": "ptc", "requirements": ["FR-019"], "deliveries": ["B9", "B10", "B11"],
+      "planned_provider": "joint", "verification": "unverified",
+      "child_changes": [], "reference_contracts": [], "evidence": []
+    },
+    {
+      "id": "middleware", "requirements": ["FR-020"], "deliveries": ["B9"],
+      "planned_provider": "joint", "verification": "unverified",
+      "child_changes": [], "reference_contracts": [], "evidence": []
+    },
+    {
+      "id": "sandbox", "requirements": ["FR-021", "FR-022"], "deliveries": ["B11"],
+      "planned_provider": "joint", "verification": "unverified",
+      "child_changes": [], "reference_contracts": [], "evidence": []
+    },
+    {
+      "id": "remote", "requirements": ["FR-023", "FR-024"], "deliveries": ["B13", "B14", "B15"],
+      "planned_provider": "host", "verification": "unverified",
+      "child_changes": [], "reference_contracts": [], "evidence": []
+    },
+    {
+      "id": "search", "requirements": ["FR-025"], "deliveries": ["B16"],
+      "planned_provider": "host", "verification": "unverified",
+      "child_changes": [], "reference_contracts": [], "evidence": []
+    },
+    {
+      "id": "replay", "requirements": ["FR-026"], "deliveries": ["B17"],
+      "planned_provider": "host", "verification": "unverified",
+      "child_changes": [], "reference_contracts": [], "evidence": []
+    }
+  ]
+}
