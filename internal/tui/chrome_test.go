@@ -1,0 +1,93 @@
+package tui
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+	"mulix/internal/event"
+)
+
+// ---- 025 交谈 chrome 对齐（基线：baseline-reasonix-frames.log）----
+
+func TestChromeBanner(t *testing.T) {
+	b := bannerBlock{model: "claude-x"}
+	lines := b.render(80)
+	if len(lines) != 2 {
+		t.Fatalf("banner lines = %d, want 2", len(lines))
+	}
+	if !strings.Contains(lines[0], "◆ mulix · claude-x") {
+		t.Fatalf("banner line1: %q", lines[0])
+	}
+	if strings.TrimSpace(lines[1]) == "" {
+		t.Fatalf("banner hint line empty")
+	}
+}
+
+func TestChromeUserBubble(t *testing.T) {
+	got := userBlock{text: "你好"}.render(80)
+	if !strings.HasPrefix(strings.TrimRight(got[0], " "), "  › 你好") {
+		t.Fatalf("user bubble: %q", got[0])
+	}
+}
+
+func TestChromeAssistantGutter(t *testing.T) {
+	got := assistantBlock{text: "你好"}.render(80)
+	if !strings.HasPrefix(got[0], "  ") {
+		t.Fatalf("assistant gutter: %q", got[0])
+	}
+	if !strings.Contains(got[0], "你好") {
+		t.Fatalf("assistant content: %q", got[0])
+	}
+}
+
+func TestChromeToolCardGutter(t *testing.T) {
+	c := &toolCard{toolUseID: "t1", tool: "Bash", arg: "sleep", state: toolDone}
+	for i, l := range c.render(80) {
+		if !strings.HasPrefix(l, "  ") {
+			t.Fatalf("tool card line %d not in gutter: %q", i, l)
+		}
+	}
+}
+
+func TestChromeThinkingFold(t *testing.T) {
+	b := thinkingBlock{
+		tail:      "x",
+		startedAt: time.Unix(0, 0),
+		endedAt:   time.Unix(3, 0),
+		collapsed: true,
+	}
+	got := b.render(80)[0]
+	if !strings.Contains(got, "▸ 思考了 3 秒 (Ctrl+O)") {
+		t.Fatalf("thinking fold: %q", got)
+	}
+	if strings.Contains(got, "tok") {
+		t.Fatalf("fold line must not carry tok slot: %q", got)
+	}
+}
+
+func TestChromeThinkingStreamMarker(t *testing.T) {
+	b := thinkingBlock{tail: "x", startedAt: time.Unix(0, 0), endedAt: time.Unix(1, 0)}
+	got := b.render(80)
+	if !strings.Contains(got[0], "▎ thinking…") {
+		t.Fatalf("streaming marker: %q", got[0])
+	}
+}
+
+func TestChromeTurnHeader(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+	update(t, m, tuiEvent{ev: event.TurnStartedEvent{Seq: 1}})
+	update(t, m, tuiEvent{ev: event.AssistantTextEvent{Seq: 2, Turn: 1, Text: "# 标题\n\n正文段落"}})
+	if len(m.transcriptState.blocks) < 2 {
+		t.Fatalf("blocks = %d, want ≥2（头行 + 答文）", len(m.transcriptState.blocks))
+	}
+	hb, ok := m.transcriptState.blocks[0].(assistantHeaderBlock)
+	if !ok {
+		t.Fatalf("blocks[0] 应为助手头行块, got %T", m.transcriptState.blocks[0])
+	}
+	if !strings.Contains(hb.render(80)[0], "◆ mulix") {
+		t.Fatalf("header: %q", hb.render(80)[0])
+	}
+}

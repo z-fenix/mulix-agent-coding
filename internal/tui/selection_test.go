@@ -210,7 +210,7 @@ func TestCtrlOVerbose(t *testing.T) {
 	if strings.Contains(view, "secret-thought") {
 		t.Fatalf("collapsed block must hide full text:\n%s", view)
 	}
-	if !strings.Contains(view, "已思考") {
+	if !strings.Contains(view, "思考了") {
 		t.Fatalf("collapsed summary missing:\n%s", view)
 	}
 

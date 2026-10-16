@@ -46,6 +46,14 @@ func Run(o Options, ctrl SessionController, selfID string, swapper SessionSwappe
 	}
 	m := newTuiModel(o, ctrl, events, selfID)
 	m.swapper = swapper
+	// 启动横幅（025 FR-001）：会话启动渲染一次；model 取装配后首帧快照，
+	// 空则 statusTick 回填（refreshBanner）。
+	bannerModel := ""
+	if ctrl != nil {
+		bannerModel = ctrl.Snapshot().Model
+	}
+	m.transcriptState.append(bannerBlock{model: bannerModel})
+	m.bannerIdx = len(m.transcriptState.blocks) - 1
 	_, err := tea.NewProgram(m).Run()
 	return err
 }
@@ -122,6 +130,13 @@ type tuiModel struct {
 	// pendingAnchor 宽度重排阅读锚点（024 FR-001）：WindowSizeMsg 捕获，
 	// frame 在新宽重排后按块对位恢复一次即清空；尾随态置位即弃。
 	pendingAnchor *anchorPoint
+	// turnHeaderPending 助手头行待发（025 FR-003）：TurnStarted 置位，回合
+	// 首个内容块（工具卡开卡/答文首块）消费——思考流不消费（基线：▸ 折叠行
+	// 在 ◆ 头行之前）。
+	turnHeaderPending bool
+	// bannerIdx 启动横幅块下标（025 FR-001；-1 = 无——测试形态）；model 空
+	// 时首个 statusTick 快照回填。
+	bannerIdx int
 }
 
 // styleStatus/styleCard 已随主题系统（Task 18）迁入 theme.go——包级样式由
@@ -157,6 +172,7 @@ func newTuiModel(o Options, ctrl SessionController, events <-chan tuiEvent, sess
 		width:  80, height: 24, // WindowSizeMsg 到达前的合理缺省
 		answerIdx:       -1, // 无活块（流式答案游标，Task 7 D17）
 		thinkingIdx:     -1, // 无活思考块（Task 8 D14）
+		bannerIdx:       -1, // 无横幅（025 FR-001——Run 装配后置位）
 		cards:           make(map[string]int),
 		delegCards:      make(map[string]int),
 		transcriptState: newTranscriptState(),
@@ -217,6 +233,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.ctrl != nil {
 			m.statusState.snapshot = m.ctrl.Snapshot()
 		}
+		m.refreshBanner()
 		if m.testMode {
 			return m, nil
 		}
@@ -372,6 +389,7 @@ func (m *tuiModel) finalize() {
 func (m *tuiModel) handleEvent(ev any) {
 	switch e := ev.(type) {
 	case event.TurnStartedEvent:
+		m.turnHeaderPending = true
 		// 新回合（D14 接线）：防御性收口残开思考块（正常已由 TurnDone 收口）
 		// 并清 pending token——上回合用量已终结，不得落进新回合的块。
 		m.thinkingPending = 0
@@ -535,6 +553,10 @@ type delegationBlock struct {
 // render 委派卡按宽渲染（块接口）：头行 ⏺/⊘ 子代理 <id8> 状态 · 详情；
 // 完成卡附 ⎿ token/成本明细行（设计 §6：完成收口含 token/成本）。
 func (b *delegationBlock) render(width int) []string {
+	return gutterLines(b.renderInner(max(width-2, 1)))
+}
+
+func (b *delegationBlock) renderInner(width int) []string {
 	if width <= 0 {
 		width = 80
 	}
@@ -640,11 +662,36 @@ func (m *tuiModel) sealAnswer() {
 // commitAnswerBlock 落答案块：活块仍是末块则 rewriteLast 原地改写（流式增量，
 // 块数不变）；否则追加新块（首提交，或防御性兜底——活块被中间事件顶离末位时
 // 退化为新块，不冲掉他块；正常路径下中间事件先经 sealAnswer 复位游标）。
+// takeTurnHeader 消费待发助手头行（025 FR-003）：回合首个内容块前置
+// `◆ mulix` 头行块。
+func (m *tuiModel) takeTurnHeader() {
+	if !m.turnHeaderPending {
+		return
+	}
+	m.turnHeaderPending = false
+	m.transcriptState.append(assistantHeaderBlock{})
+}
+
+// refreshBanner 横幅 model 回填（025 FR-001）：Run 装配时 Snapshot.Model
+// 为空（引擎信息未就绪竞态）则首个 statusTick 快照回填一次。
+func (m *tuiModel) refreshBanner() {
+	if m.bannerIdx < 0 || m.bannerIdx >= len(m.transcriptState.blocks) {
+		return
+	}
+	if bb, ok := m.transcriptState.blocks[m.bannerIdx].(bannerBlock); ok && bb.model == "" {
+		if mdl := m.statusState.snapshot.Model; mdl != "" {
+			m.transcriptState.blocks[m.bannerIdx] = bannerBlock{model: mdl}
+			m.transcriptState.invalidateWrapFrom(m.bannerIdx)
+		}
+	}
+}
+
 func (m *tuiModel) commitAnswerBlock(b assistantBlock) {
 	if m.answerIdx >= 0 && m.answerIdx == len(m.transcriptState.blocks)-1 {
 		m.transcriptState.rewriteLast(b)
 		return
 	}
+	m.takeTurnHeader()
 	m.transcriptState.append(b)
 	m.answerIdx = len(m.transcriptState.blocks) - 1
 }

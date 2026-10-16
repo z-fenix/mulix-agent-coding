@@ -36,10 +36,51 @@ type plainBlock struct{ text string }
 
 func (b plainBlock) render(width int) []string { return wrapText(b.text, width) }
 
-// userBlock 用户输入块（composer 提交回显接线随后续任务；本任务先立块型）。
+// userBlock 用户输入气泡（025 FR-002）：`  › ` 前缀 + 2 空格槽续行
+// （对照基线 `  › 你好`）。
 type userBlock struct{ text string }
 
-func (b userBlock) render(width int) []string { return wrapText(b.text, width) }
+func (b userBlock) render(width int) []string {
+	inner := wrapText(b.text, max(width-4, 1))
+	out := make([]string, len(inner))
+	for i, l := range inner {
+		if i == 0 {
+			out[i] = "  › " + l
+			continue
+		}
+		out[i] = "    " + l
+	}
+	return out
+}
+
+// bannerBlock 启动横幅（025 FR-001）：`◆ mulix · <model>` + 提示行，会话
+// 启动渲染一次（Run 装配；/new 换绑不重复）。提示行形态对照基线、内容按
+// mulix 实际退出方式（/quit / 双击 Ctrl+C）。
+type bannerBlock struct{ model string }
+
+func (b bannerBlock) render(width int) []string {
+	return []string{
+		activeTheme.accent("◆ mulix · " + b.model),
+		dimLine("对话上下文将跨轮保留。输入 /quit 或按两次 Ctrl+C 退出。"),
+	}
+}
+
+// assistantHeaderBlock 助手头行（025 FR-003）：`◆ mulix`，每回合首个内容块
+// 前合成一次（turnHeaderPending 消费）。
+type assistantHeaderBlock struct{}
+
+func (assistantHeaderBlock) render(width int) []string {
+	return []string{activeTheme.accent("◆ mulix")}
+}
+
+// gutterLines 全体行加 2 空格槽（025 FR-003：正文/卡片/回执整体入槽——
+// 对照基线所有内容行两空格缩进）。就地改写 freshly-rendered 切片。
+func gutterLines(lines []string) []string {
+	for i, l := range lines {
+		lines[i] = "  " + l
+	}
+	return lines
+}
 
 // assistantBlock 助手文本块：markdown 源经 renderMarkdown 按宽渲染（标题/
 // 加粗/行内代码/围栏/列表 + CJK 强调修正）。主题线程化（Task 18 FR-014/D8）：
@@ -48,7 +89,7 @@ func (b userBlock) render(width int) []string { return wrapText(b.text, width) }
 type assistantBlock struct{ text string }
 
 func (b assistantBlock) render(width int) []string {
-	return renderMarkdown(b.text, width, &activeTheme)
+	return gutterLines(renderMarkdown(b.text, max(width-2, 1), &activeTheme))
 }
 
 // transcriptState 是 transcript 渲染关注点容器：语义块流 + 按块换行缓存

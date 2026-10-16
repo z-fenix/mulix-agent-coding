@@ -210,6 +210,10 @@ func boundedTail(s string, maxLines int) []string {
 // 详情行（失败卡）。对照参考 toolCard/toolHead 的头行组装——动词加粗、主参
 // 裸文（括号弱化）、按余宽截断。
 func (c *toolCard) render(width int) []string {
+	return gutterLines(c.renderInner(max(width-2, 1)))
+}
+
+func (c *toolCard) renderInner(width int) []string {
 	if width <= 0 {
 		width = 80
 	}

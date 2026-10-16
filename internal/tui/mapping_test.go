@@ -69,8 +69,8 @@ func TestEventRenderMatrix(t *testing.T) {
 					t.Fatalf("turn start must reset the answer cursor: pending=%q idx=%d flushed=%d",
 						m.pendingMD, m.answerIdx, m.answerFlushed)
 				}
-				if len(m.transcriptState.blocks) != 1 {
-					t.Fatalf("sealed residue must land as one block, blocks = %d", len(m.transcriptState.blocks))
+				if len(m.transcriptState.blocks) != 2 {
+					t.Fatalf("头行+答文(残留冲刷原地复写) = 2 blocks, got %d", len(m.transcriptState.blocks))
 				}
 			},
 		},
@@ -247,14 +247,14 @@ func TestEventRenderMatrix(t *testing.T) {
 				event.AssistantTextEvent{Seq: 2, Turn: 1, Text: "未完段落"},
 				event.TurnDoneEvent{Seq: 3, Turn: 6, Subtype: "success", DurationMS: 4500},
 			},
-			wantBlocks: []string{"✓ 已思考", "未完段落", "✓ 回合完成 t6 · 4.5s"},
+			wantBlocks: []string{"▸ 思考了", "未完段落", "✓ 回合完成 t6 · 4.5s"},
 			wantState: func(t *testing.T, m *tuiModel) {
 				if m.pendingMD != "" || m.thinkingIdx != -1 {
 					t.Fatalf("turn close must flush residue and collapse thinking: pending=%q idx=%d",
 						m.pendingMD, m.thinkingIdx)
 				}
 				if len(m.transcriptState.blocks) != 3 {
-					t.Fatalf("collapse + sealed answer + close line = 3 blocks, got %d", len(m.transcriptState.blocks))
+					t.Fatalf("折叠思考+冲刷残留+收口行 = 3 blocks（无 TurnStarted 不发头行）, got %d", len(m.transcriptState.blocks))
 				}
 			},
 		},

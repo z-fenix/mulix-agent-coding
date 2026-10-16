@@ -31,7 +31,7 @@ func TestBlockAppendRewrite(t *testing.T) {
 	if len(lines) != 3 {
 		t.Fatalf("lines = %d, want 3", len(lines))
 	}
-	if strings.TrimSpace(lines[0]) != "alpha" || strings.TrimSpace(lines[1]) != "beta" {
+	if strings.TrimSpace(lines[0]) != "alpha" || strings.TrimSpace(lines[1]) != "› beta" {
 		t.Fatalf("earlier blocks must be untouched: %q / %q", lines[0], lines[1])
 	}
 	if strings.TrimSpace(lines[2]) != "gamma-rewritten" {
