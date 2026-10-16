@@ -445,13 +445,17 @@ func (m *tuiModel) handleEvent(ev any) {
 		m.closeThinking()
 		m.sealAnswer()
 		// 024 FR-002：清扫运行中工具卡为中断终态——引擎已死，卡片不得永久
-		// 渲染「· 运行中」。幂等：无运行中卡则零改写。
+		// 渲染「· 运行中」。幂等：无运行中卡则零改写。缓存失效取**首个**被改
+		// 下标（invalidateWrapFrom 截前缀，后缀全重排——终审 Important-1：
+		// 记末位会漏改前位卡的「· 运行中」缓存行）。
 		lowest := -1
 		for i, b := range m.transcriptState.blocks {
 			if card, ok := b.(*toolCard); ok && card.state == toolRunning {
 				card.state = toolFailed
 				card.failedDetail = "引擎已退出，工具未返回"
-				lowest = i
+				if lowest < 0 {
+					lowest = i
+				}
 			}
 		}
 		if lowest >= 0 {
