@@ -102,6 +102,9 @@ func TestRunUnattendedE2E(t *testing.T) {
 		if !strings.Contains(boot.MCPConfigJSON, "mulix") {
 			t.Errorf("mcp config = %q, want mulix entry", boot.MCPConfigJSON)
 		}
+		if boot.SettingsJSON != `{"permissions":{"ask":["Bash","PowerShell"]}}` {
+			t.Errorf("settings json = %q, want governance ask face", boot.SettingsJSON)
+		}
 		script, err := engine.FixtureScript("../../fixtures/engine/happy-turn.jsonl")
 		if err != nil {
 			t.Errorf("fixture: %v", err)
