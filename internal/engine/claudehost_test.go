@@ -497,20 +497,23 @@ func TestBuildArgs(t *testing.T) {
 		DisallowedTools:       []string{"Bash(rm -rf*)"},
 		ResumeEngineSessionID: "eng-1",
 		ForkSession:           true,
+		SettingsJSON:          `{"permissions":{"ask":["Bash","PowerShell"]}}`,
 	}
-	args, mcpTemp, err := h.buildArgs(cfg)
+	args, mcpTemp, settingsTemp, err := h.buildArgs(cfg)
 	if err != nil {
 		t.Fatalf("buildArgs: %v", err)
 	}
 	if mcpTemp != "" {
 		t.Fatalf("no mcp temp expected, got %q", mcpTemp)
 	}
+	defer os.Remove(settingsTemp)
 	want := []string{
 		"--input-format", "stream-json",
 		"--output-format", "stream-json",
 		"--verbose",
 		"--permission-mode", "default",
 		"--setting-sources", "user,project",
+		"--settings", settingsTemp,
 		"--model", "claude-opus-5[1M]",
 		"--permission-prompt-tool", "mcp__mulix__approve",
 		"--append-system-prompt", "SNAPSHOT",
@@ -529,11 +532,12 @@ func TestBuildArgs(t *testing.T) {
 	}
 	// MCPConfigJSON 非空 → 物化临时文件
 	cfg.MCPConfigJSON = `{"mcpServers":{}}`
-	args2, mcpTemp2, err := h.buildArgs(cfg)
+	args2, mcpTemp2, settingsTemp2, err := h.buildArgs(cfg)
 	if err != nil {
 		t.Fatalf("buildArgs mcp: %v", err)
 	}
 	defer os.Remove(mcpTemp2)
+	defer os.Remove(settingsTemp2)
 	idx := -1
 	for i, a := range args2 {
 		if a == "--mcp-config" {
@@ -546,5 +550,44 @@ func TestBuildArgs(t *testing.T) {
 	data, err := os.ReadFile(args2[idx+1])
 	if err != nil || string(data) != `{"mcpServers":{}}` {
 		t.Fatalf("mcp temp file wrong: %v %q", err, data)
+	}
+	// --settings 物化：内容逐字节 = SettingsJSON
+	sidx := -1
+	for i, a := range args2 {
+		if a == "--settings" {
+			sidx = i
+		}
+	}
+	if sidx < 0 || sidx+1 >= len(args2) {
+		t.Fatal("--settings missing")
+	}
+	data, err = os.ReadFile(args2[sidx+1])
+	if err != nil || string(data) != cfg.SettingsJSON {
+		t.Fatalf("settings temp file wrong: %v %q", err, data)
+	}
+}
+
+// TestSettingsTempCleanedOnClose pins：--settings 临时文件随 cleanupTemp 清理
+// （与 mcp-config 临时文件同生命周期纪律）。
+func TestSettingsTempCleanedOnClose(t *testing.T) {
+	h := NewClaudeHost(ClaudeHostOptions{LockPath: testLockPath(t)})
+	cfg := BootConfig{
+		PermissionMode: "default",
+		SettingSources: []string{"user"},
+		SettingsJSON:   `{"permissions":{"ask":["Bash"]}}`,
+	}
+	_, _, settingsTemp, err := h.buildArgs(cfg)
+	if err != nil {
+		t.Fatalf("buildArgs: %v", err)
+	}
+	// buildArgs 是纯物化（路径经返回值交接，Start 落字段）——单测 cleanupTemp
+	// 需直设字段（Ruling：与 mcpTemp 同语义的隔离测试形态）。
+	h.settingsTemp = settingsTemp
+	if _, err := os.Stat(settingsTemp); err != nil {
+		t.Fatalf("settings temp missing: %v", err)
+	}
+	h.cleanupTemp()
+	if _, err := os.Stat(settingsTemp); !os.IsNotExist(err) {
+		t.Fatalf("settings temp not cleaned: %v", err)
 	}
 }

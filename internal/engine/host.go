@@ -51,6 +51,10 @@ type BootConfig struct {
 	MCPConfigJSON      string   // --mcp-config 文件内容（顺序稳定序列化）
 	AllowedTools       []string // --allowedTools（显式顺序）
 	DisallowedTools    []string // --disallowedTools（显式顺序）
+	// SettingsJSON 是 --settings 文件内容（治理面注入；leaf 级以 string 传输，
+	// 引擎包不解释其结构——不得 import config）。非空 → buildArgs 物化临时
+	// 文件并追加 --settings（生命周期同 mcp-config 临时文件）。
+	SettingsJSON string
 	// 模型与会话
 	Model                 string // --model（空 = 引擎默认）
 	ResumeEngineSessionID string // --resume <engine-session-id>（续链，实测不换 session id）
