@@ -87,7 +87,8 @@ func TestChromeTurnHeader(t *testing.T) {
 	if !ok {
 		t.Fatalf("blocks[0] 应为助手头行块, got %T", m.transcriptState.blocks[0])
 	}
-	if !strings.Contains(hb.render(80)[0], "◆ mulix") {
-		t.Fatalf("header: %q", hb.render(80)[0])
+	line := hb.render(80)[0]
+	if !strings.HasPrefix(line, "  ") || !strings.Contains(line, "◆ mulix") {
+		t.Fatalf("header must be slotted per baseline (SGR 在 ◆ 之前): %q", line)
 	}
 }

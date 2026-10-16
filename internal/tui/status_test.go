@@ -33,7 +33,7 @@ func TestTurnReceipt(t *testing.T) {
 			ThinkingTokens: 42, CostUSD: 0.0123, HitRate: 0.72}})
 		joined := strings.Join(flattenTranscript(&m.transcriptState, 80), "\n")
 		for _, want := range []string{
-			"────", "本轮 512 tok · in 100 · cached 300 · new 20 · out 50 · reasoning 42 · ≈$0.0123",
+			"────", "本轮  512 tok · in 100 · cached 300 · new 20 · out 50 · reasoning 42", "≈$0.0123",
 		} {
 			if !strings.Contains(joined, want) {
 				t.Fatalf("receipt missing %q\n--- transcript ---\n%s", want, joined)
@@ -66,7 +66,7 @@ func TestTurnReceipt(t *testing.T) {
 			t.Fatalf("turn-1 block must keep its own tokens, got %#v", m.transcriptState.blocks[0])
 		}
 		joined := strings.Join(flattenTranscript(&m.transcriptState, 80), "\n")
-		if !strings.Contains(joined, "本轮 42 tok") || !strings.Contains(joined, "本轮 7 tok") {
+		if !strings.Contains(joined, "本轮  42 tok") || !strings.Contains(joined, "本轮  7 tok") {
 			t.Fatalf("turn-2 receipt missing:\n%s", joined)
 		}
 	})
@@ -90,7 +90,7 @@ func TestStatusBarTwoRows(t *testing.T) {
 	if strings.Contains(rows[0], "s-x") {
 		t.Fatalf("row1 must not carry session id8: %q", rows[0])
 	}
-	// 行 2：缓存命中率（本次=TurnTokens.CacheRead/(Input+Write+Read)=71.4%、
+	// 行 2：缓存命中率（本次=TurnTokens.CacheRead/(Input+Write+Read)=75.0%、
 	// 平均=SessionHit 82.0%）+ 费用 + 冷回合；回合累计/旧命中率字段退场。
 	for _, want := range []string{"缓存 本次命中 75.0%", "平均 82.0%", "费用 $1.2500", "冷回合 1"} {
 		if !strings.Contains(rows[1], want) {

@@ -66,7 +66,7 @@ type tuiModel struct {
 	events   <-chan tuiEvent // 只读消费侧
 	sink     *Sink           // 事件汇本体（与 events 同一通道；换绑时供给 Open）
 	swapper  SessionSwapper  // 会话换绑接缝（cli 实现；nil = 未接线，防御性拒绝换绑）
-	selfID   string          // 状态栏展示的 mulix 会话 id
+	selfID   string          // mulix 会话 id（换绑对账/缓存报告根用；025 起不上状态栏）
 	width    int
 	height   int
 	approval *approvalCard // 非 nil = 审批态（与渲染态互斥：composer 冻结）
@@ -130,9 +130,9 @@ type tuiModel struct {
 	// pendingAnchor 宽度重排阅读锚点（024 FR-001）：WindowSizeMsg 捕获，
 	// frame 在新宽重排后按块对位恢复一次即清空；尾随态置位即弃。
 	pendingAnchor *anchorPoint
-	// turnHeaderPending 助手头行待发（025 FR-003）：TurnStarted 置位，回合
-	// 首个内容块（工具卡开卡/答文首块）消费——思考流不消费（基线：▸ 折叠行
-	// 在 ◆ 头行之前）。
+	// turnHeaderPending 助手头行待发（025 FR-003）：TurnStarted 置位，答文
+	// 首块消费（commitAnswerBlock append 路径）——思考流与工具卡不消费
+	//（对照参考 transcript.go:180：◆ 头行只冠正文段；▸ 折叠行在 ◆ 之前）。
 	turnHeaderPending bool
 	// bannerIdx 启动横幅块下标（025 FR-001；-1 = 无——测试形态）；model 空
 	// 时首个 statusTick 快照回填。

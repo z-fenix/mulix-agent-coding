@@ -70,7 +70,7 @@ func (b bannerBlock) render(width int) []string {
 type assistantHeaderBlock struct{}
 
 func (assistantHeaderBlock) render(width int) []string {
-	return []string{activeTheme.accent("◆ mulix")}
+	return []string{"  " + activeTheme.accent("◆ mulix")}
 }
 
 // gutterLines 全体行加 2 空格槽（025 FR-003：正文/卡片/回执整体入槽——

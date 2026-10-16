@@ -207,7 +207,7 @@ func TestEventRenderMatrix(t *testing.T) {
 				event.UsageEvent{Seq: 2, Turn: 1, UncachedInputTokens: 10, WriteTokens: 20,
 					ReadTokens: 30, OutputTokens: 40, ThinkingTokens: 42, CostUSD: 0.5, HitRate: 0.5},
 			},
-			wantBlocks: []string{"────", "本轮 142 tok · in 10 · cached 30 · new 20 · out 40 · reasoning 42 · ≈$0.5000"},
+			wantBlocks: []string{"────", "本轮  142 tok · in 10 · cached 30 · new 20 · out 40 · reasoning 42 · ≈$0.5000"},
 			wantState: func(t *testing.T, m *tuiModel) {
 				if m.thinkingIdx != -1 {
 					t.Fatalf("Usage must close the thinking block, thinkingIdx = %d", m.thinkingIdx)

@@ -37,8 +37,8 @@ func (m *tuiModel) statusView() string {
 	}
 	row1 := joinStatusSides(styleBadge.Render(" "+m.statusMode()+" "), right, m.width)
 	// 行 2（025 FR-006）：缓存命中率（本次 = TurnTokens.CacheRead/(Input+Write
-	// +Read)，与 Meter.Hit 同式 meter.go:40；平均 = SessionHit）+ 费用；上下文/
-	// 压缩/余额段无数据源省略（D7）。
+	// +Read)，与 Meter.Hit 同式 cache/meter.go:145-146；平均 = SessionHit）+
+	// 费用；上下文/压缩/余额段无数据源省略（D7）。
 	tt := s.TurnTokens
 	hitDen := tt.InputTokens + tt.CacheWriteTokens + tt.CacheReadTokens
 	turnHit := 0.0
@@ -110,7 +110,7 @@ type receipt struct {
 func (b receipt) line() string {
 	u := b.usage
 	total := u.UncachedInputTokens + u.WriteTokens + u.ReadTokens + u.OutputTokens + u.ThinkingTokens
-	return fmt.Sprintf("本轮 %s tok · in %s · cached %s · new %s · out %s · reasoning %s · ≈$%.4f",
+	return fmt.Sprintf("本轮  %s tok · in %s · cached %s · new %s · out %s · reasoning %s · ≈$%.4f",
 		humanizeTok(total), humanizeTok(u.UncachedInputTokens), humanizeTok(u.ReadTokens),
 		humanizeTok(u.WriteTokens), humanizeTok(u.OutputTokens), humanizeTok(u.ThinkingTokens),
 		u.CostUSD)
