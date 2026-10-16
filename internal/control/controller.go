@@ -175,8 +175,13 @@ type Controller struct {
 	turnDones map[int64]chan struct{}  // 回合收口通道（泵唯一关闭方）
 	resolved  map[string]gateRuling    // 已裁决权限请求（引擎 tool_use_id → 裁决；重发信封直接应答，人只裁决一次）
 	inflight  map[string]chan struct{} // 裁决单飞（终评审 Important-3：并发传输同 id 只评估一次；leader close 广播收口）
-	approveMu sync.Mutex               // SetAlias+Evaluate 原子化（别名配对不被并发传输交错；P1 审批串行语义）
-	pubMu     sync.Mutex               // 发布串行化（镜像 Append 互斥；见 publish 注）
+	// governedTools 是围堵台账：tool_use_id → 工具名+回合（onAssistant 捕获；
+	// onResult 按 turn 清理，与 resolved 同纪律）。消费面：onToolResult 的
+	// 治理校验（2026-10-16 旁路修复 L2）。
+	governedTools map[string]governedTool
+	violateOnce   sync.Once  // 违规终止恰一次（同回合多结果块窗口）
+	approveMu     sync.Mutex // SetAlias+Evaluate 原子化（别名配对不被并发传输交错；P1 审批串行语义）
+	pubMu         sync.Mutex // 发布串行化（镜像 Append 互斥；见 publish 注）
 
 	permCallback *permissionCallbackServer // 权限回路跨进程桥（真实引擎 --permission-prompt-tool 传输）
 	subCallback  *subagentCallbackServer   // 子代理操作跨进程桥（M12：serve 子进程工具 → Manager）
@@ -233,9 +238,11 @@ func NewController(opts Options) (*Controller, error) {
 		turnDones: map[int64]chan struct{}{},
 		resolved:  map[string]gateRuling{},
 		inflight:  map[string]chan struct{}{},
-		pumpDone:  make(chan struct{}),
-		initSeen:  make(chan struct{}),
-		now:       time.Now,
+
+		governedTools: map[string]governedTool{},
+		pumpDone:      make(chan struct{}),
+		initSeen:      make(chan struct{}),
+		now:           time.Now,
 	}
 	mountHookConsumers(c)
 	return c, nil
@@ -1297,11 +1304,15 @@ func (c *Controller) onAssistant(ev engine.Event) {
 		case "tool_use":
 			c.publish(event.ToolUseRequestedEvent{Seq: c.nextSeq(), Turn: turn,
 				ToolUseID: b.ID, Tool: b.Name, Input: b.Input})
+			c.mu.Lock()
+			c.governedTools[b.ID] = governedTool{tool: b.Name, turn: turn}
+			c.mu.Unlock()
 		}
 	}
 }
 
-// onToolResult 拆分工具结果块。
+// onToolResult 拆分工具结果块（镜像 1:1 先行），随后做治理围堵校验
+// （2026-10-16 旁路修复 L2：运行态收到、未经裁决、非白名单 → 违规终止）。
 func (c *Controller) onToolResult(ev engine.Event) {
 	if ev.ToolResult == nil {
 		return
@@ -1311,6 +1322,77 @@ func (c *Controller) onToolResult(ev engine.Event) {
 		c.publish(event.ToolResultEvent{Seq: c.nextSeq(), Turn: turn,
 			ToolUseID: b.ToolUseID, Content: b.Content, IsError: b.IsError})
 	}
+	c.checkGovernedResults(turn, ev.ToolResult.Blocks)
+}
+
+// governedTool 是围堵台账条目。
+type governedTool struct {
+	tool string
+	turn int64
+}
+
+// governanceBuiltinPrefix 是 mulix 内置 MCP 工具前缀（白名单构造：内置工具
+// 由 mulix 注册与实现；外部 server 占用内置名被 cache reservedBuiltinName
+// 拒绝，前缀无碰撞面）。
+const governanceBuiltinPrefix = "mcp__mulix__"
+
+// governanceReadOnlyTools 是只读文件工具白名单（引擎构造即只读；其余引擎
+// 自主放行类一律违规——spec FR-205/Assumptions，运营者可后续裁定收编）。
+var governanceReadOnlyTools = map[string]bool{"Read": true, "Glob": true, "Grep": true}
+
+// checkGovernedResults 围堵校验：运行态收到、未经裁决（resolved 无）、且不
+// 属显式白名单（config allow 清单 ∨ mulix 内置 MCP ∨ 只读文件工具）的
+// tool_result → 治理违规：留痕 + 异步终止引擎（fail-closed；泵 goroutine 内
+// 同步 Close 会死锁——exit 事件需泵消费）。非运行态（Esc 取消后的孤儿）不校
+// 验（FR-207）。违规留痕先于终止（先持久化后发布红线沿用 publish）。
+func (c *Controller) checkGovernedResults(turn int64, blocks []engine.ToolResultBlock) {
+	c.mu.Lock()
+	running := c.running
+	c.mu.Unlock()
+	if !running {
+		return
+	}
+	for _, b := range blocks {
+		c.mu.Lock()
+		_, adjudicated := c.resolved[b.ToolUseID]
+		gov, tracked := c.governedTools[b.ToolUseID]
+		allow := c.opts.Config.Permissions.Allow
+		c.mu.Unlock()
+		if adjudicated || c.governanceExempt(gov.tool, tracked, allow) {
+			continue
+		}
+		tool := "unknown"
+		if tracked {
+			tool = gov.tool
+		}
+		c.publish(event.NoticeEvent{Seq: c.nextSeq(), Level: "error", IsMeta: true,
+			Content: fmt.Sprintf("[governance_violation] 工具 %s（call %s）未经审批回路即回流结果，终止会话（fail-closed）",
+				tool, b.ToolUseID)})
+		c.violateOnce.Do(func() {
+			host := c.host
+			go func() {
+				_ = host.Close(context.Background())
+			}()
+		})
+	}
+}
+
+// governanceExempt 白名单判定：mulix config allow 清单（工具名或 tool( 前缀
+// 规则）∨ mulix 内置 MCP 前缀 ∨ 只读文件工具。未跟踪（无 assistant 声明的
+// 结果）不豁免——响亮失败。
+func (c *Controller) governanceExempt(tool string, tracked bool, allow []string) bool {
+	if !tracked {
+		return false
+	}
+	if governanceReadOnlyTools[tool] || strings.HasPrefix(tool, governanceBuiltinPrefix) {
+		return true
+	}
+	for _, a := range allow {
+		if a == tool || strings.HasPrefix(a, tool+"(") {
+			return true
+		}
+	}
+	return false
 }
 
 // onResult 回合收口：Meter 记账 → §8.3 治理评估 → Usage/TurnDone 发布 →
@@ -1338,6 +1420,11 @@ func (c *Controller) onResult(ev engine.Event) {
 	for id, r := range c.resolved {
 		if r.turn <= turn {
 			delete(c.resolved, id)
+		}
+	}
+	for id, g := range c.governedTools {
+		if g.turn <= turn {
+			delete(c.governedTools, id)
 		}
 	}
 	ch := c.turnDoneChLocked(turn)

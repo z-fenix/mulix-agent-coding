@@ -97,7 +97,7 @@ func TestDecodeHappyTurnFixture(t *testing.T) {
 			}
 		}
 	}
-	if toolUse == nil || toolUse.ID != "call_87068bb5ade040bcab906bb4" || toolUse.Name != "Write" {
+	if toolUse == nil || toolUse.ID != "call_87068bb5ade040bcab906bb4" || toolUse.Name != "Read" {
 		t.Fatalf("tool_use block wrong: %+v", toolUse)
 	}
 	var input struct {
