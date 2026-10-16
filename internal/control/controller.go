@@ -1305,7 +1305,8 @@ func (c *Controller) onAssistant(ev engine.Event) {
 			c.publish(event.ToolUseRequestedEvent{Seq: c.nextSeq(), Turn: turn,
 				ToolUseID: b.ID, Tool: b.Name, Input: b.Input})
 			c.mu.Lock()
-			c.governedTools[b.ID] = governedTool{tool: b.Name, turn: turn}
+			c.governedTools[b.ID] = governedTool{tool: b.Name, turn: turn,
+				input: governanceDigest(b.Input)}
 			c.mu.Unlock()
 		}
 	}
@@ -1325,10 +1326,21 @@ func (c *Controller) onToolResult(ev engine.Event) {
 	c.checkGovernedResults(turn, ev.ToolResult.Blocks)
 }
 
-// governedTool 是围堵台账条目。
+// governedTool 是围堵台账条目（input 为调用参数截断摘要——FR-206 违规
+// 留痕的审计面：未跟踪形态下镜像里唯一能回溯「做了什么」的记录）。
 type governedTool struct {
-	tool string
-	turn int64
+	tool  string
+	turn  int64
+	input string
+}
+
+// governanceDigest 截断摘要（字节安全截断；空串原样返回）。
+func governanceDigest(b []byte) string {
+	const max = 120
+	if len(b) > max {
+		return string(b[:max]) + "…"
+	}
+	return string(b)
 }
 
 // governanceBuiltinPrefix 是 mulix 内置 MCP 工具前缀（白名单构造：内置工具
@@ -1361,13 +1373,13 @@ func (c *Controller) checkGovernedResults(turn int64, blocks []engine.ToolResult
 		if adjudicated || c.governanceExempt(gov.tool, tracked, allow) {
 			continue
 		}
-		tool := "unknown"
+		tool, digest := "unknown", governanceDigest([]byte(b.Content))
 		if tracked {
-			tool = gov.tool
+			tool, digest = gov.tool, gov.input
 		}
 		c.publish(event.NoticeEvent{Seq: c.nextSeq(), Level: "error", IsMeta: true,
-			Content: fmt.Sprintf("[governance_violation] 工具 %s（call %s）未经审批回路即回流结果，终止会话（fail-closed）",
-				tool, b.ToolUseID)})
+			Content: fmt.Sprintf("[governance_violation] 工具 %s（call %s，输入摘要 %q）未经审批回路即回流结果，终止会话（fail-closed）",
+				tool, b.ToolUseID, digest)})
 		c.violateOnce.Do(func() {
 			host := c.host
 			go func() {

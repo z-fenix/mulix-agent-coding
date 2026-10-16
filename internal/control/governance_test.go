@@ -159,6 +159,64 @@ func TestGovernanceViolationTerminatesSession(t *testing.T) {
 	}
 }
 
+// TestGovernanceViolationIncludesInputDigest pins：违规留痕含输入摘要——
+// 跟踪形态（assistant 声明过的 tool_use）取 Input 截断摘要；未跟踪形态
+// （无 assistant 捕获、运行态直回流）以结果内容前缀兜底（FR-206 审计面）。
+func TestGovernanceViolationIncludesInputDigest(t *testing.T) {
+	t.Run("tracked", func(t *testing.T) {
+		fake := engine.NewFakeHost(engine.FakeScript{Turns: [][]engine.Event{
+			toolUseTurn("tu-d1", "PowerShell", false),
+		}})
+		sink := &recordingSink{}
+		c := govController(t, fake, sink, mustDefaultConfig())
+		if err := c.NewSession(context.Background()); err != nil {
+			t.Fatalf("new session: %v", err)
+		}
+		submitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := c.Submit(submitCtx, "hi"); err != nil {
+			t.Fatalf("submit: %v", err)
+		}
+		v := violationNoticeOf(t, c)
+		if v == nil {
+			t.Fatal("no violation notice")
+		}
+		if !strings.Contains(v.Content, "echo hi") {
+			t.Fatalf("tracked violation lacks input digest: %q", v.Content)
+		}
+	})
+	t.Run("untracked", func(t *testing.T) {
+		// 无 assistant 捕获：tool_result 直抵运行态泵（relay 形态，turn 由
+		// 纯 result 之外的途径驱动——先跑一个白名单 Read 回合置 running，
+		// 第二回合内直接注入未跟踪 tool_result？——不可行：Submit 互斥。
+		// 改用 chanSource 直投：assistant(Read)→tool_result→result 收口后
+		// 无法再进运行态。此处以真实路径构造：Submit 一个「只有未跟踪
+		// tool_result」的回合——fixture 无 assistant，tool_result 运行态到达。
+		fake := engine.NewFakeHost(engine.FakeScript{Turns: [][]engine.Event{{
+			{Kind: engine.KindToolResult, SessionID: "s", UUID: "r-u1",
+				ToolResult: &engine.ToolResultMsg{Blocks: []engine.ToolResultBlock{{
+					ToolUseID: "tu-u9", Content: "rm -rf /tmp/x; done", IsError: false}}}},
+		}}})
+		sink := &recordingSink{}
+		c := govController(t, fake, sink, mustDefaultConfig())
+		if err := c.NewSession(context.Background()); err != nil {
+			t.Fatalf("new session: %v", err)
+		}
+		submitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := c.Submit(submitCtx, "hi"); err != nil {
+			t.Fatalf("submit: %v", err)
+		}
+		v := violationNoticeOf(t, c)
+		if v == nil {
+			t.Fatal("no violation notice for untracked result")
+		}
+		if !strings.Contains(v.Content, "rm -rf /tmp/x") {
+			t.Fatalf("untracked violation lacks content digest: %q", v.Content)
+		}
+	})
+}
+
 // TestGovernanceAllowListPass pins：mulix config allow 清单命中的未裁决
 // tool_result 不触发围堵（显式白名单语义；allow 迁移结果不变性）。
 func TestGovernanceAllowListPass(t *testing.T) {
