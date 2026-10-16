@@ -4,7 +4,7 @@ package tui
 //
 // 本文件改编自 DeepSeek-Reasonix（MIT License, © 2026 Reasonix Contributors,
 // https://github.com/esengine/DeepSeek-Reasonix）internal/cli/wrap_cache.go：
-// 契约逐函数对齐（clearWrapCache / syncWrappedLines / rebuildWrappedLinesFull /
+// 契约逐函数对齐（syncWrappedLines / rebuildWrappedLinesFull /
 // feedViewportContent / wrapBlockLines / flattenBlockWraps / invalidateWrapFrom）。
 // 两处适配：
 //  1. 块渲染——参考对字符串块调 wrapTranscript 换行；本仓块是语义块（block
@@ -28,14 +28,6 @@ type wrapCache struct {
 	wrapWidth      int        // 缓存行所用的内容宽度
 	wrapBlockCount int        // 前缀已完整反映的块数
 	wrapBlockLines [][]string // 逐块换行结果（前 wrapBlockCount 组与 wrappedLines 前缀一致）
-}
-
-// clearWrapCache 清空换行缓存（历史重置/会话切换用）。
-func (ts *transcriptState) clearWrapCache() {
-	ts.wrappedLines = nil
-	ts.wrapWidth = 0
-	ts.wrapBlockCount = 0
-	ts.wrapBlockLines = nil
 }
 
 // syncWrappedLines 使 wrapBlockLines/wrappedLines 与 ts.blocks 在 contentW 下

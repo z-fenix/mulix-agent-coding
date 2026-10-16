@@ -153,7 +153,7 @@ func TestStreamingParagraphCommit(t *testing.T) {
 	if got := len(m.transcriptState.blocks); got != 2 {
 		t.Fatalf("after TurnDone want answer block + done line, blocks = %d", got)
 	}
-	joined := strings.Join(m.transcriptState.lines(80), "\n")
+	joined := strings.Join(flattenTranscript(&m.transcriptState, 80), "\n")
 	// Task 19 起 go 围栏经 chroma 高亮——token 间夹 SGR，内容比对先剥样式
 	//（chroma 不改文本，见 TestFenceChromaHighlight 的 strip 钉点）。
 	if !strings.Contains(ansi.Strip(joined), "fmt.Println()") {

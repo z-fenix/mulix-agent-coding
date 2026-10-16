@@ -87,14 +87,6 @@ func (ts *transcriptState) rewriteLast(b block) {
 	ts.invalidateWrapFrom(len(ts.blocks) - 1)
 }
 
-// lines 全量行：经换行缓存同步（增量——append 只重排后缀；宽度变更/历史收缩/
-// 空缓存才全量重建）后返回展平行。返回内部缓存切片——消费方只读；viewport
-// 喂给经 feedViewportContent 克隆。
-func (ts *transcriptState) lines(width int) []string {
-	ts.syncWrappedLines(width, false)
-	return ts.wrappedLines
-}
-
 // ---- 阅读锚点（024 FR-001；对照参考 transcript.go:261 transcriptResizeAnchor
 // 的离散变体：块内位移截断不插值）----
 

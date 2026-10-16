@@ -1,8 +1,6 @@
 package tui
 
 import (
-	"strings"
-
 	"charm.land/bubbletea/v2"
 )
 
@@ -10,7 +8,7 @@ import (
 //
 // 本文件改编自 DeepSeek-Reasonix (MIT License, © 2026 Reasonix Contributors,
 // https://github.com/esengine/DeepSeek-Reasonix) internal/cli/scroll_state.go：
-// 状态机与 useLegacyViewportScrollClear 逐函数对齐，注释语义逐条对照参考。
+// 状态机逐函数对齐参考 scroll_state.go，注释语义逐条对照。
 // 两处适配：
 //  1. 接收者——参考方法挂 chatTUI（字段平铺模型本体）；本仓滚动状态收敛为
 //     tuiModel.scrollState 子结构（D4 骨架落位），方法挂 *tuiModel。
@@ -105,21 +103,4 @@ func (m *tuiModel) handleWheel(msg tea.MouseWheelMsg) {
 		m.transcriptState.vp.ScrollDown(wheelScrollRows)
 	}
 	m.syncScrollModeAfterGesture()
-}
-
-// useLegacyViewportScrollClear 把应用层重绘 workaround 限制在 Warp——该终端下
-// Bubble Tea 的滚动优化可能滞留旧行。Windows 上一律禁用：即使 Warp 自报家门
-// 也不启用，因为 Bubble Tea 在该平台本就避开不兼容优化，多余的异步 ClearScreen
-// 只会可见闪烁（对照参考 scroll_state.go:71-87；#8090 裁定随移植保留）。
-func useLegacyViewportScrollClear(goos string, environ []string) bool {
-	if goos == "windows" {
-		return false
-	}
-	for _, entry := range environ {
-		key, value, ok := strings.Cut(entry, "=")
-		if ok && key == "TERM_PROGRAM" && strings.EqualFold(strings.TrimSpace(value), "WarpTerminal") {
-			return true
-		}
-	}
-	return false
 }

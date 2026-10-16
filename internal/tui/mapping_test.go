@@ -399,7 +399,7 @@ func TestEventRenderMatrix(t *testing.T) {
 					m = update(t, m, tuiEvent{ev: e})
 				}
 			}
-			joined := strings.Join(m.transcriptState.lines(80), "\n")
+			joined := strings.Join(flattenTranscript(&m.transcriptState, 80), "\n")
 			for _, want := range tc.wantBlocks {
 				if !strings.Contains(joined, want) {
 					t.Errorf("transcript missing %q\n--- transcript ---\n%s", want, joined)
