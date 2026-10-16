@@ -139,14 +139,18 @@ a ledger file, not only in todos.
   every artifact for THIS plan: ledger, briefs, reports, review packages.
   Another plan's directory is never yours to read or write.
 - Check for this plan's ledger at `<workspace>/progress.md`. If its first
-  line names your plan file, tasks with a `Task <N>: complete` line are DONE
+  line names your plan file, tasks with a `- Task <N>: complete` line are DONE
   — do not re-dispatch them; resume at the first task without one. A task
   whose last line is a fix round is mid-loop: resume the loop at the next
   round. A ledger whose first line names a different plan file — or a stray
   ledger at the old flat path `.mulix/.runtime/<change>/sdd/progress.md` — is another
   plan's progress: leave it in place and start your own, fresh.
 - Create the ledger with its identity as the first line:
-  `# SDD ledger — plan: <plan file path>`.
+  `# SDD ledger — plan: <plan file path>`, followed by a blank line.
+  Write each event as a Markdown list item: `- Task <N>: ...`,
+  `- Ruling: ...`, or `- Final: ...`; pre-flight tables stay tables.
+  On resume, both list items and legacy plain completion lines count.
+  Keep existing ledger history unchanged.
 - The ledger is your recovery map: the commits it names exist in git even
   when your context no longer remembers creating them. After compaction,
   trust the ledger and `git log` over your own recollection.
@@ -253,7 +257,8 @@ and fix-round diffs need it.
   uniquely named file and prints the path. Compose the dispatch so the
   brief stays the single source of
   requirements. Your dispatch should contain: (1) one line on where this
-  task fits in the project; (2) the brief path, introduced as "read this
+  task fits in the project; the approved PLAN_FILE path and task number
+  for status-only edits under mulix-build; (2) the brief path, introduced as "read this
   first — it is your requirements, with the exact values to use verbatim";
   (3) interfaces and decisions from earlier tasks that the brief cannot
   know; (4) your resolution of any ambiguity you noticed in the brief;
@@ -359,7 +364,7 @@ finding, or a ⚠️ item you confirmed as a real gap.
 Before the loop starts, two routes leave it immediately:
 
 - Record Minor findings in the progress ledger as you go
-  (`Task <N>: minor (deferred): <one-liner>`), and point the final
+  (`- Task <N>: minor (deferred): <one-liner>`), and point the final
   whole-branch review at that list so it can triage which must be fixed
   before merge. A roll-up nobody reads is a silent discard. Minor findings
   never enter the loop.
@@ -403,7 +408,7 @@ findings list. Out-of-scope observations go to the ledger as deferred
 minors — they never extend the loop.
 
 **After each round,** append to the ledger:
-`Task <N>: fix round <R>/5 (<X> addressed, <Y> open — <finding one-liners>; commits <a7>..<b7>)`
+`- Task <N>: fix round <R>/5 (<X> addressed, <Y> open — <finding one-liners>; commits <a7>..<b7>)`
 
 Never fix findings yourself in the controller session — your context stays
 clean for coordination, and controller fixes skip review.
@@ -413,13 +418,13 @@ dispatching. Adjudicate each open finding yourself — you hold the plan and
 the cross-task context the reviewer lacks:
 
 - **The reviewer is wrong, or the point is contestable:** park it —
-  `Task <N>: parked — <finding> — Ruling: <why the code stands>`. The final
+  `- Task <N>: parked — <finding> — Ruling: <why the code stands>`. The final
   review sees both sides.
 - **Real, but nothing downstream builds on it:** park it the same way, with
   a ruling that says it's real and deferred.
 - **Real and load-bearing** — a later task builds on it, or it reveals a
   plan defect: rule on the smallest change that unblocks the dependent work,
-  ledger it as `Task <N>: Ruling: <finding> — <what you decided and why>`,
+  ledger it as `- Task <N>: Ruling: <finding> — <what you decided and why>`,
   and carry it into the next task's dispatch. Parking a structural failure
   silently lets every dependent task build on it. Stop only when the defect
   leaves every path forward a guess.
@@ -431,11 +436,17 @@ a silent discard is forbidden.
 ### 5. Complete the task
 
 When the review comes back clean — or every open finding is parked with a
-ruling at the cap — append the completion line to the ledger in the same
-message as your other bookkeeping:
+ruling at the cap — refresh this task's brief from the approved plan first:
+`bash scripts/task-brief PLAN_FILE N` (from this skill's directory).
+The plan owns step status; the brief is a derived snapshot. Under mulix,
+the implementer records only verified steps in tasks.md as mulix-build
+requires. Preserve skipped/unperformed steps and fenced examples; a clean
+review does not prove every step ran. If extraction fails, resolve it
+before recording completion. After refresh succeeds, append the completion
+list item in the same message as your other bookkeeping:
 
-- `Task <N>: complete (commits <base7>..<head7>, review clean)`
-- `Task <N>: complete (commits <base7>..<head7>, <K> parked)` after a
+- `- Task <N>: complete (commits <base7>..<head7>, review clean)`
+- `- Task <N>: complete (commits <base7>..<head7>, <K> parked)` after a
   tripped breaker
 
 Then mark the todo complete and move on. Never move to the next task while
@@ -529,7 +540,8 @@ Implementer: [Later]
 Task reviewer: Spec ✅ - all requirements met, nothing extra.
   Strengths: Good test coverage, clean. Issues: None. Task quality: Approved.
 
-[Ledger: Task 1: complete (commits a1b2c3d..d4e5f6a, review clean)]
+[Refresh task-1-brief from tasks.md via bash scripts/task-brief; confirm success]
+[Ledger: - Task 1: complete (commits a1b2c3d..d4e5f6a, review clean)]
 
 Task 2: Recovery modes
 
@@ -554,8 +566,9 @@ Re-reviewer: Missing progress reporting — ADDRESSED (src/recovery.js:41).
   Magic number — ADDRESSED (src/recovery.js:7). New breakage: none.
   Verdict: all findings addressed.
 
-[Ledger: Task 2: fix round 1/5 (2 addressed, 0 open; commits d4e5f6a..b7c8d9e)]
-[Ledger: Task 2: complete (commits d4e5f6a..b7c8d9e, review clean)]
+[Ledger: - Task 2: fix round 1/5 (2 addressed, 0 open; commits d4e5f6a..b7c8d9e)]
+[Refresh task-2-brief from tasks.md via bash scripts/task-brief; confirm success]
+[Ledger: - Task 2: complete (commits d4e5f6a..b7c8d9e, review clean)]
 
 ...
 

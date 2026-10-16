@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Close one task of an inline plan execution in a single call: run the task's
 # test command, keep its full output in the workspace, print the tail, and —
-# only if the command succeeded — append the completion line to the ledger.
+# only if the command and brief refresh succeeded — append the completion
+# list item to the ledger. Step status comes from the approved plan.
 # A failing command records nothing: the task is not complete.
 #
 # Usage: task-done PLAN_FILE TASK_NUMBER BASE -- TEST_COMMAND [ARGS...]
 #   BASE is the SHA task-start printed; the completion line records BASE..HEAD.
-# Exit: the test command's exit status.
+# Exit: the test command exit status, or nonzero if brief refresh fails.
 set -euo pipefail
 
 if [ $# -lt 5 ] || [ "$4" != "--" ]; then
@@ -46,7 +47,9 @@ if [ "$rc" -ne 0 ]; then
 fi
 
 last=$(grep -v '^[[:space:]]*$' "$log" | tail -n 1) || last="(no output)"
-[ -f "$ledger" ] || printf '# SDD ledger — plan: %s\n' "$plan" > "$ledger"
-line="Task $n: complete (commits $(git rev-parse --short=7 "$base")..$(git rev-parse --short=7 HEAD), tests: $cmd → $last)"
+# Refresh only this task from the approved plan before recording completion.
+"${BASH:-bash}" "$sdd/task-brief" "$plan" "$n" >/dev/null
+[ -f "$ledger" ] || printf '# SDD ledger — plan: %s\n\n' "$plan" > "$ledger"
+line="- Task $n: complete (commits $(git rev-parse --short=7 "$base")..$(git rev-parse --short=7 HEAD), tests: $cmd → $last)"
 printf '%s\n' "$line" >> "$ledger"
 echo "ledger: $line"
