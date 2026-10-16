@@ -444,6 +444,19 @@ func (m *tuiModel) handleEvent(ev any) {
 	case event.EngineExitedEvent:
 		m.closeThinking()
 		m.sealAnswer()
+		// 024 FR-002：清扫运行中工具卡为中断终态——引擎已死，卡片不得永久
+		// 渲染「· 运行中」。幂等：无运行中卡则零改写。
+		lowest := -1
+		for i, b := range m.transcriptState.blocks {
+			if card, ok := b.(*toolCard); ok && card.state == toolRunning {
+				card.state = toolFailed
+				card.failedDetail = "引擎已退出，工具未返回"
+				lowest = i
+			}
+		}
+		if lowest >= 0 {
+			m.transcriptState.invalidateWrapFrom(lowest)
+		}
 		m.appendLine(failLine("✗ 引擎已退出（" + e.Reason + "）"))
 	case event.DelegationStartedEvent:
 		// 委派卡开卡（Task 11 FR-016）：非文本转写事件——块生命周期纪律同工具卡

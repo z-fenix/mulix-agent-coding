@@ -368,6 +368,23 @@ func TestEventRenderMatrix(t *testing.T) {
 				}
 			},
 		},
+		{
+			// 16.（024 FR-002）EngineExited 清扫运行中工具卡为中断终态：
+			// 不再永久渲染「· 运行中」；已终态卡不受影响（幂等）。
+			name: "EngineExited 清扫运行中工具卡",
+			events: []any{
+				event.ToolUseRequestedEvent{Seq: 1, Turn: 1, ToolUseID: "toolu-9", Tool: "Bash", Input: json.RawMessage(`{"command":"sleep 100"}`)},
+				event.EngineExitedEvent{Seq: 2, Code: 1, Reason: "crashed"},
+			},
+			wantBlocks: []string{"⊘", "引擎已退出，工具未返回"},
+			wantAbsent: []string{"· 运行中"},
+			wantState: func(t *testing.T, m *tuiModel) {
+				card := m.transcriptState.blocks[0].(*toolCard)
+				if card.state != toolFailed {
+					t.Fatalf("engine-exited sweep must close running card, state = %d", card.state)
+				}
+			},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
