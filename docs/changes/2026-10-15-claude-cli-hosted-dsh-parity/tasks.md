@@ -229,7 +229,7 @@ Expected: 退出 0，末行精确包含 `PASS: 16 capabilities; 31 FR; 18 logica
 
 人工核对持久 roadmap 能脱离运行态设计稿阅读、31 FR 均有归属或跨项约束、证据文档没有把源码核对写成实测、没有隐含子 change 批准。检查 `git diff --check`，并核对只暂存下述本 change 文件。独立终审、verify 报告及 archive 仍由阶段技能另行执行，不在此处预先打勾或批准。
 
-- [ ] **Step 6: 提交本 change 文件并落任务证据**
+- [X] **Step 6: 提交本 change 文件并落任务证据**
 
 只有本任务 RED/GREEN 与完整回归均达到真实预期后，才执行 task-done/ledger 记录与 commit；按 build 技能要求在同一收口调用完成，记录实际提交 SHA。不得跳过 hooks、绕过签名或强行添加运行态。
 
