@@ -119,6 +119,9 @@ type tuiModel struct {
 	// testMode：单测形态——Update 不回挂阻塞型重挂命令（waitForEvent/Tick，
 	// 单测直接以消息驱动）；submitCmd 仍正常返回（由测试辅助同步执行）。
 	testMode bool
+	// pendingAnchor 宽度重排阅读锚点（024 FR-001）：WindowSizeMsg 捕获，
+	// frame 在新宽重排后按块对位恢复一次即清空；尾随态置位即弃。
+	pendingAnchor *anchorPoint
 }
 
 // styleStatus/styleCard 已随主题系统（Task 18）迁入 theme.go——包级样式由
@@ -198,9 +201,14 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		if msg.Width != m.width {
-			// 设计 §7.4：宽度变更 → 全量重排，绝对列坐标失效——选区重置
-			//（阅读锚点仍延后，见任务报告 deferred 路由）。
+			// 设计 §7.4：宽度变更 → 全量重排，绝对列坐标失效——选区重置；
+			// 非尾随时记录阅读锚点（024 FR-001），frame 在新宽重排后按块对位
+			// 恢复。尾随态无需锚点（钉底语义接管）。
 			m.transcriptState.sel = selection{}
+			if !m.shouldFollowTail() {
+				a := m.transcriptState.anchorForOffset(m.transcriptState.vp.YOffset())
+				m.pendingAnchor = &a
+			}
 		}
 		m.width, m.height = msg.Width, msg.Height
 		m.composerState.ta.SetWidth(msg.Width) // 重排触发编辑器高度重算

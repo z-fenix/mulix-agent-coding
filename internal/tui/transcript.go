@@ -95,6 +95,46 @@ func (ts *transcriptState) lines(width int) []string {
 	return ts.wrappedLines
 }
 
+// ---- 阅读锚点（024 FR-001；对照参考 transcript.go:261 transcriptResizeAnchor
+// 的离散变体：块内位移截断不插值）----
+
+// anchorPoint 阅读锚点：视口顶行所属块 + 块内行偏移。
+type anchorPoint struct{ blockIdx, lineInBlock int }
+
+// anchorForOffset 由绝对行 yoff 反解锚点（按当前缓存 wrapBlockLines 前缀和；
+// 越界钳到末行）。
+func (ts *transcriptState) anchorForOffset(yoff int) anchorPoint {
+	total := len(ts.wrappedLines)
+	if total == 0 {
+		return anchorPoint{}
+	}
+	yoff = min(yoff, total-1)
+	acc := 0
+	for i, lines := range ts.wrapBlockLines {
+		if yoff < acc+len(lines) {
+			return anchorPoint{blockIdx: i, lineInBlock: yoff - acc}
+		}
+		acc += len(lines)
+	}
+	return anchorPoint{blockIdx: len(ts.wrapBlockLines) - 1}
+}
+
+// offsetForAnchor 按新宽缓存把锚点换算为绝对行：块前缀行数累加 + 块内行
+// （越界截断到该块末行；整体截断到末行）。
+func (ts *transcriptState) offsetForAnchor(a anchorPoint) int {
+	if len(ts.wrapBlockLines) == 0 {
+		return 0
+	}
+	a.blockIdx = min(max(a.blockIdx, 0), len(ts.wrapBlockLines)-1)
+	off := 0
+	for i := range a.blockIdx {
+		off += len(ts.wrapBlockLines[i])
+	}
+	lines := ts.wrapBlockLines[a.blockIdx]
+	a.lineInBlock = min(max(a.lineInBlock, 0), len(lines)-1)
+	return min(off+a.lineInBlock, len(ts.wrappedLines)-1)
+}
+
 // syncViewport 按宽高同步转写视口：缓存 sync（增量）→ 行列表有变才克隆喂给。
 // 不再无条件置底——钉底决策归模型层尾随状态机（023 D5：finalize/frame 按
 // shouldFollowTail 钉底；上翻锁定下 offset 不得被拉回，见 scrollstate.go）。
