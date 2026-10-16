@@ -29,18 +29,26 @@ import (
 // 样式随主题 dim 槽派生，refreshThemeStyles 重铸，T18）。
 func (m *tuiModel) statusView() string {
 	s := m.statusState.snapshot
-	right := shortID(m.selfID)
+	// 行 1（025 FR-006）：模式徽章 pill（accent 反白）居左 +「模型 <model>」
+	// 右对齐；会话 id8 退场（对照基线行 1 无会话标识）。
+	right := ""
 	if s.Model != "" {
-		right = s.Model + " · " + right
+		right = "模型 " + s.Model
 	}
-	row1 := joinStatusSides(m.statusMode(), right, m.width)
+	row1 := joinStatusSides(styleBadge.Render(" "+m.statusMode()+" "), right, m.width)
+	// 行 2（025 FR-006）：缓存命中率（本次 = TurnTokens.CacheRead/(Input+Write
+	// +Read)，与 Meter.Hit 同式 meter.go:40；平均 = SessionHit）+ 费用；上下文/
+	// 压缩/余额段无数据源省略（D7）。
+	tt := s.TurnTokens
+	hitDen := tt.InputTokens + tt.CacheWriteTokens + tt.CacheReadTokens
+	turnHit := 0.0
+	if hitDen > 0 {
+		turnHit = float64(tt.CacheReadTokens) / float64(hitDen) * 100
+	}
 	groups := []string{
-		fmt.Sprintf("命中率 %.1f%%", s.MeterReport.SessionHit*100),
-		// 回合累计：回合号 + 本回合 tokens（口径同迁移前状态栏——ThinkingTokens
-		// 为 output 细目，回试行单独呈现，此处不重计）。
-		fmt.Sprintf("回合 t%d %d tok", s.Turn, s.TurnTokens.InputTokens+s.TurnTokens.CacheWriteTokens+
-			s.TurnTokens.CacheReadTokens+s.TurnTokens.OutputTokens),
-		fmt.Sprintf("成本 $%.4f", s.MeterReport.Cost),
+		fmt.Sprintf("缓存 本次命中 %.1f%%", turnHit),
+		fmt.Sprintf("平均 %.1f%%", s.MeterReport.SessionHit*100),
+		fmt.Sprintf("费用 $%.4f", s.MeterReport.Cost),
 	}
 	if s.MeterReport.ColdTurns > 0 {
 		groups = append(groups, fmt.Sprintf("❄冷回合 %d", s.MeterReport.ColdTurns))

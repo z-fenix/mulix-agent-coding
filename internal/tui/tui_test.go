@@ -225,7 +225,8 @@ func TestSlashCache(t *testing.T) {
 	m = update(t, m, typeStr(m, "/cache"))
 	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	view := m.View().Content
-	if !strings.Contains(view, id[:8]) || !strings.Contains(view, "回合") {
+	// 025 FR-006：会话 id8 退出状态栏——/cache 报告以回合/命中率字段断言。
+	if !strings.Contains(view, "回合") || !strings.Contains(view, "命中率") {
 		t.Fatalf("view missing cache report:\n%s", view)
 	}
 }

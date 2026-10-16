@@ -82,12 +82,17 @@ func TestStatusBarTwoRows(t *testing.T) {
 	if len(rows) != 2 {
 		t.Fatalf("status bar must be exactly two rows, got %d:\n%s", len(rows), m.statusView())
 	}
-	// 行 1：空闲（左）起头，模型 · 会话 id8（右）收尾——右对齐即右组贴行尾。
-	if !strings.HasPrefix(rows[0], "空闲") || !strings.HasSuffix(rows[0], "fake-model · s-x") {
-		t.Fatalf("row1 = %q, want 空闲(左) + fake-model · s-x(右对齐)", rows[0])
+	// 行 1：模式徽章（accent 反白 pill——025 FR-006）+「模型 <model>」右对齐；
+	// 会话 id8 不再上状态栏。
+	if !strings.Contains(rows[0], "空闲") || !strings.Contains(rows[0], "模型 fake-model") {
+		t.Fatalf("row1 = %q, want 徽章(空闲) + 模型 fake-model", rows[0])
 	}
-	// 行 2：数据带字段（命中率来自 Snapshot；回合累计 = 回合号+本回合 tok）。
-	for _, want := range []string{"命中率 82.0%", "回合 t3 420 tok", "成本 $1.25", "冷回合 1"} {
+	if strings.Contains(rows[0], "s-x") {
+		t.Fatalf("row1 must not carry session id8: %q", rows[0])
+	}
+	// 行 2：缓存命中率（本次=TurnTokens.CacheRead/(Input+Write+Read)=71.4%、
+	// 平均=SessionHit 82.0%）+ 费用 + 冷回合；回合累计/旧命中率字段退场。
+	for _, want := range []string{"缓存 本次命中 75.0%", "平均 82.0%", "费用 $1.2500", "冷回合 1"} {
 		if !strings.Contains(rows[1], want) {
 			t.Fatalf("row2 missing %q:\n%s", want, rows[1])
 		}

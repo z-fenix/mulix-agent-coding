@@ -297,6 +297,7 @@ var (
 	activeTheme = defaultActiveTheme()
 	styleStatus = lipgloss.NewStyle()                                                // 状态栏（dim 槽着色，refreshThemeStyles 重铸）
 	styleCard   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1) // 模态卡（accent 槽边框）
+	styleBadge  = lipgloss.NewStyle()                                                // 模式徽章 pill（accent 反白，025 FR-006）
 )
 
 // applyTheme 换肤：activeTheme 换本体 + lipgloss 样式重铸（对照参考
@@ -317,6 +318,15 @@ func refreshThemeStyles() {
 	styleCard = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
 	if string(activeTheme.accentColor) != "" {
 		styleCard = styleCard.BorderForeground(lipgloss.Color(string(activeTheme.accentColor)))
+	}
+	// 模式徽章 pill（025 FR-006，对照参考 mode tag pill）：accent 反白——
+	// accent 作底、bg 槽作前景（暗底主题下 accent 上深字，观感对照基线）。
+	styleBadge = lipgloss.NewStyle()
+	if string(activeTheme.accentColor) != "" {
+		styleBadge = styleBadge.Background(lipgloss.Color(string(activeTheme.accentColor)))
+		if string(activeTheme.bgColor) != "" {
+			styleBadge = styleBadge.Foreground(lipgloss.Color(string(activeTheme.bgColor)))
+		}
 	}
 }
 
