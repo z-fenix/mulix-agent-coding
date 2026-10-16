@@ -627,6 +627,9 @@ func (h *ClaudeHost) cleanupTemp() {
 	}
 }
 
+// createTempFile 是临时文件物化 seam（测试注入失败用；生产 = os.CreateTemp）。
+var createTempFile = os.CreateTemp
+
 // buildArgs 构造 §7.2 参数集（顺序固定——字节稳定 Boot 面的可预测投影）。
 // MCPConfigJSON 与 SettingsJSON 各物化为临时文件（Close/失败路径清理）。
 // 返回 (args, mcpTempPath, settingsTempPath, err)。
@@ -640,7 +643,7 @@ func (h *ClaudeHost) buildArgs(cfg BootConfig) ([]string, string, string, error)
 	}
 	settingsTemp := ""
 	if cfg.SettingsJSON != "" {
-		f, err := os.CreateTemp("", "mulix-settings-*.json")
+		f, err := createTempFile("", "mulix-settings-*.json")
 		if err != nil {
 			return nil, "", "", fmt.Errorf("engine: materialize settings: %w", err)
 		}
@@ -661,17 +664,23 @@ func (h *ClaudeHost) buildArgs(cfg BootConfig) ([]string, string, string, error)
 	}
 	mcpTemp := ""
 	if cfg.MCPConfigJSON != "" {
-		f, err := os.CreateTemp("", "mulix-mcp-*.json")
+		f, err := createTempFile("", "mulix-mcp-*.json")
 		if err != nil {
+			_ = os.Remove(settingsTemp) // 失败路径零残留（本调用已物化面）
+			settingsTemp = ""
 			return nil, "", "", fmt.Errorf("engine: materialize mcp-config: %w", err)
 		}
 		if _, err := f.WriteString(cfg.MCPConfigJSON); err != nil {
 			f.Close()
 			os.Remove(f.Name())
+			_ = os.Remove(settingsTemp) // 失败路径零残留（本调用已物化面）
+			settingsTemp = ""
 			return nil, "", "", fmt.Errorf("engine: write mcp-config: %w", err)
 		}
 		if err := f.Close(); err != nil {
 			os.Remove(f.Name())
+			_ = os.Remove(settingsTemp) // 失败路径零残留（本调用已物化面）
+			settingsTemp = ""
 			return nil, "", "", fmt.Errorf("engine: close mcp-config: %w", err)
 		}
 		mcpTemp = f.Name()

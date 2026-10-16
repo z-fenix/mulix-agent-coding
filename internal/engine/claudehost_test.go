@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -589,5 +590,40 @@ func TestSettingsTempCleanedOnClose(t *testing.T) {
 	h.cleanupTemp()
 	if _, err := os.Stat(settingsTemp); !os.IsNotExist(err) {
 		t.Fatalf("settings temp not cleaned: %v", err)
+	}
+}
+
+// TestBuildArgsCleansSettingsTempOnMcpFailure pins：mcp 段物化失败时，
+// 本调用已落盘的 settings 临时文件必须被清理（FR-301 失败路径零残留）。
+func TestBuildArgsCleansSettingsTempOnMcpFailure(t *testing.T) {
+	h := NewClaudeHost(ClaudeHostOptions{LockPath: testLockPath(t)})
+	cfg := BootConfig{
+		PermissionMode: "default",
+		SettingSources: []string{"user"},
+		SettingsJSON:   `{"permissions":{"ask":["Bash"]}}`,
+		MCPConfigJSON:  `{"mcpServers":{}}`,
+	}
+	// seam：第一次调用（settings 物化）成功；第二次（mcp 物化）失败。
+	var settingsPath string
+	calls := 0
+	restore := createTempFile
+	createTempFile = func(dir, pattern string) (*os.File, error) {
+		calls++
+		if calls == 1 {
+			f, err := os.CreateTemp(dir, pattern)
+			if err == nil {
+				settingsPath = f.Name()
+			}
+			return f, err
+		}
+		return nil, errors.New("inject: mcp create failure")
+	}
+	t.Cleanup(func() { createTempFile = restore })
+	_, _, _, err := h.buildArgs(cfg)
+	if err == nil {
+		t.Fatal("mcp failure must surface as error")
+	}
+	if _, statErr := os.Stat(settingsPath); !os.IsNotExist(statErr) {
+		t.Fatalf("settings temp leaked on mcp failure: %v", statErr)
 	}
 }
