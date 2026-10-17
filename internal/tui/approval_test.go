@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"mulix/internal/event"
 )
@@ -211,5 +212,48 @@ func TestApprovalInputSummary(t *testing.T) {
 	}
 	if !strings.HasSuffix(got, "…") {
 		t.Fatalf("truncated summary must end with ellipsis: %q", got)
+	}
+}
+
+// ---- 授权卡换装（2026-10-17-dsh-tui-visual-redesign Task 7；设计 §6 授权卡）----
+
+// TestApprovalCardDress 钉：accent 边框（styleCard 既有——不变量钉）+ surface1
+// 卡底（48;5;235）+ 键帽 styleKeycap（surface3 底 48;5;237 + fgSecondary 前
+// 38;5;252）；键位行文本剥 SGR、掐边框/内衬后与现值逐字节相等——治理语义与
+// 文案零改动（仅样式；本断言为不变量钉，换装前后都必须绿）。
+func TestApprovalCardDress(t *testing.T) {
+	resetTheme(t)
+	m, _, _ := newTestModel(t)
+	m = update(t, m, tuiEvent{ev: event.ApprovalRequestEvent{
+		Seq: 1, ToolUseID: "toolu-1", Tool: "Write",
+		Input: json.RawMessage(`{"path":"a.go"}`),
+	}})
+	card := m.bottomView()
+	if !strings.Contains(card, "\x1b[48;5;235m") { // surface1 卡底
+		t.Fatalf("approval card must take the surface1 slot:\n%s", card)
+	}
+	if !strings.Contains(card, "\x1b[38;5;173m") { // accent 边框（既有机制）
+		t.Fatalf("approval card must keep the accent border:\n%s", card)
+	}
+	if !strings.Contains(card, "48;5;237") { // 键帽 surface3 底（lipgloss 合并序 fg;bg——无 ESC 前缀钉，TestStyleKeycap 同法）
+		t.Fatalf("approval keycaps must take the surface3 slot:\n%s", card)
+	}
+	if !strings.Contains(card, "38;5;252") { // 键帽 fgSecondary 前（合并序同上）
+		t.Fatalf("approval keycaps must take the fgSecondary slot:\n%s", card)
+	}
+	// 键位行文本逐字节不变（仅样式换装——键位行含两组双空格分隔）。
+	const keymap = "[1/y/Enter] 本次允许  [2/a] 本会话允许  [n/Esc] 拒绝"
+	found := false
+	for _, line := range strings.Split(card, "\n") {
+		stripped := strings.Trim(ansi.Strip(line), "│ ")
+		if strings.Contains(stripped, "[1/y/Enter]") {
+			found = true
+			if stripped != keymap {
+				t.Fatalf("keymap line drifted:\n got %q\nwant %q", stripped, keymap)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("keymap line missing:\n%s", card)
 	}
 }

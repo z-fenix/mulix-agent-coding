@@ -25,17 +25,19 @@ import (
 //     其基名即会话 id（sessionx 镜像 <root>/<id>）——与行 1 右侧 id8 重复，
 //     无独立工作区字段，一并省略。
 
-// statusView 双行状态栏（bottomView 尾部消费；styleStatus 由调用方施加——
-// 样式随主题 dim 槽派生，refreshThemeStyles 重铸，T18）。
+// statusView 双行状态栏（bottomView 尾部消费；行内槽色渲染期自持——styleStatus
+// 外层 dim 仍由调用方施加作兜底，refreshThemeStyles 重铸，T18）。
 func (m *tuiModel) statusView() string {
 	s := m.statusState.snapshot
-	// 行 1（025 FR-006）：模式徽章 pill（accent 反白）居左 +「模型 <model>」
-	// 右对齐；会话 id8 退场（对照基线行 1 无会话标识）。
+	// 行 1（025 FR-006 + 2026-10-17 换装设计 §6）：模式徽章 pill 居左（accent
+	// 底 + bg 槽 fg——styleBadge 既有机制；引擎就绪中/异常 amber/red 语义底，
+	// 见 statusBadge）+「模型 <model>」右对齐（fg-secondary）；会话 id8 退场
+	//（对照基线行 1 无会话标识）。
 	right := ""
 	if s.Model != "" {
-		right = "模型 " + s.Model
+		right = sgrWrap(sgrFg(activeTheme.fgSecondaryColor), "模型 "+s.Model)
 	}
-	row1 := joinStatusSides(styleBadge.Render(" "+m.statusMode()+" "), right, m.width)
+	row1 := joinStatusSides(m.statusBadge(m.statusMode()), right, m.width)
 	// 行 2（025 FR-006）：缓存命中率（本次 = TurnTokens.CacheRead/(Input+Write
 	// +Read)，与 Meter.Hit 同式 cache/meter.go:145-146；平均 = SessionHit）+
 	// 费用；上下文/压缩/余额段无数据源省略（D7）。
@@ -53,14 +55,42 @@ func (m *tuiModel) statusView() string {
 	if s.MeterReport.ColdTurns > 0 {
 		groups = append(groups, fmt.Sprintf("❄冷回合 %d", s.MeterReport.ColdTurns))
 	}
-	return row1 + "\n" + strings.Join(groups, " · ")
+	// 行 2 数据带 caption 色（设计令牌表 caption/dim 同槽——dim；显式施色使
+	// 渲染点自持，不依赖调用方 styleStatus；空槽原样返回）。
+	return row1 + "\n" + sgrWrap(sgrFg(activeTheme.dimColor), strings.Join(groups, " · "))
+}
+
+// statusBadge 行 1 徽章渲染：交互态走 styleBadge（accent 底 + bg 槽 fg——
+// 025 FR-006 既有机制，逐字节不变）；引擎就绪中 = amber（yellow 槽）、引擎
+// 异常 = red（red 槽）——FR-003 状态语义色经 dsh 状态令牌不弱化（设计 §6
+// 状态栏），pill 形态（两端空格）与文本不变；语义槽空（无色层）退既有机制。
+func (m *tuiModel) statusBadge(label string) string {
+	var slot themeColor
+	switch m.statusState.snapshot.Ready {
+	case "FAILED":
+		slot = activeTheme.redColor
+	case "NOT_READY":
+		slot = activeTheme.yellowColor
+	default:
+		return styleBadge.Render(" " + label + " ")
+	}
+	bg := sgrBg(slot)
+	if bg == "" {
+		return styleBadge.Render(" " + label + " ")
+	}
+	params := bg
+	if fg := sgrFg(activeTheme.bgColor); fg != "" {
+		params += ";" + fg
+	}
+	return sgrWrap(params, " "+label+" ")
 }
 
 // statusMode 行 1 左侧交互态：治理独占态优先（与 handleKey 的独占层级一致）
 // → 换绑/运行 → 空闲。
 func (m *tuiModel) statusMode() string {
-	// 引擎就绪态徽章（027 FR-003）：FAILED 红色 > NOT_READY「引擎就绪中」dim
-	// > 交互态。READY 落入下方既有交互态分支。
+	// 引擎就绪态徽章（027 FR-003）：FAILED 红色 > NOT_READY「引擎就绪中」
+	// amber > 交互态（语义底色见 statusBadge——2026-10-17 换装设计 §6；READY
+	// 落入下方既有交互态分支）。
 	switch m.statusState.snapshot.Ready {
 	case "FAILED":
 		return "引擎异常"

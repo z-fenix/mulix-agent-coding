@@ -35,21 +35,25 @@ func (m *tuiModel) bottomView() string {
 	var b strings.Builder
 	switch {
 	case m.approval != nil:
-		// 卡片文本（键位 + 参数摘要）见 approval.go approvalCardView（023 D11）。
-		b.WriteString(styleCard.Render(m.approvalCardView()))
+		// 卡片文本（键位 + 参数摘要）见 approval.go approvalCardView（023 D11）；
+		// surface1 卡底整块铺面（设计 §6 授权卡——accent 边框 + surface1 底 +
+		// 键帽，Task 7）。
+		b.WriteString(paintSurface(styleCard.Render(m.approvalCardView()), activeTheme.surface1Color))
 		b.WriteString("\n")
 	case m.agentsOpen:
 		b.WriteString(styleCard.Render(m.agentsPanelView()))
 		b.WriteString("\n")
 	case m.picker != nil:
-		b.WriteString(styleCard.Render(m.pickerView()))
+		// resume 选择器 surface1 卡底（设计 §6——与授权卡同法；选中行 accent
+		// 在 pickerView 内）。
+		b.WriteString(paintSurface(styleCard.Render(m.pickerView()), activeTheme.surface1Color))
 		b.WriteString("\n")
 	default:
 		if menu := m.completeMenuView(); menu != "" {
 			b.WriteString(menu)
 			b.WriteString("\n")
 		}
-		b.WriteString(m.composerState.ta.View())
+		b.WriteString(m.composerView())
 		b.WriteString("\n")
 	}
 	b.WriteString(styleStatus.Render(m.statusView()))
@@ -116,6 +120,28 @@ func paintBG(rendered string, width int) string {
 			p = sgrResetRe.ReplaceAllString(p, "$0"+seq)
 		}
 		lines[i] = styleFrame.Width(width).Render(p)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// paintSurface 面层级铺底（设计 §4 表面槽消费——授权卡/resume 选择器 surface1
+// 卡底含边框、补全菜单 surface1 浮层底；Task 7）：整行铺 slot 槽底；行内整段
+// 重置型 SGR 的重置点即重铺（与 paintBG/fenceBG 同锚点同法——合成序 重置 →
+// 帧底（帧出口 paintBG 插序在前）→ 面底重铺在后，后写生效，与
+// TestFenceBGSurvivesFramePaint 钉的三元序同构）；行尾恒补 reset——重铺不悬置
+// 到行尾 padding（pad 归帧底）。空槽（无色层）原样返回，不铺底。
+func paintSurface(s string, slot themeColor) string {
+	bg := sgrBg(slot)
+	if bg == "" {
+		return s
+	}
+	seq := "\x1b[" + bg + "m"
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		if strings.Contains(line, "\x1b[") {
+			line = sgrResetRe.ReplaceAllString(line, "$0"+seq)
+		}
+		lines[i] = seq + line + "\x1b[0m"
 	}
 	return strings.Join(lines, "\n")
 }

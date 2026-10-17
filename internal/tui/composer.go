@@ -7,6 +7,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 const (
@@ -26,9 +27,11 @@ const (
 // （↑ 旧 ↓ 新、保草稿）对照参考 chat_tui.go:757-813。
 
 const (
-	// composerPromptWidth 是 "❯ " 的格宽——续行收到两空格对齐，文本与真实
-	// 光标保持同列（对照参考：箭头只在首行，续行不重复）。
-	composerPromptWidth = 2
+	// composerPromptWidth 是提示符区格宽（" ❯ " = 1 格内衬 + ❯ + 分隔空格——
+	// 设计 §6 编辑器「surface1 底色块（1 格内衬）」：内衬格随 surface1 底铺
+	// 满，续行收到三空格对齐，文本与真实光标保持同列（对照参考：箭头只在
+	// 首行，续行不重复）。
+	composerPromptWidth = 3
 	// composerMaxRows 是编辑器动态高度上限（超出内滚，滚轮嵌套见
 	// handleWheel）。
 	composerMaxRows = 8
@@ -89,7 +92,10 @@ func newComposer() composerState {
 		if info.LineNumber != 0 {
 			return ""
 		}
-		return "❯ "
+		// ❯ accent + 1 格内衬（设计 §6 编辑器/符号表——symPrompt 走 accent 槽，
+		// 首格内衬空格随 surface1 底；渲染期现读 activeTheme，/theme 换肤即时
+		// 生效）。
+		return " " + activeTheme.accent(symPrompt+" ")
 	})
 	ta.CharLimit = composerCharLimit
 	// 提示符与真实光标已表明输入起点——空闲 composer 保持安静（对照参考）。
@@ -108,7 +114,41 @@ func newComposer() composerState {
 	ta.KeyMap.DeleteWordBackward = key.NewBinding(key.WithKeys("alt+backspace", "ctrl+w", "ctrl+backspace"))
 	ta.Focus()
 	ta.SetWidth(80) // WindowSizeMsg 到达前的合理缺省（同 newTuiModel）
-	return composerState{ta: ta, histIdx: -1}
+	cs := composerState{ta: ta, histIdx: -1}
+	cs.dressStyles()
+	return cs
+}
+
+// composerView 编辑器渲染入口（bottomView 消费）：渲染期同步组件样式后取
+// View——surface1 底随 activeTheme 现读（textarea 样式驻模型内，
+// refreshThemeStyles 无模型路径，/theme 换肤经此即时生效；Task 7）。
+func (m *tuiModel) composerView() string {
+	m.composerState.dressStyles()
+	return m.composerState.ta.View()
+}
+
+// dressStyles 编辑器组件样式（设计 §6 编辑器 surface1 底色块；Task 3 Ruling
+// 承接——textarea 组件默认样式与满帧铺底冲突）：先清零 bubbles textarea 主题
+// 无关默认样式（Focused/Blurred 两态的 CursorLine bg-0 / Prompt fg-7 /
+// EndOfBuffer fg-0），再按 surface1 槽注入 Base 底——Base 经 computed* 继承至
+// prompt/text/cursorline/endOfBuffer 每段自带前缀，行内重置点由下一段前缀自愈
+// （不依赖帧出口重铺）。空槽（无色层）不设底。幂等（现值上重设），渲染期调用。
+func (cs *composerState) dressStyles() {
+	st := cs.ta.Styles()
+	st.Focused.CursorLine = lipgloss.NewStyle()
+	st.Blurred.CursorLine = lipgloss.NewStyle()
+	st.Focused.Prompt = lipgloss.NewStyle()
+	st.Blurred.Prompt = lipgloss.NewStyle()
+	st.Focused.EndOfBuffer = lipgloss.NewStyle()
+	st.Blurred.EndOfBuffer = lipgloss.NewStyle()
+	st.Focused.Base = lipgloss.NewStyle()
+	st.Blurred.Base = lipgloss.NewStyle()
+	if c := string(activeTheme.surface1Color); c != "" {
+		bg := lipgloss.NewStyle().Background(lipgloss.Color(c))
+		st.Focused.Base = bg
+		st.Blurred.Base = bg
+	}
+	cs.ta.SetStyles(st)
 }
 
 // composerValue 当前输入全文（多行含 \n）。

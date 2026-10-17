@@ -79,7 +79,8 @@ func (m *tuiModel) handlePickerKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 // pickerView 渲染选择器（agentsPanelView 同形态的列表卡）：mulix id | 引擎
 // id | 模型 | 工作区 | 创建时刻（RFC3339 截到分钟）| 无人值守标注；选中行
-// ▸ 标记；底部键位提示。
+// ▸ 标记 + accent（设计 §6 resume 选择器——surface1 底由 bottomView 卡底
+// paintSurface 承载，与授权卡同法）；底部键位提示。
 func (m *tuiModel) pickerView() string {
 	var b strings.Builder
 	b.WriteString("会话（新在前）\n")
@@ -92,8 +93,12 @@ func (m *tuiModel) pickerView() string {
 		if it.Unattended {
 			att = " · 无人值守"
 		}
-		b.WriteString(fmt.Sprintf("%s%-10s %-10s %s %s %s%s\n",
-			marker, shortID(it.ID), shortID(it.EngineID), it.Model, it.Workspace, shortTime(it.CreatedAt), att))
+		row := fmt.Sprintf("%s%-10s %-10s %s %s %s%s",
+			marker, shortID(it.ID), shortID(it.EngineID), it.Model, it.Workspace, shortTime(it.CreatedAt), att)
+		if i == m.picker.sel {
+			row = activeTheme.accent(row)
+		}
+		b.WriteString(row + "\n")
 	}
 	b.WriteString("[↑/↓] 选择  [enter] 续链  [esc] 关闭\n")
 	return b.String()

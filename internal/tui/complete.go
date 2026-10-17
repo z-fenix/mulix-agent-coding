@@ -197,7 +197,8 @@ func (m *tuiModel) completeMenuView() string {
 	var b strings.Builder
 	for i := start; i < end; i++ {
 		if i == m.complete.sel {
-			b.WriteString("▸ " + items[i])
+			// accent 选中（设计 §6 补全菜单——surface1 底 + accent 选中）。
+			b.WriteString(activeTheme.accent("▸ " + items[i]))
 		} else {
 			b.WriteString("  " + items[i])
 		}
@@ -207,5 +208,7 @@ func (m *tuiModel) completeMenuView() string {
 		b.WriteString("\n")
 	}
 	b.WriteString(dimLine("[↑/↓] 选择  [tab/enter] 补全  [esc] 关闭"))
-	return b.String()
+	// surface1 菜单底（设计 §6——无框浮层整块铺面，渲染点自铺；行内 dim 重置
+	// 点由 paintSurface 重铺自愈，与帧底合成序同构）。空槽（无色层）原样返回。
+	return paintSurface(b.String(), activeTheme.surface1Color)
 }

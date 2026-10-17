@@ -153,3 +153,39 @@ func TestContextGaugeFallback(t *testing.T) {
 		t.Fatalf("context gauge must not be invented:\n%s", view)
 	}
 }
+
+// ---- 状态栏换装（2026-10-17-dsh-tui-visual-redesign Task 7；设计 §6 状态栏）----
+
+// TestStatusBarDress 钉：行 1 徽章 pill accent 底 + bg 槽 fg（styleBadge 既有
+// 机制——不变量钉）+ 模型名 fgSecondary 右组（38;5;252m模型 …）；行 2 数据带
+// caption 色（设计令牌表 caption/dim 同槽——dim 244）；引擎就绪中 = amber
+// （yellow 槽 214）、引擎异常 = red（red 槽 203）——语义色不弱化，pill 形态
+// 与文本不变。
+func TestStatusBarDress(t *testing.T) {
+	resetTheme(t)
+	m, _, _ := newTestModel(t)
+	m = update(t, m, statusTick{})
+	rows := strings.Split(m.statusView(), "\n")
+	if !strings.Contains(rows[0], "48;5;173") { // 徽章 accent 底（不变量；lipgloss 合并序 fg;bg——无 ESC 前缀钉，TestStyleKeycap 同法）
+		t.Fatalf("badge must take the accent slot:\n%q", rows[0])
+	}
+	if !strings.Contains(rows[0], "38;5;234") { // 徽章 bg 槽 fg（不变量）
+		t.Fatalf("badge fg must take the bg slot:\n%q", rows[0])
+	}
+	if !strings.Contains(rows[0], "\x1b[38;5;252m模型 fake-model") { // 模型名 fgSecondary
+		t.Fatalf("model name must take the fgSecondary slot:\n%q", rows[0])
+	}
+	if !strings.Contains(rows[1], "\x1b[38;5;244m") { // 行 2 caption（dim 槽）
+		t.Fatalf("row2 must take the caption/dim slot:\n%q", rows[1])
+	}
+	// 引擎就绪中/异常徽章：amber/red 语义底色（不弱化）。
+	m2, _, _ := newTestModel(t)
+	m2.statusState.snapshot.Ready = "NOT_READY"
+	if r1 := strings.Split(m2.statusView(), "\n")[0]; !strings.Contains(r1, "\x1b[48;5;214") {
+		t.Fatalf("NOT_READY badge must take amber:\n%q", r1)
+	}
+	m2.statusState.snapshot.Ready = "FAILED"
+	if r1 := strings.Split(m2.statusView(), "\n")[0]; !strings.Contains(r1, "\x1b[48;5;203") {
+		t.Fatalf("FAILED badge must take red:\n%q", r1)
+	}
+}

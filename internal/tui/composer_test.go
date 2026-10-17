@@ -229,3 +229,53 @@ func TestComposerWheelNesting(t *testing.T) {
 		t.Fatalf("transcript viewport must not move while the composer scrolls: %d != %d", got, vpBefore)
 	}
 }
+
+// ---- 编辑器换装（2026-10-17-dsh-tui-visual-redesign Task 7；设计 §6 编辑器 +
+// Task 3 Ruling 承接）----
+
+// TestComposerDress 钉：编辑器行 surface1 底（48;5;235——graphite 暗 256 出厂
+// 初值）+ ❯ accent（symPrompt，38;5;173）；bubbles textarea 组件默认样式清零
+// （CursorLine bg-0 → 无 ESC[40m、Prompt fg-7 → 无 ESC[37m——theme 无关清零，
+// 换装为本任务样式）；/theme 换肤后编辑器行重同步（ember accent 209——渲染
+// 路径现读 activeTheme，不经 theme.go 样式表）。
+func TestComposerDress(t *testing.T) {
+	resetTheme(t)
+	m, _, _ := newTestModel(t)
+	m.width, m.height = 80, 24
+	composerRow := func() string {
+		for _, line := range strings.Split(m.bottomView(), "\n") {
+			if strings.Contains(line, symPrompt+" ") {
+				return line
+			}
+		}
+		return ""
+	}
+	row := composerRow()
+	if row == "" {
+		t.Fatalf("composer row missing from bottomView:\n%s", m.bottomView())
+	}
+	if !strings.Contains(row, "\x1b[48;5;235m") { // surface1 256 手选
+		t.Fatalf("editor row must take the surface1 slot:\n%q", row)
+	}
+	// 1 格内衬 + ❯ accent + 分隔空格（设计 §6 编辑器——内衬格在 accent 序之前）。
+	if !strings.Contains(row, " \x1b[38;5;173m"+symPrompt+" ") {
+		t.Fatalf("editor prompt must carry the 1-cell inset and accent slot:\n%q", row)
+	}
+	// Task 3 Ruling：组件默认样式清零——CursorLine bg-0 / Prompt fg-7 不得复活
+	//（与满帧铺底冲突的组件底/提示符色）。
+	if strings.Contains(row, "\x1b[40m") {
+		t.Fatalf("textarea default CursorLine bg-0 must be cleared:\n%q", row)
+	}
+	if strings.Contains(row, "\x1b[37m") {
+		t.Fatalf("textarea default Prompt fg-7 must be cleared:\n%q", row)
+	}
+	// /theme 换肤 → 编辑器行重同步（ember dark accent 209）。
+	if th, ok := themeByName("ember"); !ok {
+		t.Fatal("ember must resolve")
+	} else {
+		applyTheme(th)
+	}
+	if row = composerRow(); !strings.Contains(row, "\x1b[38;5;209m"+symPrompt) {
+		t.Fatalf("editor prompt must re-dress on theme switch:\n%q", row)
+	}
+}

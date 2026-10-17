@@ -176,3 +176,78 @@ func TestFenceBGSurvivesFramePaint(t *testing.T) {
 		t.Fatalf("fence bg must repaint after the frame bg insert at resets:\n%q", painted)
 	}
 }
+
+// ---- chrome 换装（2026-10-17-dsh-tui-visual-redesign Task 7；设计 §6）----
+
+// TestScrollbarDefaultAccent 钉（brief）：滚动条 thumb = 当前默认 accent 173
+// （字面 tripwire——deepseek 111 换值随 Task 8 落、届时同步修钉）+ track dim
+// 244。thumb/track 槽源已由 T18 接线（ember 同源钉 TestThemeScrollbar）——本钉
+// 为出厂缺省字面。
+func TestScrollbarDefaultAccent(t *testing.T) {
+	resetTheme(t)
+	m, _, _ := newTestModel(t)
+	m.transcriptState.vp.SetHeight(10)
+	m.transcriptState.wrappedLines = make([]string, 50) // 溢出 → thumb 在场
+	sb := m.scrollbarView()
+	if !strings.Contains(sb, "\x1b[38;5;173m") {
+		t.Fatalf("scrollbar thumb must pin the default accent 173:\n%q", sb)
+	}
+	if !strings.Contains(sb, "\x1b[38;5;244m") {
+		t.Fatalf("scrollbar track must take the dim slot:\n%q", sb)
+	}
+}
+
+// TestChromeSurfaceDress 钉：补全菜单（无框浮层——渲染点自铺 surface1）与
+// resume 选择器（styleCard 卡——bottomView 合成铺面，与授权卡同法）surface1
+// 底 + accent 选中；未选中行不带 accent。
+func TestChromeSurfaceDress(t *testing.T) {
+	resetTheme(t)
+	m, _, _ := newTestModel(t)
+	m.width, m.height = 80, 24
+	// 补全菜单：整行纯 "/" 记号 → 菜单开（sel=0 首项 /new）。
+	m = update(t, m, typeStr(m, "/"))
+	if !m.completeOpen() {
+		t.Fatalf("completion menu must open on \"/\": %q", m.composerValue())
+	}
+	menu := m.completeMenuView()
+	if !strings.Contains(menu, "\x1b[48;5;235m") {
+		t.Fatalf("completion menu must take the surface1 slot:\n%q", menu)
+	}
+	var selLine, plainLine string
+	for _, line := range strings.Split(menu, "\n") {
+		if strings.Contains(line, "/new") {
+			selLine = line
+		}
+		if strings.Contains(line, "/resume") {
+			plainLine = line
+		}
+	}
+	if !strings.Contains(selLine, "\x1b[38;5;173m") {
+		t.Fatalf("selected item must take the accent slot:\n%q", selLine)
+	}
+	if strings.Contains(plainLine, "\x1b[38;5;173m") {
+		t.Fatalf("unselected item must not take accent:\n%q", plainLine)
+	}
+	// resume 选择器：surface1 底（bottomView 卡底合成）+ 选中行 accent、未选中
+	// 行平文（accent 断言在 pickerView 渲染点——卡边框字符自带 accent SGR，
+	// bottomView 整行断言会把边框着色误计入未选中行）。
+	m.picker = &resumePicker{items: []SessionSummary{
+		{ID: "s-aaaa", EngineID: "e-111111", Model: "m1", Workspace: "w1", CreatedAt: "2026-10-15T10:00:00Z"},
+		{ID: "s-bbbb", EngineID: "e-222222", Model: "m2", Workspace: "w2", CreatedAt: "2026-10-15T11:00:00Z"},
+	}, sel: 1}
+	if bv := m.bottomView(); !strings.Contains(bv, "\x1b[48;5;235m") {
+		t.Fatalf("resume picker must take the surface1 slot:\n%s", bv)
+	}
+	selRow, plainRow := false, false
+	for _, line := range strings.Split(m.pickerView(), "\n") {
+		if strings.Contains(line, "s-aaaa") {
+			plainRow = !strings.Contains(line, "\x1b[38;5;173m")
+		}
+		if strings.Contains(line, "s-bbbb") {
+			selRow = strings.Contains(line, "\x1b[38;5;173m")
+		}
+	}
+	if !selRow || !plainRow {
+		t.Fatalf("picker selection accent wrong: selRow=%v plainRow=%v\n%s", selRow, plainRow, m.pickerView())
+	}
+}

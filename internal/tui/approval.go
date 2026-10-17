@@ -65,7 +65,9 @@ func (m *tuiModel) resolve(toolUseID string, allow, session bool) {
 }
 
 // approvalCardView 授权卡文本（layout.go bottomView 独占分支调用）：头行
-// 工具 <tool>（id8）+ 参数摘要（inputSummary ≤2 行按帧宽）+ 键位提示行。
+// 工具 <tool>（id8）+ 参数摘要（inputSummary ≤2 行按帧宽）+ 键位提示行。键位
+// 提示行键名走键帽样式（设计 §6 授权卡——styleKeycap；键位与文本语义逐字节
+// 不变，仅样式——TestApprovalCardDress 钉剥 SGR 后与现值全等）。
 func (m *tuiModel) approvalCardView() string {
 	w := m.width - 4 // styleCard 横向装饰：RoundedBorder 左右各 1 + Padding(0,1) 左右各 1
 	if w < 16 {
@@ -76,7 +78,9 @@ func (m *tuiModel) approvalCardView() string {
 	if s := inputSummary(m.approval.input, w); s != "" {
 		b.WriteString("\n" + s)
 	}
-	b.WriteString("\n[1/y/Enter] 本次允许  [2/a] 本会话允许  [n/Esc] 拒绝")
+	b.WriteString("\n" + styleKeycap.Render("[1/y/Enter]") + " 本次允许  " +
+		styleKeycap.Render("[2/a]") + " 本会话允许  " +
+		styleKeycap.Render("[n/Esc]") + " 拒绝")
 	return b.String()
 }
 
