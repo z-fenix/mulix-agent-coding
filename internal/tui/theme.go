@@ -67,9 +67,8 @@ var accentPresets = []accentPreset{
 
 // modeSlots 底色模式的非强调槽（移植参考 cliDarkTheme/cliLightTheme 对应槽）。
 // surface1-3/border/fgSecondary/fgTertiary/codeBlock/diffAdded*/diffDeleted*
-// 为 dsh 派生扩充槽（设计 §4 令牌映射表）：darkSlots 已填 §4.1 值，lightSlots
-// 新槽暂零值（256 层解析为 "0"、真彩/无色层为空——当前无消费点，Task 2 补
-// §4.2 light 推导值）。
+// 为 dsh 派生扩充槽（设计 §4 令牌映射表）：darkSlots 填 §4.1 dark 值，
+// lightSlots 填 §4.2 light 派生值（亮底白基 + bluish 表面层级 + 正文反转）。
 type modeSlots struct {
 	dim, red, yellow, green, cyan, magenta, fg, bg slotColor
 	surface1, surface2, surface3, border           slotColor
@@ -109,15 +108,35 @@ var (
 		diffDeletedBG:     slotColor{"#3C1F1B", 52},
 		diffDeletedMarker: slotColor{"#FA423E", 203},
 	}
+	// lightSlots dsh light 派生值（设计 §4.2，源 design-platform.css light 段）：
+	// 基底白 + bluish 表面层级（50/60/75/150）、正文字层级反转暗化（1000/700/
+	// 600/500）、codeBlock = bluish-50、diff 晕底浅绿/浅红 + 深色语义标记；
+	// green/yellow（amber）/red 为 §4.2 状态色（green-500/amber-500/red-600）；
+	// cyan/magenta 预留不变。
 	lightSlots = modeSlots{
-		dim:     slotColor{"#82796f", 243},
-		red:     slotColor{"#b94b4d", 131},
-		yellow:  slotColor{"#b68120", 136},
-		green:   slotColor{"#5d9b66", 65},
+		dim:     slotColor{"#979DA6", 246},
+		red:     slotColor{"#EC1313", 196},
+		yellow:  slotColor{"#DD8629", 172},
+		green:   slotColor{"#22C55E", 35},
 		cyan:    slotColor{"#2f5fa8", 25},
 		magenta: slotColor{"#7d63c8", 104},
-		fg:      slotColor{"#555049", 239},
-		bg:      slotColor{"#f5f0e8", 255},
+		fg:      slotColor{"#0F1115", 16},
+		bg:      slotColor{"#FFFFFF", 231},
+
+		surface1: slotColor{"#F9FAFB", 255},
+		surface2: slotColor{"#F5F6F7", 254},
+		surface3: slotColor{"#F1F3F5", 253},
+		border:   slotColor{"#E9ECF2", 252},
+
+		fgSecondary: slotColor{"#61666B", 241},
+		fgTertiary:  slotColor{"#81858C", 244},
+		codeBlock:   slotColor{"#F9FAFB", 255},
+
+		diffAddedBG:     slotColor{"#E6F4E7", 194},
+		diffAddedMarker: slotColor{"#01A241", 28},
+
+		diffDeletedBG:     slotColor{"#FCE6E2", 224},
+		diffDeletedMarker: slotColor{"#BA2723", 124},
 	}
 )
 

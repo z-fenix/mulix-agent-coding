@@ -216,6 +216,33 @@ func TestDSHDarkSlots(t *testing.T) {
 	assertSlot(t, th.redColor, "203")    // red-400 #F25A5A
 	assertSlot(t, th.accentColor, "173") // graphite accent 不变（Task 8 换默认）
 }
+
+// ---- dsh light 派生槽位（2026-10-17-dsh-tui-visual-redesign Task 2）----
+
+// TestDSHLightSlots lightSlots 全槽 dsh light 值钉点（设计 §4.2：亮底白底 +
+// bluish 表面层级 + 正文反转暗化；状态色 green-500/amber-500/red-600）。
+func TestDSHLightSlots(t *testing.T) {
+	th, ok := themeByName("graphite-light")
+	if !ok {
+		t.Fatal("graphite-light 解析失败")
+	}
+	assertSlot(t, th.bgColor, "231")                // #FFFFFF
+	assertSlot(t, th.surface1Color, "255")          // bluish-50 #F9FAFB
+	assertSlot(t, th.surface2Color, "254")          // bluish-60 #F5F6F7
+	assertSlot(t, th.surface3Color, "253")          // bluish-75 #F1F3F5
+	assertSlot(t, th.borderColor, "252")            // bluish-150 #E9ECF2
+	assertSlot(t, th.fgColor, "16")                 // bluish-1000 #0F1115
+	assertSlot(t, th.fgSecondaryColor, "241")       // bluish-700 #61666B
+	assertSlot(t, th.fgTertiaryColor, "244")        // bluish-600 #81858C
+	assertSlot(t, th.dimColor, "246")               // bluish-500 #979DA6
+	assertSlot(t, th.codeBlockColor, "255")         // markdown-code-block = bluish-50
+	assertSlot(t, th.diffAddedBGColor, "194")       // #E6F4E7（256 手选语义绿晕）
+	assertSlot(t, th.diffDeletedBGColor, "224")     // #FCE6E2
+	assertSlot(t, th.diffAddedMarkerColor, "28")    // #01A241
+	assertSlot(t, th.diffDeletedMarkerColor, "124") // #BA2723
+	assertSlot(t, th.accentColor, "173")            // graphite-light accent 不变
+}
+
 func TestSgrBg(t *testing.T) {
 	if got := sgrBg("234"); got != "48;5;234" {
 		t.Fatalf("48 层: %q", got)
