@@ -24,11 +24,38 @@ import (
 //     打独立红行）；本仓一张语义卡随事件流转状态（运行中→完成/失败，同
 //     ToolUseID upsert 原地改写），输出尾驻留 ≤200 行（Ctrl+B 展开面 Task
 //     21：折叠渲染尾 8 行、展开至驻留全量——有界驻留同 D14 尾窗纪律）。
-//  3. 状态显式渲染（FR-005：运行/完成/失败状态）——运行中 dim「· 运行中」、
-//     完成 dim「· 完成」、失败红卡「⊘ · 失败」+ 详情行。参考失败是头行内联
-//     ⊘ errText；本仓详情独立成行——详情可能远长于头行余宽，截在头里不可读。
+//  3. 状态显式渲染（FR-005：运行/完成/失败状态）——状态点语言（dsh 设计 §7
+//     符号表）：运行 accent「●」、完成 green「✓」、失败红卡「✗」+ 状态 + 详情
+//     行，状态文案（运行中/完成/失败）保留、旧「·」注记退场（「·」保留给
+//     通知）。参考失败是头行内联 ⊘ errText；本仓详情独立成行——详情可能远长
+//     于头行余宽，截在头里不可读。⊘ 保留给委派失败卡（model.go
+//     delegationBlock）。
 //  4. 失败详情取 Content 首个非空行（截断）；输出尾保尾 ≤8 行（对照参考
 //     collapseToolOutput 的 dim 预览——整行弱化）。
+
+// ---- 符号表（dsh 重设计 设计 §7 glyph 词汇——同一语义全界面同一符号）----
+//
+// 渲染符号唯一来源：本任务接线工具/委派卡三态与取消态、连接槽；其余符号
+// （品牌 ◆/通知 ·/！/折叠 ▸/提示符 ❯/滚动条 █│）由后续任务在各自渲染点接线
+// （表先行落位，杜绝各任务私造字面量）。着色按 §7 表：运行 accent、完成
+// green、失败/委派失败 red、通知 dim（warning ！ amber）、折叠/track dim、
+// thumb/prompt accent；⎿ 槽 §7 记 border 色——border 槽方法未落地，暂随
+// 输出尾 dim 渲染（收口任务归位）。
+const (
+	symBrand     = "◆" // 品牌/头行/横幅
+	symRun       = "●" // 工具/委派运行中
+	symDone      = "✓" // 工具/委派完成
+	symFail      = "✗" // 工具失败
+	symDelegFail = "⊘" // 委派卡失败（头行一体）
+	symCancel    = "⏹" // 取消（回合收口/委派取消）
+	symNotice    = "·" // 通知（info）
+	symWarn      = "！" // 通知（warning）
+	symFold      = "▸" // 折叠标记
+	symPrompt    = "❯" // 提示符
+	symConnector = "⎿" // 连接槽
+	symThumb     = "█" // 滚动条 thumb
+	symTrack     = "│" // 滚动条 track
+)
 
 const (
 	// toolTailLines 输出尾折叠渲染行数上限（FR-005 有界尾；展开面 = Ctrl+B，
@@ -39,8 +66,8 @@ const (
 	// 同 D14 尾窗：超限内容保尾弃头，不无界驻内存）。
 	toolExpandMaxLines = 200
 	// toolConnector 卡片连接槽（对照参考 toolcard.go:18 connector "  ⎿  "——
-	// 本仓块模型无 2 列缩进，槽 = ⎿ + 2 空格）。
-	toolConnector = "⎿  "
+	// 本仓块模型无 2 列缩进，槽 = symConnector + 2 空格）。
+	toolConnector = symConnector + "  "
 	// toolArgSummaryMax 缺省主参摘要的存储截断（渲染再按显示宽收口）。
 	toolArgSummaryMax = 64
 )
@@ -204,7 +231,7 @@ func boundedTail(s string, maxLines int) []string {
 	return lines
 }
 
-// render 工具卡按宽渲染（块接口）：头行 ⏺/⊘ 动词(主参) · 状态 + diff 视图
+// render 工具卡按宽渲染（块接口）：头行 ●/✗ 动词(主参) 状态 + diff 视图
 // （D9：写类工具可 diff 输入挂卡——请求即渲染，回执后保留，对照参考
 // diffBlock 于 dispatch 打印、结果不回收）+ ⎿ 连接槽输出尾（完成卡）/失败
 // 详情行（失败卡）。对照参考 toolCard/toolHead 的头行组装——动词加粗、主参
@@ -232,17 +259,18 @@ func (c *toolCard) renderInner(width int) []string {
 }
 
 // header 卡头行：状态符号 + 加粗动词 + 弱化括号主参（按显示宽余量截断）+
-// 弱化/红色状态尾注。
+// 弱化/红色状态尾注。符号表（设计 §7）：运行 ● accent、完成 ✓ green、失败
+// ✗ red——状态文案保留，旧「·」注记退场（「·」保留给通知）。
 func (c *toolCard) header(width int) string {
 	verb := toolVerb(c.tool)
-	glyph, status := accentLine("⏺"), ""
+	glyph, status := accentLine(symRun), ""
 	switch c.state {
-	case toolRunning:
-		status = dimLine(" · 运行中")
 	case toolFailed:
-		glyph, status = failLine("⊘"), failLine(" · 失败")
-	default:
-		status = dimLine(" · 完成")
+		glyph, status = failLine(symFail), failLine(" 失败")
+	case toolDone:
+		glyph, status = greenLine(symDone), dimLine(" 完成")
+	default: // toolRunning
+		status = dimLine(" 运行中")
 	}
 	head := glyph + " " + bold(verb)
 	if c.arg != "" {
@@ -284,6 +312,10 @@ func accentLine(s string) string { return activeTheme.accent(s) }
 
 // failLine 失败槽（red）色分（FR-005：失败卡显著标红；T18 接入主题槽）。
 func failLine(s string) string { return activeTheme.red(s) }
+
+// greenLine 绿槽色分（设计 §7：完成态 ✓——对照 accentLine/failLine 同族
+// helper；方法驻 diffview.go，归属原 T18/T19 文件清单注记）。
+func greenLine(s string) string { return activeTheme.green(s) }
 
 // clampWidth 按显示宽截断（SGR 零宽计列、全角计两列；超宽补省略号——对照
 // 参考 clampPlain 的按宽收口，经 x/ansi 保持宽度感知）。

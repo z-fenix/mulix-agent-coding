@@ -183,6 +183,19 @@ func TestThemeScrollbar(t *testing.T) {
 	}
 }
 
+// TestStyleKeycap 键帽样式（Task 4 Produces：surface3 底 + fgSecondary 前——
+// 设计 §6 授权卡/§7 键帽行；Task 7 审批卡消费）。256 层确定性初值口径钉字面。
+func TestStyleKeycap(t *testing.T) {
+	resetTheme(t)
+	out := styleKeycap.Render("y")
+	if !strings.Contains(out, "48;5;237") { // surface3 256 手选（graphite 暗 · 出厂初值）
+		t.Fatalf("keycap bg must take the surface3 slot:\n%q", out)
+	}
+	if !strings.Contains(out, "38;5;252") { // fgSecondary 256 手选
+		t.Fatalf("keycap fg must take the fgSecondary slot:\n%q", out)
+	}
+}
+
 // assertSlot 槽位字符串比较 helper（256 层确定性初值口径——逐槽钉点）。
 func assertSlot(t *testing.T, got themeColor, want string) {
 	t.Helper()

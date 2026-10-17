@@ -411,6 +411,9 @@ var (
 	// styleFrame 满帧铺底样式（设计 §4.3）：bg 槽整行填充——layout.go paintBG
 	// 消费；空槽（无色层）不设底，paintBG 原样返回。refreshThemeStyles 重铸。
 	styleFrame = lipgloss.NewStyle()
+	// styleKeycap 键帽样式（设计 §6 授权卡/§7 键帽行）：surface3 底 +
+	// fgSecondary 前——审批卡键帽 Task 7 消费。refreshThemeStyles 重铸。
+	styleKeycap = lipgloss.NewStyle()
 )
 
 // applyTheme 换肤：activeTheme 换本体 + lipgloss 样式重铸（对照参考
@@ -446,6 +449,15 @@ func refreshThemeStyles() {
 	styleFrame = lipgloss.NewStyle()
 	if string(activeTheme.bgColor) != "" {
 		styleFrame = styleFrame.Background(lipgloss.Color(string(activeTheme.bgColor)))
+	}
+	// 键帽样式（设计 §6 授权卡/§7 键帽行）：surface3 底 + fgSecondary 前；
+	// 空槽（无色层）跳过——键帽退平文。
+	styleKeycap = lipgloss.NewStyle()
+	if string(activeTheme.surface3Color) != "" {
+		styleKeycap = styleKeycap.Background(lipgloss.Color(string(activeTheme.surface3Color)))
+	}
+	if string(activeTheme.fgSecondaryColor) != "" {
+		styleKeycap = styleKeycap.Foreground(lipgloss.Color(string(activeTheme.fgSecondaryColor)))
 	}
 }
 

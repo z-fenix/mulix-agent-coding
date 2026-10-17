@@ -11,6 +11,37 @@ import (
 
 // ---- Task 9（023 FR-005）：工具卡 ----
 
+// TestToolCardSymbols 钉死符号表（设计 §7 glyph 词汇，Task 4 Produces：13 符号
+// 常量——后续任务引用同源，杜绝各渲染点私造字面量；值逐字面钉死）。
+func TestToolCardSymbols(t *testing.T) {
+	pairs := []struct{ name, got, want string }{
+		{"symBrand", symBrand, "◆"},
+		{"symRun", symRun, "●"},
+		{"symDone", symDone, "✓"},
+		{"symFail", symFail, "✗"},
+		{"symDelegFail", symDelegFail, "⊘"},
+		{"symCancel", symCancel, "⏹"},
+		{"symNotice", symNotice, "·"},
+		{"symWarn", symWarn, "！"},
+		{"symFold", symFold, "▸"},
+		{"symPrompt", symPrompt, "❯"},
+		{"symConnector", symConnector, "⎿"},
+		{"symThumb", symThumb, "█"},
+		{"symTrack", symTrack, "│"},
+	}
+	if len(pairs) != 13 {
+		t.Fatalf("symbol table must pin exactly 13 glyphs, got %d", len(pairs))
+	}
+	for _, p := range pairs {
+		if p.got != p.want {
+			t.Fatalf("%s = %q, want %q", p.name, p.got, p.want)
+		}
+	}
+	if toolConnector != symConnector+"  " { // 连接槽 = 符号表 ⎿ + 2 空格（块模型无 2 列缩进）
+		t.Fatalf("toolConnector must derive from symConnector, got %q", toolConnector)
+	}
+}
+
 // TestToolCardLifecycle 钉死（brief a）：ToolUseRequested(Bash, cmd) 开运行中
 // 卡 → ToolResult(content, IsError=false) 同 ToolUseID upsert 原地关卡（不增
 // 块）+ ≤8 行有界输出尾（⎿ 槽首行 + 对齐续行）。
@@ -31,10 +62,13 @@ func TestToolCardLifecycle(t *testing.T) {
 		t.Fatalf("running card: state=%d arg=%q", card.state, card.arg)
 	}
 	head := card.render(80)[0]
-	for _, want := range []string{"\x1b[38;5;173m⏺\x1b[0m", "\x1b[1m运行\x1b[0m", "npm test", "运行中"} { // T18：accent 槽
+	for _, want := range []string{"\x1b[38;5;173m●\x1b[0m", "\x1b[1m运行\x1b[0m", "npm test", "运行中"} { // T18：accent 槽；符号表：运行 ●
 		if !strings.Contains(head, want) {
 			t.Fatalf("running header %q missing %q", head, want)
 		}
+	}
+	if strings.Contains(head, "· 运行中") { // 设计 §7：状态点语言退场旧「·」注记——「·」保留给通知
+		t.Fatalf("running header must drop the old dot note, got %q", head)
 	}
 
 	// 回执关卡：同 ID upsert——块数不变，状态转完成，输出尾入卡。
@@ -58,12 +92,16 @@ func TestToolCardLifecycle(t *testing.T) {
 	if !strings.Contains(lines[2], "pass 2") || strings.Contains(lines[2], "⎿") {
 		t.Fatalf("continuation line = %q, want aligned without gutter", lines[2])
 	}
+	if !strings.Contains(lines[0], "\x1b[38;5;114m✓\x1b[0m") || !strings.Contains(lines[0], "完成") { // 符号表：完成 ✓ green 槽
+		t.Fatalf("done header = %q, want green ✓ + 完成", lines[0])
+	}
 	if strings.Contains(strings.Join(lines, "\n"), "运行中") {
 		t.Fatal("closed card must not keep the running marker")
 	}
 }
 
-// TestToolCardFailure 钉死（brief b）：IsError=true → 红卡 ⊘ 含失败详情。
+// TestToolCardFailure 钉死（brief b）：IsError=true → 红卡 ✗ 含失败详情（符号
+// 表设计 §7：工具失败 ✗ red；⊘ 保留给委派失败卡）。
 func TestToolCardFailure(t *testing.T) {
 	m, _, _ := newTestModel(t)
 	m = update(t, m, tuiEvent{ev: event.ToolUseRequestedEvent{
@@ -81,10 +119,13 @@ func TestToolCardFailure(t *testing.T) {
 		t.Fatalf("failedDetail = %q, want first non-empty content line", card.failedDetail)
 	}
 	rendered := strings.Join(card.render(80), "\n")
-	for _, want := range []string{"⊘", "失败", "Error: command failed"} {
+	for _, want := range []string{"✗", "失败", "Error: command failed"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("failure card %q missing %q", rendered, want)
 		}
+	}
+	if strings.Contains(rendered, "⊘") { // 符号表：⊘ 保留给委派失败——工具失败用 ✗
+		t.Fatalf("failure card must not use the delegation glyph ⊘, got %q", rendered)
 	}
 	if !strings.Contains(rendered, "\x1b[38;5;203m") {
 		t.Fatal("failure card must take the red slot (SGR 38;5;203)")

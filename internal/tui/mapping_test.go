@@ -113,14 +113,14 @@ func TestEventRenderMatrix(t *testing.T) {
 				}
 			},
 		},
-		// 4. ToolUseRequestedEvent：工具卡出现（运行中），⏺ 动词(主参)。
+		// 4. ToolUseRequestedEvent：工具卡出现（运行中），● 动词(主参)。
 		{
 			name: "ToolUseRequested 运行中工具卡",
 			events: []any{
 				event.ToolUseRequestedEvent{Seq: 1, Turn: 1, ToolUseID: "tu-a", Tool: "Bash",
 					Input: json.RawMessage(`{"command":"go test ./..."}`)},
 			},
-			wantBlocks: []string{"\x1b[38;5;173m⏺\x1b[0m", "go test ./...", "运行中"}, // T18：accent 槽
+			wantBlocks: []string{"\x1b[38;5;173m●\x1b[0m", "go test ./...", "运行中"}, // T18：accent 槽；符号表：运行 ●
 			wantState: func(t *testing.T, m *tuiModel) {
 				idx, ok := m.cards["tu-a"]
 				if !ok || idx != 0 {
@@ -140,7 +140,7 @@ func TestEventRenderMatrix(t *testing.T) {
 					Input: json.RawMessage(`{"command":"go vet"}`)},
 				event.ToolResultEvent{Seq: 2, Turn: 1, ToolUseID: "tu-r", Content: "vet ok\nall good"},
 			},
-			wantBlocks: []string{"⎿", "vet ok", "all good", "完成"},
+			wantBlocks: []string{"\x1b[38;5;114m✓\x1b[0m", "⎿", "vet ok", "all good", "完成"}, // 符号表：完成 ✓ green 槽
 			wantAbsent: []string{"运行中"},
 			wantState: func(t *testing.T, m *tuiModel) {
 				if len(m.transcriptState.blocks) != 1 {
@@ -151,7 +151,7 @@ func TestEventRenderMatrix(t *testing.T) {
 				}
 			},
 		},
-		// 6. ToolResultEvent 收口（失败）：失败红卡 ⊘ + 详情。
+		// 6. ToolResultEvent 收口（失败）：失败红卡 ✗ + 详情（⊘ 保留给委派失败）。
 		{
 			name: "ToolResult 失败红卡",
 			events: []any{
@@ -160,7 +160,7 @@ func TestEventRenderMatrix(t *testing.T) {
 				event.ToolResultEvent{Seq: 2, Turn: 1, ToolUseID: "tu-f", IsError: true,
 					Content: "Error: exit 1"},
 			},
-			wantBlocks: []string{"\x1b[38;5;203m", "⊘", "失败", "Error: exit 1"}, // T18：red 槽
+			wantBlocks: []string{"\x1b[38;5;203m", "✗", "失败", "Error: exit 1"}, // T18：red 槽；符号表：失败 ✗
 			wantState: func(t *testing.T, m *tuiModel) {
 				if card := m.transcriptState.blocks[0].(*toolCard); card.state != toolFailed {
 					t.Fatalf("IsError must fail the card, state = %d", card.state)
@@ -296,14 +296,14 @@ func TestEventRenderMatrix(t *testing.T) {
 				}
 			},
 		},
-		// 16. DelegationStartedEvent：委派卡 `⏺ 子代理 <id8> 启动 · 任务摘要`。
+		// 16. DelegationStartedEvent：委派卡 `● 子代理 <id8> 启动 · 任务摘要`。
 		{
 			name: "DelegationStarted 委派卡启动",
 			events: []any{
 				event.DelegationStartedEvent{Seq: 1, SubSessionID: "sub-12345678",
 					Task: "跑全量测试", Depth: 1},
 			},
-			wantBlocks: []string{"\x1b[38;5;173m⏺\x1b[0m", "子代理 sub-1234… 启动 · 跑全量测试"},
+			wantBlocks: []string{"\x1b[38;5;173m●\x1b[0m", "子代理 sub-1234… 启动 · 跑全量测试"}, // 符号表：运行 ●
 			wantState: func(t *testing.T, m *tuiModel) {
 				idx, ok := m.delegCards["sub-12345678"]
 				if !ok || idx != 0 {
@@ -323,7 +323,7 @@ func TestEventRenderMatrix(t *testing.T) {
 				event.DelegationCompletedEvent{Seq: 2, SubSessionID: "sub-12345678",
 					Summary: "全部通过", TotalTokens: 1500, CostUSDCents: 21},
 			},
-			wantBlocks: []string{"子代理 sub-1234… 完成", "全部通过", "⎿", "1500 tok · $0.21"},
+			wantBlocks: []string{"\x1b[38;5;114m✓\x1b[0m", "子代理 sub-1234… 完成", "全部通过", "⎿", "1500 tok · $0.21"}, // 符号表：完成 ✓ green 槽
 			wantState: func(t *testing.T, m *tuiModel) {
 				if len(m.transcriptState.blocks) != 1 {
 					t.Fatalf("lifecycle must upsert one card in place, blocks = %d", len(m.transcriptState.blocks))
@@ -388,7 +388,7 @@ func TestEventRenderMatrix(t *testing.T) {
 				event.EngineExitedEvent{Seq: 5, Code: 1, Reason: "crashed"},
 				event.EngineExitedEvent{Seq: 6, Code: 1, Reason: "crashed"},
 			},
-			wantBlocks: []string{"⊘", "引擎已退出，工具未返回", "boom"},
+			wantBlocks: []string{"\x1b[38;5;203m✗\x1b[0m", "引擎已退出，工具未返回", "boom"}, // 符号表：工具失败 ✗（清扫落失败态；SGR 形态防收口行 ✗ 误配）
 			wantAbsent: []string{"· 运行中"},
 			wantState: func(t *testing.T, m *tuiModel) {
 				// 3 卡 + 2 退出留痕行（每次 EngineExited 各一行——幂等仅针对

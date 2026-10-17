@@ -456,9 +456,9 @@ func (m *tuiModel) handleEvent(ev any) {
 		m.closeThinking()
 		m.sealAnswer()
 		// 024 FR-002：清扫运行中工具卡为中断终态——引擎已死，卡片不得永久
-		// 渲染「· 运行中」。幂等：无运行中卡则零改写。缓存失效取**首个**被改
+		// 渲染「● 运行中」。幂等：无运行中卡则零改写。缓存失效取**首个**被改
 		// 下标（invalidateWrapFrom 截前缀，后缀全重排——终审 Important-1：
-		// 记末位会漏改前位卡的「· 运行中」缓存行）。
+		// 记末位会漏改前位卡的「● 运行中」缓存行）。
 		lowest := -1
 		for i, b := range m.transcriptState.blocks {
 			if card, ok := b.(*toolCard); ok && card.state == toolRunning {
@@ -543,8 +543,9 @@ type delegationBlock struct {
 	reason    string // 取消/失败原因
 }
 
-// render 委派卡按宽渲染（块接口）：头行 ⏺/⊘ 子代理 <id8> 状态 · 详情；
-// 完成卡附 ⎿ token/成本明细行（设计 §6：完成收口含 token/成本）。
+// render 委派卡按宽渲染（块接口）：头行 ●/✓/⏹/⊘ 子代理 <id8> 状态 · 详情
+// （符号表设计 §7：运行 ● accent、完成 ✓ green、取消 ⏹ dim——⊘ 保留给委派
+// 失败）；完成卡附 ⎿ token/成本明细行（设计 §6：完成收口含 token/成本）。
 func (b *delegationBlock) render(width int) []string {
 	return gutterLines(b.renderInner(max(width-2, 1)))
 }
@@ -556,17 +557,18 @@ func (b *delegationBlock) renderInner(width int) []string {
 	var head, detail string
 	switch b.state {
 	case delegFailed:
-		// 失败卡整段红（⊘ 头 + 状态一体——与工具卡失败详情同色系）。
-		head = failLine("⊘ 子代理 " + shortID(b.subID) + " 失败")
+		// 失败卡整段红（⊘ 头 + 状态一体——与工具卡失败详情同色系；符号表：
+		// ⊘ 保留给委派失败）。
+		head = failLine(symDelegFail + " 子代理 " + shortID(b.subID) + " 失败")
 		detail = b.reason
 	case delegDone:
-		head = accentLine("⏺") + " 子代理 " + shortID(b.subID) + " 完成"
+		head = greenLine(symDone) + " 子代理 " + shortID(b.subID) + " 完成"
 		detail = b.summary
 	case delegCancelled:
-		head = accentLine("⏺") + " 子代理 " + shortID(b.subID) + " 已取消"
+		head = dimLine(symCancel) + " 子代理 " + shortID(b.subID) + " 已取消"
 		detail = b.reason
 	default:
-		head = accentLine("⏺") + " 子代理 " + shortID(b.subID) + " 启动"
+		head = accentLine(symRun) + " 子代理 " + shortID(b.subID) + " 启动"
 		detail = b.task
 	}
 	if detail != "" {
