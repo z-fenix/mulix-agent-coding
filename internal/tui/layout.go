@@ -14,9 +14,10 @@ import (
 // 底部固定区自上而下：模态面板（/agents，有则）→ 授权卡/编辑器（互斥）→
 // 状态行，宽度收口主列（mainWidth——评审 Issue 7）。模态面板渲染沿用迁移前
 // 形态（023 Task 2 逐字节迁移件）；授权卡键位与参数摘要见 approval.go（023
-// D11）。本文件负责把它们与视口合成满屏帧；侧栏/面板视图 Task 11/12 落地
-// （当前恒空白列占位）；末列滚动条拖拽与选区高亮随 Task 21 落地（023
-// Story4——transcript.go transcriptView 绘制可见窗口）。
+// D11）。本文件负责把它们与视口合成满屏帧；侧栏视图已随 Task 11 接线
+//（sidebar.go sidebarColumn），面板列仍空白占位（Task 12）；末列滚动条拖拽
+// 与选区高亮随 Task 21 落地（023 Story4——transcript.go transcriptView 绘制
+// 可见窗口）。
 
 // transcriptContentWidth 转写内容宽度：末列保留给滚动条（对照参考
 // chat_tui.go:693-698 transcriptContentWidth），下限 1。换行缓存与 viewport
@@ -78,9 +79,10 @@ func (m *tuiModel) frame() string {
 		vpH = 1
 	}
 	prevH := m.transcriptState.vp.Height()
-	// 三档列宽几何（Task 9）：开合字段 m.sidebarOpen/m.panelOpen 随 Task 11/12
-	// 落地，此前按设计裁定以恒 true 接线（默认三栏常开）——窄档由几何退化兜住。
-	sidebarW, mainW, panelW := columnWidths(m.width, true, true)
+	// 三档列宽几何（Task 9）：开合接线（Task 10 硬编码 true,true 的两处之一
+	// ——此处与 mainWidth 同批替换）：m.sidebarOpen Task 11（F3，sidebar.go）、
+	// m.panelOpen Task 12（F2/F4，panel.go）——窄档由几何退化兜住。
+	sidebarW, mainW, panelW := columnWidths(m.width, m.sidebarOpen, m.panelOpen)
 	fed := m.transcriptState.syncViewport(transcriptContentWidth(mainW), vpH)
 	// 阅读锚点恢复（024 FR-001）：新宽重排完成后按块对位置回顶行，一次性
 	// 消费；尾随态不恢复（钉底接管，锚点作废）。
@@ -110,7 +112,9 @@ func (m *tuiModel) frame() string {
 		mainCol := lipgloss.JoinVertical(lipgloss.Left, main, bottom)
 		var cols []string
 		if sidebarW > 0 {
-			cols = append(cols, blankColumn(sidebarW, m.height))
+			// 侧栏列视图（Task 11——sidebar.go sidebarColumn，取代空白占位；
+			// sidebarW>0 蕴含 m.sidebarOpen——几何已按开合让位）。
+			cols = append(cols, m.sidebarColumn(sidebarW))
 		}
 		cols = append(cols, mainCol)
 		if panelW > 0 {
@@ -123,9 +127,10 @@ func (m *tuiModel) frame() string {
 	return paintBG(rendered, m.width)
 }
 
-// blankColumn 恒空白列（Task 10 过渡形态——侧栏/面板视图 Task 11/12 落地）：
-// 宽 w 全空格 × h 行，三列 JoinHorizontal 的列位占位，保证主列列位与帧宽
-// （列和 = W）正确。w≤0 防御性返回空串（调用方已按档位让位过滤）。
+// blankColumn 恒空白列（面板列 Task 12 过渡占位——侧栏列已随 Task 11 接
+// sidebar.go sidebarColumn）：宽 w 全空格 × h 行，三列 JoinHorizontal 的列位
+// 占位，保证主列列位与帧宽（列和 = W）正确。w≤0 防御性返回空串（调用方已按
+// 档位让位过滤）。
 func blankColumn(w, h int) string {
 	if w <= 0 {
 		return ""

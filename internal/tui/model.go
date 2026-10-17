@@ -75,6 +75,15 @@ type tuiModel struct {
 	// /agents 面板（M12/T12.4）：列表态独占 composer；agentsSel 是选中行。
 	agentsOpen bool
 	agentsSel  int
+	// 侧栏/面板列开合（dsh 三列布局——Task 11 落位）：缺省 true（设计裁定：
+	// 默认三栏常开；newTuiModel 显式置位——Go 零值 false 不可用）。F3 键位与
+	// 守卫见 sidebar.go；panelState（页签/焦点/预览）随 Task 12 迁入结构化
+	// 字段，面板布尔开合先平铺（与 agentsOpen 同位过渡形态）。
+	sidebarOpen bool
+	panelOpen   bool
+	// sidebar 侧栏状态（Task 11）：sel 选中游标（Task 13 接线 ↑/↓）；sessions
+	// 清单快照（本任务测试桩——Task 13 接 Options.ListSessions 打开时快照）。
+	sidebar sidebarState
 	// 补全菜单 + /resume 选择器（023 FR-009）：complete 是 composer 邻接浮层
 	//（非独占——编辑继续，导航/补全键拦截见 complete.go）；picker 是列表态
 	// 独占模态（composer 冻结，与 agents 同级互斥；nil = 关闭）。
@@ -170,6 +179,8 @@ func newTuiModel(o Options, ctrl SessionController, events <-chan tuiEvent, sess
 		sink:   o.Sink,
 		selfID: sessionID,
 		width:  80, height: 24, // WindowSizeMsg 到达前的合理缺省
+		sidebarOpen:     true, // dsh 三列布局缺省常开（Task 11；panelOpen Task 12 收编前同缺省）
+		panelOpen:       true,
 		answerIdx:       -1, // 无活块（流式答案游标，Task 7 D17）
 		thinkingIdx:     -1, // 无活思考块（Task 8 D14）
 		bannerIdx:       -1, // 无横幅（025 FR-001——Run 装配后置位）
@@ -228,9 +239,10 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.width, m.height = msg.Width, msg.Height
 		// 底部区宽度收口主列（评审 Issue 7）：composer 跟 mainWidth 重排（触发
-		// 编辑器高度重算）——窄档 mainWidth == m.width 行为不变；开合变更时的
-		// 同步随 Task 11/12 开关接线落地（同宽开合不走 WindowSizeMsg——评审
-		// Issue 4 的锚点显式捕获同处接线，Task 12）。
+		// 编辑器高度重算）——窄档 mainWidth == m.width 行为不变；同宽开合不走
+		// WindowSizeMsg——开合生效点的 composer 同步随开关接线落地（侧栏
+		// Task 11 已接线 toggleSidebar；面板随 Task 12，锚点显式捕获同处接线
+		// ——评审 Issue 4）。
 		m.composerState.ta.SetWidth(m.mainWidth())
 		return m, nil
 	case statusTick:
@@ -378,10 +390,11 @@ func (m *tuiModel) drainEvents(first tuiEvent) {
 // 合成 / approvalCardView 内容宽 / completeMenuView 同理——无宽度消费点）与
 // 转写视口换行宽（finalize 同源）一律收口此宽，防 JoinVertical 撑破帧宽。
 // 窄档 <100 恒等于 m.width（单列等价）；宽/中档随侧栏/面板让位收窄。开合
-// 字段 m.sidebarOpen/m.panelOpen 随 Task 11/12 落地，此前恒 true 接线（与
-// frame 同一设计裁定：默认三栏常开）。
+// 接线（Task 10 硬编码 true,true 的两处之一——此处与 layout.go frame 同批
+// 替换）：sidebarOpen 随 Task 11；panelOpen 平铺字段随 Task 11 落位（Task 12
+// 收编进 panelState.open——评审推荐的净接缝）。
 func (m *tuiModel) mainWidth() int {
-	_, main, _ := columnWidths(m.width, true, true)
+	_, main, _ := columnWidths(m.width, m.sidebarOpen, m.panelOpen)
 	return main
 }
 
@@ -770,6 +783,9 @@ func (m *tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// Ctrl+B 工具卡输出尾展开（023 Story4 Task 21，toolcard.go——同上）
 		m.toggleToolExpand()
 		return m, nil
+	case msg.Code == tea.KeyF3:
+		// F3 侧栏开合（dsh 布局 Task 11——窄档 <100 守卫留痕见 sidebar.go）
+		return m, m.toggleSidebar()
 	}
 	// 编辑器键位（023 D12/FR-007，textarea 配置见 composer.go）：裸 Enter 提交
 	//（忙门禁在 submit 内、清空之前——忙期按键不吞文本）；Alt+Enter / Ctrl+J /

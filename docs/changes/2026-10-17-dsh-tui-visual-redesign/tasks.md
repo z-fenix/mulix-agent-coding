@@ -273,7 +273,7 @@ func TestNoColorFrameStructure(t *testing.T) {
 - [X] **Step 2: verify RED**。Expected: FAIL（构成 + 宽度断言红）。
 - [X] **Step 3: Implement** — frame() 按 columnWidths 分派；窄档走现路径（零改写保证等价）；宽/中档空列以空白列合成；底部区四消费点接 mainWidth()。
 - [X] **Step 4: verify GREEN**（既有滚动/锚点/矩阵测试全绿）。Expected: PASS。
-- [ ] **Step 5: 门禁 + commit** — `feat(tui): frame 三列合成——底部区收口主列宽、窄档与现状等价`。
+- [X] **Step 5: 门禁 + commit** — `feat(tui): frame 三列合成——底部区收口主列宽、窄档与现状等价`。
 
 ## Task 11: 侧栏视图与 F3 开合
 
@@ -286,10 +286,10 @@ func TestNoColorFrameStructure(t *testing.T) {
 - Consumes: Task 10 frame 列位；`Options.ListSessions`（model.go:34）。
 - Produces: `type sidebarState struct { sel int }` + `func (m *tuiModel) sidebarView(width int) string`——顶 `◆ mulix`（accent）、「会话」目、清单行（当前会话 surface2 高亮 + fg-primary，其余 fg-secondary 截断省略号）、底部「/new 新会话」提示、空态指引文案；`func (m *tuiModel) toggleSidebar() tea.Cmd`——**W<100 时经 appendLine 留痕「侧栏需 ≥100 列」不进入开态**（评审 Issue 5 修正：档位判定用 W 直接比较；提示走 appendLine 非 appendNotice）。本任务清单数据用桩（Task 13 接真源）。
 
-- [ ] **Step 1: Write the failing test** — sidebarView：桩清单 3 项断言高亮行/截断/空态文案；toggleSidebar 在 W=90 时留痕不开态。
-- [ ] **Step 2: verify RED**。Expected: FAIL。
-- [ ] **Step 3: Implement**。
-- [ ] **Step 4: verify GREEN**。Expected: PASS。
+- [X] **Step 1: Write the failing test** — sidebarView：桩清单 3 项断言高亮行/截断/空态文案；toggleSidebar 在 W=90 时留痕不开态。
+- [X] **Step 2: verify RED**。Expected: FAIL（编译期 RED——新符号未定义，见台账 Ruling）。
+- [X] **Step 3: Implement**。
+- [X] **Step 4: verify GREEN**。Expected: PASS。
 - [ ] **Step 5: 门禁 + commit** — `feat(tui): 侧栏视图与 F3 开合守卫`。
 
 ## Task 12: 面板骨架与 F2/F4 守卫
