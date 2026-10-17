@@ -166,7 +166,7 @@ func TestStatusBarDress(t *testing.T) {
 	m, _, _ := newTestModel(t)
 	m = update(t, m, statusTick{})
 	rows := strings.Split(m.statusView(), "\n")
-	if !strings.Contains(rows[0], "48;5;173") { // 徽章 accent 底（不变量；lipgloss 合并序 fg;bg——无 ESC 前缀钉，TestStyleKeycap 同法）
+	if !strings.Contains(rows[0], "48;5;111") { // 徽章 accent 底（deepseek 默认；lipgloss 合并序 fg;bg——无 ESC 前缀钉，TestStyleKeycap 同法）
 		t.Fatalf("badge must take the accent slot:\n%q", rows[0])
 	}
 	if !strings.Contains(rows[0], "38;5;234") { // 徽章 bg 槽 fg（不变量）

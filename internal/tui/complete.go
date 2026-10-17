@@ -35,7 +35,7 @@ var slashCatalog = []slashCmd{
 	{"/doctor", "环境自检"},
 	{"/agents", "子代理列表"},
 	{"/rewind", "引擎 checkpoint 回退（占位）"},
-	{"/theme", "切换配色主题（graphite/ember/aurora/midnight[+ -light]）"},
+	{"/theme", "切换配色主题（deepseek/graphite/ember/aurora/midnight[+ -light]）"},
 	{"/quit", "退出 mulix"},
 }
 

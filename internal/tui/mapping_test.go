@@ -120,7 +120,7 @@ func TestEventRenderMatrix(t *testing.T) {
 				event.ToolUseRequestedEvent{Seq: 1, Turn: 1, ToolUseID: "tu-a", Tool: "Bash",
 					Input: json.RawMessage(`{"command":"go test ./..."}`)},
 			},
-			wantBlocks: []string{"\x1b[38;5;173m●\x1b[0m", "go test ./...", "运行中"}, // T18：accent 槽；符号表：运行 ●
+			wantBlocks: []string{"\x1b[38;5;111m●\x1b[0m", "go test ./...", "运行中"}, // T18：accent 槽（deepseek 默认）；符号表：运行 ●
 			wantState: func(t *testing.T, m *tuiModel) {
 				idx, ok := m.cards["tu-a"]
 				if !ok || idx != 0 {
@@ -303,7 +303,7 @@ func TestEventRenderMatrix(t *testing.T) {
 				event.DelegationStartedEvent{Seq: 1, SubSessionID: "sub-12345678",
 					Task: "跑全量测试", Depth: 1},
 			},
-			wantBlocks: []string{"\x1b[38;5;173m●\x1b[0m", "子代理 sub-1234… 启动 · 跑全量测试"}, // 符号表：运行 ●
+			wantBlocks: []string{"\x1b[38;5;111m●\x1b[0m", "子代理 sub-1234… 启动 · 跑全量测试"}, // 符号表：运行 ●（deepseek 默认 accent）
 			wantState: func(t *testing.T, m *tuiModel) {
 				idx, ok := m.delegCards["sub-12345678"]
 				if !ok || idx != 0 {

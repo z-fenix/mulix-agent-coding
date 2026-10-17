@@ -122,7 +122,7 @@ func frameStructureIntact(t *testing.T) bool {
 }
 
 // TestFramePaintsBackground 有色层满帧铺底（设计 §4.3）：frame 每行含 bg SGR
-// （48;5;234——graphite 暗 256 层出厂初值，或真彩层 48;2 等价形态）。
+// （48;5;234——dsh dark 板 bg 256 手选，出厂初值；或真彩层 48;2 等价形态）。
 func TestFramePaintsBackground(t *testing.T) {
 	// 有色层：frame 每行含 bg SGR（48;5;234 或 38 层等价形态）
 	if !frameHasBGEveryLine(t) {
@@ -132,8 +132,7 @@ func TestFramePaintsBackground(t *testing.T) {
 
 // TestNoColorFrameStructure 无色层结构保留：SGR 空集 + 行数与分区不变。
 // 无色层测试纪律（照 theme_test.go TestNoColorFallback）：包级 activeTheme 为
-// 确定性 256 层、不探测环境——Setenv 不清槽位，必须重建主题再断言；ember 预设
-// （deepseek Task 8 才存在）。
+// 确定性 256 层、不探测环境——Setenv 不清槽位，必须重建主题再断言；ember 预设。
 func TestNoColorFrameStructure(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
 	resetTheme(t)
@@ -179,18 +178,17 @@ func TestFenceBGSurvivesFramePaint(t *testing.T) {
 
 // ---- chrome 换装（2026-10-17-dsh-tui-visual-redesign Task 7；设计 §6）----
 
-// TestScrollbarDefaultAccent 钉（brief）：滚动条 thumb = 当前默认 accent 173
-// （字面 tripwire——deepseek 111 换值随 Task 8 落、届时同步修钉）+ track dim
-// 244。thumb/track 槽源已由 T18 接线（ember 同源钉 TestThemeScrollbar）——本钉
-// 为出厂缺省字面。
+// TestScrollbarDefaultAccent 钉（brief）：滚动条 thumb = 当前默认 accent 111
+// （deepseek 暗——Task 8 起出厂缺省字面）+ track dim 244。thumb/track 槽源已由
+// T18 接线（ember 同源钉 TestThemeScrollbar）——本钉为出厂缺省字面。
 func TestScrollbarDefaultAccent(t *testing.T) {
 	resetTheme(t)
 	m, _, _ := newTestModel(t)
 	m.transcriptState.vp.SetHeight(10)
 	m.transcriptState.wrappedLines = make([]string, 50) // 溢出 → thumb 在场
 	sb := m.scrollbarView()
-	if !strings.Contains(sb, "\x1b[38;5;173m") {
-		t.Fatalf("scrollbar thumb must pin the default accent 173:\n%q", sb)
+	if !strings.Contains(sb, "\x1b[38;5;111m") {
+		t.Fatalf("scrollbar thumb must pin the default accent 111:\n%q", sb)
 	}
 	if !strings.Contains(sb, "\x1b[38;5;244m") {
 		t.Fatalf("scrollbar track must take the dim slot:\n%q", sb)
@@ -222,10 +220,10 @@ func TestChromeSurfaceDress(t *testing.T) {
 			plainLine = line
 		}
 	}
-	if !strings.Contains(selLine, "\x1b[38;5;173m") {
+	if !strings.Contains(selLine, "\x1b[38;5;111m") {
 		t.Fatalf("selected item must take the accent slot:\n%q", selLine)
 	}
-	if strings.Contains(plainLine, "\x1b[38;5;173m") {
+	if strings.Contains(plainLine, "\x1b[38;5;111m") {
 		t.Fatalf("unselected item must not take accent:\n%q", plainLine)
 	}
 	// resume 选择器：surface1 底（bottomView 卡底合成）+ 选中行 accent、未选中
@@ -241,10 +239,10 @@ func TestChromeSurfaceDress(t *testing.T) {
 	selRow, plainRow := false, false
 	for _, line := range strings.Split(m.pickerView(), "\n") {
 		if strings.Contains(line, "s-aaaa") {
-			plainRow = !strings.Contains(line, "\x1b[38;5;173m")
+			plainRow = !strings.Contains(line, "\x1b[38;5;111m")
 		}
 		if strings.Contains(line, "s-bbbb") {
-			selRow = strings.Contains(line, "\x1b[38;5;173m")
+			selRow = strings.Contains(line, "\x1b[38;5;111m")
 		}
 	}
 	if !selRow || !plainRow {

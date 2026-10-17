@@ -232,7 +232,7 @@ func TestApprovalCardDress(t *testing.T) {
 	if !strings.Contains(card, "\x1b[48;5;235m") { // surface1 卡底
 		t.Fatalf("approval card must take the surface1 slot:\n%s", card)
 	}
-	if !strings.Contains(card, "\x1b[38;5;173m") { // accent 边框（既有机制）
+	if !strings.Contains(card, "\x1b[38;5;111m") { // accent 边框（deepseek 默认；既有机制）
 		t.Fatalf("approval card must keep the accent border:\n%s", card)
 	}
 	if !strings.Contains(card, "48;5;237") { // 键帽 surface3 底（lipgloss 合并序 fg;bg——无 ESC 前缀钉，TestStyleKeycap 同法）

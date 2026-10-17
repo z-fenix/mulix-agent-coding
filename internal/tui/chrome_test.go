@@ -32,14 +32,14 @@ func TestChromeBanner(t *testing.T) {
 func TestChromeBannerBG(t *testing.T) {
 	resetTheme(t)
 	line := bannerBlock{model: "claude-x"}.render(80)[0]
-	if !strings.Contains(line, "\x1b[38;5;173m") { // accent 槽（graphite 暗 256 出厂初值）
+	if !strings.Contains(line, "\x1b[38;5;111m") { // accent 槽（deepseek 暗 256 出厂初值）
 		t.Fatalf("banner must take the accent slot:\n%q", line)
 	}
 	painted := paintBG(line, 80)
 	if !strings.Contains(painted, "\x1b[48;5;234m") { // bg 槽整行铺底
 		t.Fatalf("banner line must be bg-painted at frame exit:\n%q", painted)
 	}
-	if !strings.Contains(painted, "\x1b[38;5;173m") { // accent 在重铺后存活
+	if !strings.Contains(painted, "\x1b[38;5;111m") { // accent 在重铺后存活
 		t.Fatalf("frame bg repaint must not clobber the accent fg:\n%q", painted)
 	}
 }

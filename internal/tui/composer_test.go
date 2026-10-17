@@ -233,11 +233,11 @@ func TestComposerWheelNesting(t *testing.T) {
 // ---- 编辑器换装（2026-10-17-dsh-tui-visual-redesign Task 7；设计 §6 编辑器 +
 // Task 3 Ruling 承接）----
 
-// TestComposerDress 钉：编辑器行 surface1 底（48;5;235——graphite 暗 256 出厂
-// 初值）+ ❯ accent（symPrompt，38;5;173）；bubbles textarea 组件默认样式清零
-// （CursorLine bg-0 → 无 ESC[40m、Prompt fg-7 → 无 ESC[37m——theme 无关清零，
-// 换装为本任务样式）；/theme 换肤后编辑器行重同步（ember accent 209——渲染
-// 路径现读 activeTheme，不经 theme.go 样式表）。
+// TestComposerDress 钉：编辑器行 surface1 底（48;5;235——dsh dark 板 256 手选，
+// 出厂初值）+ ❯ accent（symPrompt，38;5;111——deepseek 默认）；bubbles textarea
+// 组件默认样式清零（CursorLine bg-0 → 无 ESC[40m、Prompt fg-7 → 无 ESC[37m——
+// theme 无关清零，换装为本任务样式）；/theme 换肤后编辑器行重同步（ember
+// accent 209——渲染路径现读 activeTheme，不经 theme.go 样式表）。
 func TestComposerDress(t *testing.T) {
 	resetTheme(t)
 	m, _, _ := newTestModel(t)
@@ -258,7 +258,7 @@ func TestComposerDress(t *testing.T) {
 		t.Fatalf("editor row must take the surface1 slot:\n%q", row)
 	}
 	// 1 格内衬 + ❯ accent + 分隔空格（设计 §6 编辑器——内衬格在 accent 序之前）。
-	if !strings.Contains(row, " \x1b[38;5;173m"+symPrompt+" ") {
+	if !strings.Contains(row, " \x1b[38;5;111m"+symPrompt+" ") {
 		t.Fatalf("editor prompt must carry the 1-cell inset and accent slot:\n%q", row)
 	}
 	// Task 3 Ruling：组件默认样式清零——CursorLine bg-0 / Prompt fg-7 不得复活

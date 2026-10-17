@@ -179,7 +179,7 @@ func TestStreamingParagraphCommit(t *testing.T) {
 //	    token 着色（SGR+reset 包裹），内容混 ≥3 种色（轨 245 + ≥2 token
 //	    类），SGR 剥离后源码逐字无损；暗/亮主题输出不同（暗族 github-dark /
 //	    亮族 github——映射裁定见 markdown.go fenceChromaStyle 注记）；
-//	(b) 未知语言降级 accent 铺色——内容色只允许 accent(173)/轨(245)；
+//	(b) 未知语言降级 accent 铺色——内容色只允许 accent(111)/轨(244)；
 //	(c) nil 中性缺省保持 Task 7 单一样式契约（go 围栏同为 accent 铺色）；
 //	(d) 无色层（tierNone）围栏零 SGR——与 NO_COLOR 退避同路径，内容仍在。
 func TestFenceChromaHighlight(t *testing.T) {
@@ -193,7 +193,7 @@ func TestFenceChromaHighlight(t *testing.T) {
 		return set
 	}
 
-	// (a) 暗底主题（graphite 暗 · 确定性 256 层，与包级初值同源）
+	// (a) 暗底主题（deepseek 暗 · 确定性 256 层，与包级初值同源）
 	dark := defaultActiveTheme()
 	out := strings.Join(renderMarkdown(goFence, 80, &dark), "\n")
 	if !strings.Contains(out, "\x1b[38;5;") {
@@ -220,11 +220,11 @@ func TestFenceChromaHighlight(t *testing.T) {
 
 	// (b) 未知语言：降级 accent 铺色，不携带 chroma 内容色
 	outU := strings.Join(renderMarkdown("```notalang\nplain text\n```", 80, &dark), "\n")
-	if !strings.Contains(outU, "\x1b[38;5;173mplain text\x1b[0m") {
+	if !strings.Contains(outU, "\x1b[38;5;111mplain text\x1b[0m") { // deepseek 默认 accent
 		t.Fatalf("unknown language must degrade to accent fill:\n%q", outU)
 	}
 	for c := range distinct(outU) {
-		if c != "173" && c != "244" && c != "235" { // 235 = 围栏底 codeBlock 槽（Task 5）
+		if c != "111" && c != "244" && c != "235" { // 235 = 围栏底 codeBlock 槽（Task 5）
 			t.Fatalf("unknown-language fence must not carry chroma colors, got %s:\n%q", c, outU)
 		}
 	}

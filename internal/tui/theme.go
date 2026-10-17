@@ -16,10 +16,10 @@ import (
 // + 逐槽手选 256 色回退（不做距离降采样——暗色低晶度底色经距离塌缩成灰、丢
 // 失红绿语义，回退必须手选）+ 色彩层退避（真彩 hex / 256 手选 / NO_COLOR·dumb
 // 无色）与会话级 /theme 换肤的结构思路。adapted：
-//  1. 预设收敛（D8）——参考 8 组强调色 × 18 槽；本仓 4 强调色（graphite/
-//     ember/aurora/midnight）× 暗/亮两底，非强调槽取参考暗/亮双底板的对应槽
-//     （faint/err/warn/success/info/secondary/muted/userBubbleBG）。槽位为
-//     「渲染点实际消费 + 预留」最小集：accent/dim/red/yellow 已消费，
+//  1. 预设收敛（D8）——参考 8 组强调色 × 18 槽；本仓 5 强调色（deepseek/
+//     graphite/ember/aurora/midnight）× 暗/亮两底，非强调槽取参考暗/亮双底板
+//     的对应槽（faint/err/warn/success/info/secondary/muted/userBubbleBG）。
+//     槽位为「渲染点实际消费 + 预留」最小集：accent/dim/red/yellow 已消费，
 //     green/cyan/magenta/fg/bg 预留（diff 卡/选择高亮随后续任务）。
 //  2. 作用域——参考切换后持久化用户 config（persistTheme）；本仓会话级内存
 //     态，不写 config（D8：FR-014 未要求持久化，config 包本变更零改动）。
@@ -54,11 +54,14 @@ type accentPreset struct {
 	dark, light slotColor
 }
 
-// accentPresets 强调色预设表：暗色四组移植参考 themeStyles（graphite/ember/
-// aurora/midnight）；亮色变体取参考亮板同族强调色（graphite←sandstone、
-// ember←linen、midnight←porcelain），aurora 亮底无同族参考值、手选暗青
-// （#2f8a76 ≈ 256 色 65——手选纪律同参考 cliColor 注记）。
+// accentPresets 强调色预设表：deepseek 居首为出厂缺省（dsh dark 板品牌蓝
+// #7AAAFF/手选 111 · light 板 #4176E6/手选 69——FR-002，256 手选纪律同参考
+// cliColor 注记）；暗色四组移植参考 themeStyles（graphite/ember/aurora/
+// midnight）；亮色变体取参考亮板同族强调色（graphite←sandstone、ember←linen、
+// midnight←porcelain），aurora 亮底无同族参考值、手选暗青（#2f8a76 ≈ 256 色
+// 65——手选纪律同参考 cliColor 注记）。
 var accentPresets = []accentPreset{
+	{name: "deepseek", dark: slotColor{"#7AAAFF", 111}, light: slotColor{"#4176E6", 69}},
 	{name: "graphite", dark: slotColor{"#d97757", 173}, light: slotColor{"#c2613f", 173}},
 	{name: "ember", dark: slotColor{"#f06d38", 209}, light: slotColor{"#bd5d4d", 167}},
 	{name: "aurora", dark: slotColor{"#34c3a6", 79}, light: slotColor{"#2f8a76", 65}},
@@ -413,10 +416,11 @@ func themeCatalogList() string {
 	return strings.Join(names, " ")
 }
 
-// defaultThemeName 出厂缺省强调色（graphite 暗——参考默认主题同款）。
-const defaultThemeName = "graphite"
+// defaultThemeName 出厂缺省强调色（deepseek 暗——dsh 品牌蓝，FR-002 出厂
+// 默认主题呈现 dsh 身份）。
+const defaultThemeName = "deepseek"
 
-// defaultActiveTheme 出厂缺省主题：graphite 暗 · 确定性 256 层（不探测环境
+// defaultActiveTheme 出厂缺省主题：deepseek 暗 · 确定性 256 层（不探测环境
 // ——单测 SGR 钉点与包级初值同源；环境适配只在 Run 入口与 /theme 重建点生效，
 // 见 probeColorTier）。
 func defaultActiveTheme() theme {

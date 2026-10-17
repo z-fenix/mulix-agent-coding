@@ -12,19 +12,19 @@ import (
 
 // ---- 主题系统（023 FR-014/D8）----
 //
-// 钉点：4×2 预设齐全（手选 256 回退表逐值）、/theme 实时换肤（含已渲染块
+// 钉点：5×2 预设齐全（手选 256 回退表逐值）、/theme 实时换肤（含已渲染块
 // 重排换色）、NO_COLOR 退避无色、滚动条随主题。环境敏感点一律 t.Setenv 钉死；
 // 全局 activeTheme 的变更用后即还原（resetTheme）——后行测试（toolcard 等）
 // 依赖出厂缺省的确定性 256 层。
 
-// resetTheme 注册出厂缺省还原（确定性 256 层 graphite 暗——与环境探测无关，
+// resetTheme 注册出厂缺省还原（确定性 256 层 deepseek 暗——与环境探测无关，
 // 对照包级初值 defaultActiveTheme）。
 func resetTheme(t *testing.T) {
 	t.Helper()
 	t.Cleanup(func() { applyTheme(defaultActiveTheme()) })
 }
 
-// TestThemePresets 4×2 预设齐全：暗/亮归属与手选 256 回退表逐值钉死；显式
+// TestThemePresets 5×2 预设齐全：暗/亮归属与手选 256 回退表逐值钉死；显式
 // -dark 后缀等价裸名；未知名（含套娃后缀）不解析。
 func TestThemePresets(t *testing.T) {
 	t.Setenv("NO_COLOR", "")
@@ -34,10 +34,12 @@ func TestThemePresets(t *testing.T) {
 		dark        bool
 		accentValue string
 	}{
+		{"deepseek", true, "111"},
 		{"graphite", true, "173"},
 		{"ember", true, "209"},
 		{"aurora", true, "79"},
 		{"midnight", true, "141"},
+		{"deepseek-light", false, "69"},
 		{"graphite-light", false, "173"},
 		{"ember-light", false, "167"},
 		{"aurora-light", false, "65"},
@@ -65,9 +67,9 @@ func TestThemePresets(t *testing.T) {
 			}
 		}
 	}
-	// 暗色四强调色两两不同（预设表不得重复取值）。
+	// 暗色五强调色两两不同（预设表不得重复取值）。
 	seen := map[string]bool{}
-	for _, name := range []string{"graphite", "ember", "aurora", "midnight"} {
+	for _, name := range []string{"deepseek", "graphite", "ember", "aurora", "midnight"} {
 		th, _ := themeByName(name)
 		if seen[string(th.accentColor)] {
 			t.Fatalf("dark accent %q duplicated across presets", th.accentColor)
@@ -226,9 +228,8 @@ func TestStyleBubble(t *testing.T) {
 // ---- dsh 派生槽位（2026-10-17-dsh-tui-visual-redesign Task 1）----
 
 func TestDSHDarkSlots(t *testing.T) {
-	th := defaultActiveTheme() // graphite→本任务后仍为 graphite？否——Task 8 才换默认；此处钉槽位值
-	// 本任务后 defaultActiveTheme 仍返回旧默认 accent（Task 8 换 deepseek），
-	// 但全部槽位换 dsh 值：
+	th := defaultActiveTheme() // deepseek 暗（Task 8 起出厂缺省）；此处钉槽位值
+	// 非强调槽为 dsh dark 值（底板与强调色预设解耦——预设换值不牵动底板）：
 	assertSlot(t, th.bgColor, "234")
 	assertSlot(t, th.surface1Color, "235")
 	assertSlot(t, th.surface2Color, "236")
@@ -246,7 +247,39 @@ func TestDSHDarkSlots(t *testing.T) {
 	assertSlot(t, th.greenColor, "114")  // green-400 #4ED17E（FR-003 状态语义色）
 	assertSlot(t, th.yellowColor, "214") // amber-400 #F7AD31
 	assertSlot(t, th.redColor, "203")    // red-400 #F25A5A
-	assertSlot(t, th.accentColor, "173") // graphite accent 不变（Task 8 换默认）
+	assertSlot(t, th.accentColor, "111") // deepseek 默认 accent（Task 8 换默认）
+}
+
+// ---- deepseek 出厂缺省（2026-10-17-dsh-tui-visual-redesign Task 8）----
+
+// TestDeepseekDefault 钉：出厂缺省 = deepseek 暗（FR-002——dsh dark 板品牌蓝
+// #7AAAFF 手选 111）；deepseek/deepseek-light 预设解析（light 板 #4176E6 手选
+// 69）；目录程序化生成且 deepseek 对居首。
+func TestDeepseekDefault(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	t.Setenv("COLORTERM", "") // 钉 256 层——手选回退逐值断言
+	th := defaultActiveTheme()
+	if th.name != "deepseek" || !th.dark {
+		t.Fatalf("default theme = (name %q dark %v), want deepseek dark", th.name, th.dark)
+	}
+	assertSlot(t, th.accentColor, "111")
+	for _, want := range []struct{ name, accent string }{
+		{"deepseek", "111"},
+		{"deepseek-light", "69"},
+	} {
+		got, ok := themeByName(want.name)
+		if !ok {
+			t.Fatalf("preset %s must resolve", want.name)
+		}
+		if got.name != want.name {
+			t.Fatalf("preset %s resolved as %q", want.name, got.name)
+		}
+		assertSlot(t, got.accentColor, want.accent)
+	}
+	fields := strings.Fields(themeCatalogList())
+	if len(fields) < 4 || fields[0] != "deepseek" || fields[1] != "deepseek-light" {
+		t.Fatalf("catalog must lead with the deepseek pair, got %q", themeCatalogList())
+	}
 }
 
 // ---- dsh light 派生槽位（2026-10-17-dsh-tui-visual-redesign Task 2）----
