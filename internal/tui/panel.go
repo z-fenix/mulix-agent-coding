@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"mulix/internal/event"
+	"mulix/internal/subagent"
 )
 
 // ---- 右栏面板（2026-10-17-dsh-tui-visual-redesign Task 12；设计 §6 面板页签）----
@@ -35,17 +36,29 @@ const (
 var panelTabLabels = []string{"变更", "代理", "诊断", "缓存"}
 
 // panelState 面板状态：open 开合（**newTuiModel 显式置 true**——Go 零值 false
-// 不可用；Task 11 的平铺 panelOpen 已收编此字段，单源无双源）；focus 聚焦
-// （Task 15/17 接线）；tab 当前页签；sel 页签内选中游标（Task 14/15）；
-// previewPath diff 预览路径与 scroll 预览滚动（Task 14——取窗钳位见
-// changesTabView，按键驱动归 Task 17 焦点全模型）。
+// 不可用；Task 11 的平铺 panelOpen 已收编此字段，单源无双源）；tab 当前页签；
+// sel 变更页签选中游标（Task 14）；agentsSel agents 页签选中游标（Task 15
+// ——旧模态 agentsSel 收编：上界止步、下界渲染/取消钳位，旧语义）；previewPath
+// diff 预览路径与 scroll 预览滚动（Task 14——取窗钳位见 changesTabView，按键
+// 驱动归 Task 17 焦点全模型）。聚焦判定走 focusZone（m.focus==focusPanel，
+// Task 14 最小焦点形——无面板侧 focus 位，单源无双源）。
 type panelState struct {
 	open        bool
-	focus       bool
 	tab         panelTab
 	sel         int
+	agentsSel   int
 	previewPath string
 	scroll      int
+}
+
+// agentsTabInteractive agents 页签交互态（Task 15 收编口径——brief 钉定谓词，
+// 门禁单源共用：handleKey 独占分支、Ctrl+C 逃生口、composerCursor、statusMode、
+// modalOpen（滚轮/手势/点选拖选）与 handlePaste——一谓词不两写）。范围与旧
+// /agents 模态一致：交互期 composer 冻结（键/粘贴不达编辑器、光标隐藏）、
+// 转写手势冻结。无宽度项：进入交互的 /agents 路径设 W<130 守卫（进不去），
+// 收窄后的残焦沿用旧模态全宽冻结语义（可见性对账归 Task 17）。
+func (m *tuiModel) agentsTabInteractive() bool {
+	return m.panel.open && m.focus == focusPanel && m.panel.tab == tabAgents
 }
 
 // capturePendingAnchor 开合重排前的显式锚点捕获（评审 Issue 4）：同宽开合不
@@ -96,9 +109,10 @@ func (m *tuiModel) cyclePanelTab() {
 }
 
 // panelView 面板列视图（宽 w = columnWidths 的 panel 档，32）：页签行 →
-// border 色分隔线 → 当前页签内容区（变更页签 = 聚合条目视图——Task 14；其余
-// 页签空态指引，Task 15/16 逐签换内容）。页签行四签并排（22 显示列 ≤ 32）；
-// 内容行 clampWidth 收口列宽——超宽行不得撑破面板列。
+// border 色分隔线 → 当前页签内容区（变更页签 = 聚合条目视图——Task 14；agents
+// 页签 = 旧模态列表收编——Task 15；doctor/cache 空态指引，Task 16 逐签换内容）。
+// 页签行四签并排（22 显示列 ≤ 32）；内容行 clampWidth 收口列宽——超宽行不得
+// 撑破面板列。
 func (m *tuiModel) panelView(width int) string {
 	var b strings.Builder
 	// 页签行：active 段 = accent fg + SGR 4 下划线合成单条 SGR（panelTabActive
@@ -116,9 +130,12 @@ func (m *tuiModel) panelView(width int) string {
 	b.WriteString("\n")
 	b.WriteString(sgrWrap(sgrFg(activeTheme.borderColor), strings.Repeat("─", width)))
 	b.WriteString("\n")
-	if m.panel.tab == tabChanges {
+	switch m.panel.tab {
+	case tabChanges:
 		b.WriteString(m.changesTabView(width))
-	} else {
+	case tabAgents:
+		b.WriteString(m.agentsTabView(width))
+	default:
 		b.WriteString(panelEmptyState(m.panel.tab, width))
 	}
 	return b.String()
@@ -137,14 +154,13 @@ func panelTabActive(s string) string {
 // panelEmptyState 页签空态指引（spec Edge Cases：空态给文案不渲染空白框）：
 // 首行状态、次行行动指引（doctor/cache 指引含命令字面——「/doctor 命令运行」
 // 口径）。两行显式拆分不走自动换行——CJK 换行点不可预测会劈开断言字面；行宽
-// 均 ≤ 面板列 32，clampWidth 兜底。各页签内容 Task 14–16 接线后替换。
+// 均 ≤ 面板列 32，clampWidth 兜底。变更/agents 页签自带内容视图（Task 14/15
+// 各自的空态分支），不走本表；doctor/cache Task 16 接线后替换。
 func panelEmptyState(tab panelTab, width int) string {
 	var lines []string
 	switch tab {
 	case tabChanges:
 		lines = []string{"暂无变更文件", "写类工具变更后在此汇总"}
-	case tabAgents:
-		lines = []string{"暂无子代理", "委派启动后在此呈现"}
 	case tabDoctor:
 		lines = []string{"暂无诊断结果", "/doctor 命令运行检查"}
 	case tabCache:
@@ -342,4 +358,77 @@ func (m *tuiModel) togglePanelPreview() {
 		m.panel.previewPath = path
 	}
 	m.panel.scroll = 0
+}
+
+// ---- agents 页签（2026-10-17-dsh-tui-visual-redesign Task 15）----
+//
+// 旧 /agents 模态（M12/T12.4 bottomView 卡）收编进面板页签：列表（id | 状态 |
+// 任务 | 深度）与 ↑/↓ 选择、c 取消语义平移（键路由见 model.go handleAgentsKey
+// ——独占分支，收编口径 agentsTabInteractive）；「agentsOpen」独占模态字段退役
+// （bottomView 卡随之移除——面板即列）。取消治理路径 agentsCancelCmd 不变。
+
+// agentsTabHint agents 页签键位提示（旧模态文案平移；esc 由「关闭」改「返回」
+// ——页签模型下 Esc 退出交互不关面板，关闭归 /agents toggle / F2）。
+const agentsTabHint = "[↑/↓] 选择  [c] 取消  [esc] 返回"
+
+// agentsTabView agents 页签内容（Task 15——旧 agentsPanelView 平移）：表头
+// （ID | 状态 | 任务 | 深度——列格式保持，列名由表头承载、行载值：旧 46 显示
+// 列行在 32 列钳位会劈掉深度列）+ 列表行 + 键位提示。数据源 = mgr.List() 实时
+// 快照；游标渲染钳位与旧模态一致（↑ 止于 0、↓ 无界由渲染/取消钳位拉回）。
+// 行预算 = m.height−panelChromeRows（表头/提示行恒保留，超出截断——面板列
+// panelColumn 的高度收口再兜一道）。子代理未接线（ctrl/工厂缺席——/agents 开
+// 启路径已拦，此处为换绑后防御与直渲口径）给「子代理未启用」空态。
+func (m *tuiModel) agentsTabView(width int) string {
+	var mgr *subagent.Manager
+	if m.ctrl != nil {
+		mgr = m.ctrl.Subagent()
+	}
+	if mgr == nil {
+		return activeTheme.dim(clampWidth("子代理未启用", width)) + "\n" +
+			activeTheme.dim(clampWidth("[esc] 返回", width))
+	}
+	infos := mgr.List()
+	if len(infos) == 0 {
+		return activeTheme.dim(clampWidth("暂无子代理", width)) + "\n" +
+			activeTheme.dim(clampWidth(agentsTabHint, width))
+	}
+	if m.panel.agentsSel >= len(infos) {
+		m.panel.agentsSel = len(infos) - 1
+	}
+	if m.panel.agentsSel < 0 {
+		m.panel.agentsSel = 0
+	}
+	budget := max(m.height-panelChromeRows, 1)
+	var b strings.Builder
+	b.WriteString(activeTheme.dim(clampWidth("ID | 状态 | 任务 | 深度", width)) + "\n")
+	budget--
+	for i, in := range infos {
+		if budget <= 1 { // 1 = 键位提示行预算（提示行恒可见）
+			break
+		}
+		b.WriteString(m.agentsTabRow(width, in, i == m.panel.agentsSel) + "\n")
+		budget--
+	}
+	b.WriteString(activeTheme.dim(clampWidth(agentsTabHint, width)))
+	return b.String()
+}
+
+// agentsTabRow agents 列表行（Task 15）：id | 状态 | 任务 | 深度。selected
+// 行 surface2 整行高亮 = sidebarSelWrap 同槽（pad 先行铺满列宽——Task 14
+// changeEntryRow 同法；旧 ▸ 标记退役，sel 凭据 = 整行底色，无色层退化平文）。
+// 任务列取窗钳位：行宽 = 前缀 + 任务(钳) + 尾列，深度列恒可见；任务为空给
+// 「—」占位（列结构不塌）；行尾 clampWidth 兜底（深度位数异常等）。
+func (m *tuiModel) agentsTabRow(width int, in subagent.Info, selected bool) string {
+	prefix := shortID(in.SubSessionID) + " | " + string(in.Status) + " | "
+	tail := " | " + strconv.Itoa(in.Depth)
+	task := in.Task
+	if task == "" {
+		task = "—"
+	}
+	budget := width - ansi.StringWidth(prefix) - ansi.StringWidth(tail)
+	row := clampWidth(prefix+clampWidth(task, budget)+tail, width)
+	if !selected {
+		return row
+	}
+	return sidebarSelWrap(padToWidth(row, width))
 }

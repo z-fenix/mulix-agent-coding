@@ -259,12 +259,14 @@ func (m *tuiModel) setComposerValue(s string) {
 // 周期随编辑器逐键同步：删除或改坏即剪除账目，正文不残留、提交不复活。
 
 // handlePaste bracketed paste 入口（Update 路由 tea.PasteMsg）：治理独占态
-// （审批卡 / agents 面板 / /resume 选择器）composer 冻结——粘贴不泄漏（与
-// handleKey 同门禁）；达折叠阈值折叠为可删记号，低于阈值原文直插（textarea
-// 原生粘贴路径）。回合进行中不设门禁——忙期起草下一条输入与键入同权。粘贴
-// 后补全菜单随值重过滤（FR-009——粘贴 "/" 起头短文本重开菜单，词界粘贴收口）。
+// （审批卡 / agents 页签交互态 / /resume 选择器——Task 15 收编口径
+// agentsTabInteractive，与 modalOpen 手势冻结同谓词）composer 冻结——粘贴不
+// 泄漏（与 handleKey 同门禁）；达折叠阈值折叠为可删记号，低于阈值原文直插
+// （textarea 原生粘贴路径）。回合进行中不设门禁——忙期起草下一条输入与键入
+// 同权。粘贴后补全菜单随值重过滤（FR-009——粘贴 "/" 起头短文本重开菜单，词界
+// 粘贴收口）。
 func (m *tuiModel) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
-	if m.approval != nil || m.agentsOpen || m.picker != nil {
+	if m.approval != nil || m.agentsTabInteractive() || m.picker != nil {
 		return m, nil
 	}
 	if shouldFoldPaste(msg.Content) {

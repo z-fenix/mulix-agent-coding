@@ -189,3 +189,25 @@ func TestStatusBarDress(t *testing.T) {
 		t.Fatalf("FAILED badge must take red:\n%q", r1)
 	}
 }
+
+// TestStatusModeAgentsTab 钉（Task 15 收编——brief statusMode 文案）：agents
+// 页签交互态（收编口径 agentsTabInteractive）→「agents 页签」；审批在场优先
+// （statusMode 治理独占序——审批 > agents 页签，与 handleKey 独占层级一致）；
+// 退出交互回落「空闲」。
+func TestStatusModeAgentsTab(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.panel.tab = tabAgents
+	m.focus = focusPanel
+	if got := m.statusMode(); got != "agents 页签" {
+		t.Fatalf("statusMode = %q, want agents 页签", got)
+	}
+	m = update(t, m, tuiEvent{ev: event.ApprovalRequestEvent{ToolUseID: "t1", Tool: "Bash"}})
+	if got := m.statusMode(); got != "审批中" {
+		t.Fatalf("statusMode with approval = %q, want 审批中（审批优先）", got)
+	}
+	m = update(t, m, keyPress('a')) // 审批放行收口
+	m.focus = focusMain
+	if got := m.statusMode(); got != "空闲" {
+		t.Fatalf("statusMode after exit = %q, want 空闲", got)
+	}
+}

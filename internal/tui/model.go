@@ -74,13 +74,12 @@ type tuiModel struct {
 	approval *approvalCard // 非 nil = 审批态（与渲染态互斥：composer 冻结）
 	running  bool          // 回合进行中（异步 Submit——Update 循环保持响应）
 	swapping bool          // 换绑进行中（/new /resume 异步——与 running 同门禁语义）
-	// /agents 面板（M12/T12.4）：列表态独占 composer；agentsSel 是选中行。
-	agentsOpen bool
-	agentsSel  int
 	// 侧栏/面板列开合（dsh 三列布局）：缺省 true（设计裁定：默认三栏常开；
 	// newTuiModel 显式置位——Go 零值 false 不可用）。sidebarOpen F3 键位与
 	// 守卫见 sidebar.go；面板开合与页签见 panel.go（Task 12——Task 11 的平铺
-	// panelOpen 已收编 panelState.open，单源无双源）。
+	// panelOpen 已收编 panelState.open，单源无双源；agents 模态 agentsOpen 已
+	// 于 Task 15 收编 panelState（agentsSel 游标）+ agentsTabInteractive 口径，
+	// 平铺字段退役）。
 	sidebarOpen bool
 	// sidebar 侧栏状态（Task 11）：sel 选中游标（聚焦侧栏时 ↑/↓ 环绕移动）；
 	// sessions 清单快照（Task 13 接 Options.ListSessions——打开沿/构造/换绑
@@ -89,9 +88,10 @@ type tuiModel struct {
 	// focus 键盘焦点域（Task 13 最小焦点形——focusZone 注释；F6 轮换见
 	// cycleFocus，Esc 取焦档见 keys.go handleEscapeKey；Task 17 扩展）。
 	focus focusZone
-	// panel 面板状态（Task 12）：open 开合（newTuiModel 显式缺省 true）；focus
-	// 聚焦（Task 15/17 接线）；tab 当前页签；sel 页签内选中游标（Task 14/15）；
-	// previewPath diff 预览路径与 scroll 预览滚动（Task 14）。
+	// panel 面板状态（Task 12）：open 开合（newTuiModel 显式缺省 true）；tab
+	// 当前页签；sel 变更页签选中游标（Task 14）；agentsSel agents 页签选中游
+	// 标（Task 15——旧模态 agentsSel 收编）；previewPath diff 预览路径与
+	// scroll 预览滚动（Task 14）。
 	panel panelState
 	// 补全菜单 + /resume 选择器（023 FR-009）：complete 是 composer 邻接浮层
 	//（非独占——编辑继续，导航/补全键拦截见 complete.go）；picker 是列表态
@@ -761,16 +761,17 @@ func (m *tuiModel) commitAnswerBlock(b assistantBlock) {
 	m.answerIdx = len(m.transcriptState.blocks) - 1
 }
 
-// handleKey 键盘路由。Ctrl+C 优先：治理独占态（审批卡 / /agents 面板 /
-// /resume 选择器）单击退出（Minor-4 逃生口——独占态不可困死用户），渲染态走
+// handleKey 键盘路由。Ctrl+C 优先：治理独占态（审批卡 / agents 页签交互态
+// / /resume 选择器）单击退出（Minor-4 逃生口——独占态不可困死用户），渲染态走
 // 双击阶梯（keys.go handleCtrlCKey）；审批态只响应审批键（审批态/渲染态互斥
-// ——composer 冻结，键位见 approval.go handleApprovalKey，023 D11）；/agents
-// 列表态与 /resume 选择器独占 composer（同级互斥）；补全菜单为 composer 邻接
-// 浮层（非独占——导航/补全键拦截，其余键落编辑器）；渲染态滚动手势、输入、
-// Esc 阶梯（keys.go handleEscapeKey）与提交。
+// ——composer 冻结，键位见 approval.go handleApprovalKey，023 D11）；agents
+// 页签交互态（Task 15 收编口径 agentsTabInteractive）与 /resume 选择器独占
+// composer（同级互斥）；补全菜单为 composer 邻接浮层（非独占——导航/补全键拦
+// 截，其余键落编辑器）；渲染态滚动手势、输入、Esc 阶梯（keys.go
+// handleEscapeKey）与提交。
 func (m *tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.Code == 'c' && msg.Mod&tea.ModCtrl != 0 { // Contains(0) 恒真——不能用作零 Mod 判定
-		if m.approval != nil || m.agentsOpen || m.picker != nil {
+		if m.approval != nil || m.agentsTabInteractive() || m.picker != nil {
 			return m, tea.Quit
 		}
 		return m, m.handleCtrlCKey()
@@ -781,7 +782,7 @@ func (m *tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.approval != nil { // 审批独占态（键位与参数摘要见 approval.go，023 D11）
 		return m.handleApprovalKey(msg)
 	}
-	if m.agentsOpen { // /agents 列表态独占 composer（与审批态同级互斥）
+	if m.agentsTabInteractive() { // agents 页签交互态独占 composer（Task 15 收编——旧模态同级互斥口径）
 		return m.handleAgentsKey(msg)
 	}
 	if m.picker != nil { // /resume 选择器（列表态独占 composer，023 FR-009）
@@ -815,8 +816,9 @@ func (m *tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// 面板聚焦键路由（Task 14 最小焦点形）：focus==focusPanel 且面板可见
 	//（开 + 宽档——侧栏同款双保险：关沿重置为主，几何退化/残值兜底）且页签
 	// 为变更时 ↑/↓/Enter 交面板（条目游标/预览开合），其余键照常落 composer
-	// ——数字与文本键永不劫持（与侧栏同口径）；其余页签本任务无键位（agents/
-	// doctor/cache 归 Task 15/16 接线）。补全菜单在场时其导航优先（上方分支）。
+	// ——数字与文本键永不劫持（与侧栏同口径）；其余页签不走本路由（agents
+	// 交互态由上方独占分支接管——Task 15 收编口径；doctor/cache 归 Task 16）。
+	// 补全菜单在场时其导航优先（上方分支）。
 	if m.focus == focusPanel && m.panel.open && m.width >= 130 && m.panel.tab == tabChanges {
 		switch msg.Code {
 		case tea.KeyUp:
@@ -975,7 +977,7 @@ func (m *tuiModel) slash(line string) tea.Cmd {
 	case "/rewind":
 		m.appendLine("[rewind] 引擎 checkpoint 透传随 T32 真实引擎联调落地")
 	case "/agents":
-		return m.openAgentsPanel()
+		return m.agentsCommand() // Task 15 收编：面板 agents 页签开合/聚焦
 	case "/new":
 		return m.swapSession("")
 	case "/resume":
@@ -1012,11 +1014,17 @@ func (m *tuiModel) themeCommand(fields []string) tea.Cmd {
 	return nil
 }
 
-// ---- /agents 面板（M12/T12.4：子代理列表视图 + c 取消） ----
+// ---- /agents 面板页签（M12/T12.4 → Task 15 收编：子代理列表视图 + c 取消）----
 
-// openAgentsPanel 打开 /agents 面板：子会话 id/状态/任务/深度 列表视图。
-// 编排器未接线（ctrl.Subagent() == nil）→ 命令提示未启用，不进入面板态。
-func (m *tuiModel) openAgentsPanel() tea.Cmd {
+// agentsCommand /agents 命令（Task 15 收编——旧 openAgentsPanel 平移）：子代
+// 理未接线 → 留痕拒绝（旧文案优先级保持——接线检查先于宽度守卫）；W<130 →
+// 留痕拒绝「面板需 ≥130 列」（F2/F4 守卫同族——面板列不可见时进交互会困死键
+// 入，静默会让人以为已打开）；面板已开且在 agents 页签 → 关闭（toggle——
+// brief「保留 toggle 语义」，走 togglePanel：锚点捕获/焦点失效重置/composer
+// 重排内建）；面板未开 → togglePanel 开启后切 agents 页签、聚焦、游标归零；
+// 面板已开在其他页签 → 仅切页签聚焦（无几何变化，无锚点/重排）。交互期命令
+// 行不可达（独占分支吞键），toggle 关沿必为非交互态。
+func (m *tuiModel) agentsCommand() tea.Cmd {
 	if m.ctrl == nil {
 		m.appendLine("[agents] 子代理未启用")
 		return nil
@@ -1025,39 +1033,54 @@ func (m *tuiModel) openAgentsPanel() tea.Cmd {
 		m.appendLine("[agents] 子代理未启用（会话未接线子代理工厂）")
 		return nil
 	}
-	m.agentsOpen = true
-	m.agentsSel = 0
+	if m.width < 130 {
+		m.appendLine("[面板] 面板需 ≥130 列")
+		return nil
+	}
+	if m.panel.open && m.panel.tab == tabAgents {
+		return m.togglePanel()
+	}
+	if !m.panel.open {
+		m.togglePanel() // 宽档已保证——开启沿必生效（锚点捕获/重排内建）
+	}
+	m.panel.tab = tabAgents
+	m.panel.agentsSel = 0
+	m.focus = focusPanel
 	return nil
 }
 
-// handleAgentsKey /agents 面板键位（列表态独占 composer）：↑/↓ 选择、c 取消
-// 选中运行中子代理（异步——T28 Critical-1 同款，Update 内不阻塞）、esc/q
-// 关闭。审批卡仍优先（handleKey 前置分支）。
+// handleAgentsKey agents 页签键位（Task 15——旧模态键位语义平移；独占分支在
+// handleKey 前置，全部按键在此消费——composer 冻结）：↑/↓ 选择（上界止步，
+// 下界无界由渲染/取消钳位拉回——旧语义）、c 取消选中运行中子代理（异步
+// agentsCancelCmd 路径不变——T28 Critical-1 同款，Update 内不阻塞；取消保游
+// 标）、Esc/q 退出页签交互（焦点回主列；面板不关——关闭归 /agents toggle /
+// F2，brief Esc 口径；q 为旧模态关闭键的平移落点）。审批卡仍优先（handleKey
+// 前置分支）。
 func (m *tuiModel) handleAgentsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case msg.Code == tea.KeyEscape || msg.Code == 'q':
-		m.agentsOpen = false
+		m.focus = focusMain
 		return m, nil
 	case msg.Code == tea.KeyUp:
-		if m.agentsSel > 0 {
-			m.agentsSel--
+		if m.panel.agentsSel > 0 {
+			m.panel.agentsSel--
 		}
 	case msg.Code == tea.KeyDown:
-		m.agentsSel++
+		m.panel.agentsSel++
 	case msg.Code == 'c':
 		mgr := m.ctrl.Subagent()
-		if mgr == nil { // 面板打开期间编排器不会消失；防御性收口
-			m.agentsOpen = false
+		if mgr == nil { // 交互期编排器不会消失（开启沿已拦）；防御性收口=退出交互
+			m.focus = focusMain
 			return m, nil
 		}
 		infos := mgr.List()
 		if len(infos) == 0 {
 			return m, nil
 		}
-		if m.agentsSel >= len(infos) {
-			m.agentsSel = len(infos) - 1
+		if m.panel.agentsSel >= len(infos) {
+			m.panel.agentsSel = len(infos) - 1
 		}
-		sel := infos[m.agentsSel]
+		sel := infos[m.panel.agentsSel]
 		if sel.Status != subagent.StatusRunning {
 			m.appendLine("[agents] 仅运行中的子代理可取消（当前 " + string(sel.Status) + "）")
 			return m, nil
@@ -1067,45 +1090,15 @@ func (m *tuiModel) handleAgentsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// agentsCancelDoneMsg 是 /agents 面板的取消回执（异步；成功态由列表刷新呈现）。
+// agentsCancelDoneMsg 是 agents 页签的取消回执（异步；成功态由列表刷新呈现）。
 type agentsCancelDoneMsg struct{ err error }
 
-// agentsCancelCmd 异步取消一个子代理（用户经面板触发）。
+// agentsCancelCmd 异步取消一个子代理（用户经 agents 页签触发——治理路径，
+// Task 15 自旧模态原样平移）。
 func agentsCancelCmd(mgr *subagent.Manager, subID string) tea.Cmd {
 	return func() tea.Msg {
 		return agentsCancelDoneMsg{err: mgr.Cancel(context.Background(), subID, "user:/agents")}
 	}
-}
-
-// agentsPanelView 渲染 /agents 面板（列表：id | 状态 | 任务 | 深度；选中行
-// 标记；无子代理给空态）。数据源 = mgr.List() 实时快照。
-func (m *tuiModel) agentsPanelView() string {
-	var b strings.Builder
-	mgr := m.ctrl.Subagent()
-	if mgr == nil {
-		return "子代理未启用\n[esc] 关闭\n"
-	}
-	infos := mgr.List()
-	if len(infos) == 0 {
-		return "暂无子代理\n[↑/↓] 选择  [c] 取消  [esc] 关闭\n"
-	}
-	if m.agentsSel >= len(infos) {
-		m.agentsSel = len(infos) - 1
-	}
-	if m.agentsSel < 0 {
-		m.agentsSel = 0
-	}
-	b.WriteString("子代理（ID | 状态 | 任务 | 深度）\n")
-	for i, in := range infos {
-		marker := "  "
-		if i == m.agentsSel {
-			marker = "▸ "
-		}
-		b.WriteString(fmt.Sprintf("%s%-14s | %-9s | %s | 深度 %d\n",
-			marker, shortID(in.SubSessionID), string(in.Status), in.Task, in.Depth))
-	}
-	b.WriteString("[↑/↓] 选择  [c] 取消选中  [esc] 关闭\n")
-	return b.String()
 }
 
 // doctorCmd 异步执行 doctor 检查（T29 评审 I-1）——回执 doctorDoneMsg。
@@ -1166,7 +1159,8 @@ func (m *tuiModel) View() tea.View {
 	//（hover 无消费方；对照参考同用 CellMotion）。
 	v.MouseMode = tea.MouseModeCellMotion
 	// 真实终端光标（023 D12：光标落点即输入点，IME 候选窗锚定）——治理独占态
-	// （审批卡/agents 面板）不渲染 composer，光标一并隐藏。
+	// 光标隐藏（composerCursor：审批卡/选择器不渲染 composer；agents 页签交互
+	// 态渲染但冻结，光标一并隐藏——Task 15）。
 	if c := m.composerCursor(); c != nil {
 		v.Cursor = c
 	}
@@ -1175,10 +1169,11 @@ func (m *tuiModel) View() tea.View {
 
 // composerCursor 真实终端光标的帧坐标（023 D12）：textarea.Cursor 相对编辑器
 // 视图定位；换算到帧坐标——编辑器驻底部固定区（补全菜单在其上方，023 FR-009
-// ——行偏移 = H − 底部区行数 + 菜单行数，下限 1）。治理独占态（审批卡
-// /agents 面板//resume 选择器）不渲染 composer，光标一并隐藏。
+// ——行偏移 = H − 底部区行数 + 菜单行数，下限 1）。治理独占态（审批卡/agents
+// 页签交互态//resume 选择器——Task 15 收编口径）光标一并隐藏：交互期编辑器
+// 冻结（键/粘贴不达），可见光标会邀请输入。
 func (m *tuiModel) composerCursor() *tea.Cursor {
-	if m.approval != nil || m.agentsOpen || m.picker != nil {
+	if m.approval != nil || m.agentsTabInteractive() || m.picker != nil {
 		return nil
 	}
 	c := m.composerState.ta.Cursor()

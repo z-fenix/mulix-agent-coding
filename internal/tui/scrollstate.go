@@ -60,12 +60,15 @@ func (m *tuiModel) shouldFollowTail() bool {
 	return m.scrollState.mode == scrollFollowTail || m.scrollState.forceGotoBottom
 }
 
-// modalOpen 为「抢占底部行数（或整个主区）的面板」激活时的真值。height-only
-// 布局变化不得据此标记 userScrolled（对照参考 scroll_state.go:45-58）。豁免集
-// ：授权卡 + /agents 面板 + /resume 选择器 + 补全菜单（023 FR-009 Task 15 增入
-// ——菜单/选择器都抬高底部区；菜单虽非独占态，同属 height-only 开合）。
+// modalOpen 为「抢占底部行数（或整个主区）的面板」或「agents 页签交互态」激
+// 活时的真值。height-only 布局变化不得据此标记 userScrolled（对照参考
+// scroll_state.go:45-58）。豁免集：授权卡 + agents 页签交互（Task 15 收编口径
+// agentsTabInteractive——旧模态「滚轮冻结」语义平移：交互期滚轮/翻页/点选拖
+// 选一并冻结，范围与旧模态一致；页签交互不再改底部区高度，此处承载的是手势
+// 门禁）+ /resume 选择器 + 补全菜单（023 FR-009 Task 15 增入——菜单/选择器都
+// 抬高底部区；菜单虽非独占态，同属 height-only 开合）。
 func (m *tuiModel) modalOpen() bool {
-	return m.approval != nil || m.agentsOpen || m.picker != nil || m.completeOpen()
+	return m.approval != nil || m.agentsTabInteractive() || m.picker != nil || m.completeOpen()
 }
 
 // syncScrollModeAfterGesture 在主动滚动命令后按当前视口位置归位跟随态：落在

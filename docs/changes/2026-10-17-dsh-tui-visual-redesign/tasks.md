@@ -336,11 +336,11 @@ func TestNoColorFrameStructure(t *testing.T) {
 - Consumes: Task 12 panelState；toolCard 的 `tool/diff/state/arg` 字段（toolcard.go）。
 - Produces: **聚合缓存制**（评审 Issue 3 修正：换绑不重置转写块流——model.go:256-287 只清 thinking/answer/cancel，块流持久是现行为且属 023 钉定语义，本变更不改）：`type changeEntry struct { path string; added, deleted int; card *toolCard }`；model 增 `changes []changeEntry` 缓存——工具卡收口处（ToolResultEvent 关卡 upsert 点）对写类 done 卡增量维护（按 path upsert、+/− 累计，计数口径与 renderDiff 同源），**swapDoneMsg 处理时清空 `m.changes`**（面板聚合态归零，转写不动）；`func (m *tuiModel) collectChanges() []changeEntry` = 读缓存；变更 tab 渲染条目行（path + `+n` green `−m` red）、↑/↓ 选中 surface2 高亮、Enter 展开/收起 previewPath 的 renderDiff 预览（面板内滚动）；`TestSwapResetsChangesPanel`：桩 swapDoneMsg 后 collectChanges 为空（Review Focus 5 钉点——聚合缓存清空，不触碰转写）。
 
-- [ ] **Step 1: Write the failing test** — 桩收口路径（ToolResultEvent 关卡）：2 个不同 path 的 done Edit 卡 + 1 个运行中卡 + 1 个失败卡 → collectChanges 恰 2 条目且计数正确；同 path 两卡累计；渲染行断言；Enter 预览开合；swapDoneMsg 清缓存断言。
-- [ ] **Step 2: verify RED**。Expected: FAIL。
-- [ ] **Step 3: Implement**。
-- [ ] **Step 4: verify GREEN**。Expected: PASS。
-- [ ] **Step 5: 门禁 + commit** — `feat(tui): 变更面板——会话级写类聚合与 diff 预览`。
+- [X] **Step 1: Write the failing test** — 桩收口路径（ToolResultEvent 关卡）：2 个不同 path 的 done Edit 卡 + 1 个运行中卡 + 1 个失败卡 → collectChanges 恰 2 条目且计数正确；同 path 两卡累计；渲染行断言；Enter 预览开合；swapDoneMsg 清缓存断言。
+- [X] **Step 2: verify RED**。Expected: FAIL。
+- [X] **Step 3: Implement**。
+- [X] **Step 4: verify GREEN**。Expected: PASS。
+- [X] **Step 5: 门禁 + commit** — `feat(tui): 变更面板——会话级写类聚合与 diff 预览`。
 
 ## Task 15: agents tab 收编
 
@@ -352,11 +352,11 @@ func TestNoColorFrameStructure(t *testing.T) {
 - Consumes: Task 12 面板骨架；`agentsPanelView()` 内容生成逻辑（model.go:960）；`mgr.List()/Subagent()`。
 - Produces: agents tab 内容 = 旧模态列表（id|状态|任务|深度）+ ↑/↓ 选择 + c 取消（键位语义平移——聚焦面板 agents tab 时路由同旧 handleAgentsKey）；`agentsOpen` 字段删除，四处引用收编——bottomView switch 收窄为 授权卡/选择器/编辑器；statusMode 聚焦 agents tab 时「agents 页签」；**modalOpen()（scrollstate.go:68 门禁滚轮/手势）与 handlePaste 独占门禁（composer.go:227）同一收编口径 = `panel.open && panel.focus && panel.tab == tabAgents`**（粘贴不泄漏与滚轮不泄漏是同一独占语义的两条门禁，等价独占：composer 冻结、滚轮冻结，范围与旧模态一致）；/agents 命令 = 打开面板（W≥130 守卫外放行）+ 切 agents tab + 聚焦。
 
-- [ ] **Step 1: Write the failing test** — 既有 agents 测试迁改：/agents 打开面板 agents tab；↑/↓/c 语义断言保持；矩阵/独占态相关断言更新（composer 冻结条件）。
-- [ ] **Step 2: verify RED**。Expected: FAIL。
-- [ ] **Step 3: Implement**。
-- [ ] **Step 4: verify GREEN**。Expected: PASS。
-- [ ] **Step 5: 门禁 + commit** — `feat(tui): agents 模态收编面板页签——键位语义平移`。
+- [X] **Step 1: Write the failing test** — 既有 agents 测试迁改：/agents 打开面板 agents tab；↑/↓/c 语义断言保持；矩阵/独占态相关断言更新（composer 冻结条件）。
+- [X] **Step 2: verify RED**。Expected: FAIL。
+- [X] **Step 3: Implement**。
+- [X] **Step 4: verify GREEN**。Expected: PASS。
+- [X] **Step 5: 门禁 + commit** — `feat(tui): agents 模态收编面板页签——键位语义平移`。
 
 ## Task 16: doctor/cache tab 双呈现
 

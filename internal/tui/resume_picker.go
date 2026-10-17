@@ -77,7 +77,7 @@ func (m *tuiModel) handlePickerKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// pickerView 渲染选择器（agentsPanelView 同形态的列表卡）：mulix id | 引擎
+// pickerView 渲染选择器（agentsTabView 同形态的列表卡）：mulix id | 引擎
 // id | 模型 | 工作区 | 创建时刻（RFC3339 截到分钟）| 无人值守标注；选中行
 // ▸ 标记 + accent（设计 §6 resume 选择器——surface1 底由 bottomView 卡底
 // paintSurface 承载，与授权卡同法）；底部键位提示。

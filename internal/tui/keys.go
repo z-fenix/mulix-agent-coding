@@ -9,8 +9,9 @@ import (
 
 // ---- 键位语义（023 D10 取消语义阶梯；集中此文件）----
 //
-// 渲染态键位阶梯（FR-011：语义无歧义；审批卡与 /agents 面板为治理独占态，
-// 在 handleKey 前置分支拦截，不走本阶梯）：
+// 渲染态键位阶梯（FR-011：语义无歧义；审批卡与 agents 页签交互态（Task 15
+// 收编口径 agentsTabInteractive）为治理独占态，在 handleKey 前置分支拦截，
+// 不走本阶梯）：
 //
 //	Esc（忙碌）  pendingSubmit 在途 → 丢弃提交（代际递增作废迟到收据）+ 还原草稿
 //	            否则回合进行中    → 本地取消意图 + 异步 ctrl.Cancel（幂等）
@@ -18,6 +19,10 @@ import (
 //	Ctrl+C      活跃选区 → 复制选区（消费高亮；Task 21 接入第一档）
 //	            有输入 → 清空输入（清空按不武装）
 //	            空输入 → 窗口内二按退出（首按武装并提示）
+//
+// agents 页签交互态的 Esc（Task 15）在独占分支内消费（model.go
+// handleAgentsKey）：退出页签交互（焦点回主列），不关面板、不清输入——面板
+// 关闭归 /agents toggle / F2；侧栏/面板聚焦的取焦档见下方 handleEscapeKey。
 //
 // 忙碌判定键 off m.running（回合生命周期）；m.swapping 过渡期旧控制器已收口，
 // 取消/丢弃无处可打，Esc 为 no-op。

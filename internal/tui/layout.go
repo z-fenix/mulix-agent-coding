@@ -11,9 +11,9 @@ import (
 //
 // 帧 = 主列（转写视口，高 = H − 底部固定区行数、末列滚动条；+ 底部固定区）
 // ‖ 侧栏列 ‖ 面板列三列 JoinHorizontal（列和 = W；窄档 <100 几何退化单列）。
-// 底部固定区自上而下：模态面板（/agents，有则）→ 授权卡/编辑器（互斥）→
-// 状态行，宽度收口主列（mainWidth——评审 Issue 7）。模态面板渲染沿用迁移前
-// 形态（023 Task 2 逐字节迁移件）；授权卡键位与参数摘要见 approval.go（023
+// 底部固定区自上而下：授权卡/选择器/编辑器（互斥）→ 状态行，宽度收口主列
+// （mainWidth——评审 Issue 7）；agents 列表已收编右栏 agents 页签（Task 15，
+// 见 panel.go agentsTabView）。授权卡键位与参数摘要见 approval.go（023
 // D11）。本文件负责把它们与视口合成满屏帧；侧栏/面板列视图已随 Task 11/12
 // 接线（sidebar.go sidebarColumn / panel.go panelColumn）；末列滚动条拖拽
 // 与选区高亮随 Task 21 落地（023 Story4——transcript.go transcriptView 绘制
@@ -29,11 +29,12 @@ func transcriptContentWidth(termW int) int {
 	return 1
 }
 
-// bottomView 底部固定区：模态面板（有则）→ 授权卡/选择器/编辑器（互斥）→
-// 状态行。编辑器为多行 textarea（023 D12/FR-007）——动态高度 1→8 行随内容
-// 收口，frame 的 lipgloss.Height 量测自动跟随（❯ 提示符仅首行，见 composer.go）；
-// 补全菜单浮在编辑器上方（023 FR-009——无框行列表紧贴输入行，对照参考
-// renderCompletion；菜单是邻接浮层，编辑器保持活跃）。
+// bottomView 底部固定区：授权卡/选择器/编辑器（互斥）→ 状态行（Task 15 收编
+// ——旧 /agents 模态卡分支移除，agents 列表驻右栏 agents 页签）。编辑器为多行
+// textarea（023 D12/FR-007）——动态高度 1→8 行随内容收口，frame 的
+// lipgloss.Height 量测自动跟随（❯ 提示符仅首行，见 composer.go）；补全菜单浮
+// 在编辑器上方（023 FR-009——无框行列表紧贴输入行，对照参考 renderCompletion；
+// 菜单是邻接浮层，编辑器保持活跃）。
 func (m *tuiModel) bottomView() string {
 	var b strings.Builder
 	switch {
@@ -42,9 +43,6 @@ func (m *tuiModel) bottomView() string {
 		// surface1 卡底整块铺面（设计 §6 授权卡——accent 边框 + surface1 底 +
 		// 键帽，Task 7）。
 		b.WriteString(paintSurface(styleCard.Render(m.approvalCardView()), activeTheme.surface1Color))
-		b.WriteString("\n")
-	case m.agentsOpen:
-		b.WriteString(styleCard.Render(m.agentsPanelView()))
 		b.WriteString("\n")
 	case m.picker != nil:
 		// resume 选择器 surface1 卡底（设计 §6——与授权卡同法；选中行 accent

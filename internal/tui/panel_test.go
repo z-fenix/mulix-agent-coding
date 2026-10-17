@@ -51,7 +51,9 @@ func TestPanelViewTabRow(t *testing.T) {
 
 // TestPanelViewEmptyStates 钉（brief Interfaces：各 tab 空态指引——Task 13–16
 // 落内容前占位；spec Edge Cases：空态给文案不渲染空白框）：逐页签切换 active
-// 段随动、指引文案在场（doctor 页签含「/doctor 命令运行」指引字面）。
+// 段随动、指引文案在场（doctor 页签含「/doctor 命令运行」指引字面）。agents
+// 页签自 Task 15 起为内容视图——未接线子代理的直渲口径给「子代理未启用」空态
+// （接线空表态「暂无子代理」由 agents_test TestTUIAgentsTabEmpty 钉）。
 func TestPanelViewEmptyStates(t *testing.T) {
 	resetTheme(t)
 	applyTheme(defaultActiveTheme())
@@ -62,7 +64,7 @@ func TestPanelViewEmptyStates(t *testing.T) {
 		want      []string
 	}{
 		{tabChanges, "\x1b[38;5;111;4m变更\x1b[0m", []string{"暂无变更文件"}},
-		{tabAgents, "\x1b[38;5;111;4m代理\x1b[0m", []string{"暂无子代理"}},
+		{tabAgents, "\x1b[38;5;111;4m代理\x1b[0m", []string{"子代理未启用"}},
 		{tabDoctor, "\x1b[38;5;111;4m诊断\x1b[0m", []string{"/doctor 命令运行"}},
 		{tabCache, "\x1b[38;5;111;4m缓存\x1b[0m", []string{"/cache"}},
 	} {

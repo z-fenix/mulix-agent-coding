@@ -88,7 +88,8 @@ func (m *tuiModel) statusBadge(label string) string {
 }
 
 // statusMode 行 1 左侧交互态：治理独占态优先（与 handleKey 的独占层级一致）
-// → 换绑/运行 → 空闲。
+// → 换绑/运行 → 空闲。agents 页签交互态（Task 15 收编口径
+// agentsTabInteractive）位次承旧模态「agents 面板」——审批之后、选择器之前。
 func (m *tuiModel) statusMode() string {
 	// 引擎就绪态徽章（027 FR-003）：FAILED 红色 > NOT_READY「引擎就绪中」
 	// amber > 交互态（语义底色见 statusBadge——2026-10-17 换装设计 §6；READY
@@ -105,8 +106,8 @@ func (m *tuiModel) statusMode() string {
 	switch {
 	case m.approval != nil:
 		return "审批中"
-	case m.agentsOpen:
-		return "agents 面板"
+	case m.agentsTabInteractive():
+		return "agents 页签"
 	case m.picker != nil:
 		return "resume 选择"
 	case m.swapping:

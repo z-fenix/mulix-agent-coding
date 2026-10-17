@@ -146,9 +146,10 @@ func TestScrollUserScrolledNotPulledBack(t *testing.T) {
 }
 
 // TestModalOpenNoUnfollow 钉（brief Step 1b——参考 #6430/#6978 回归钉）：
-// 授权卡/agents 面板开合只改变底部区高度（视口变矮/变高）——height-only 变化
-// 永不翻转尾随模式；跟随态下开模态仍钉底；模态开着新内容照常钉底；模态独占
-// 期滚动手势不泄漏（D10/D11：治理独占期交互冻结）。
+// 授权卡开合只改变底部区高度（视口变矮/变高）——height-only 变化永不翻转尾随
+// 模式；跟随态下开模态仍钉底；模态开着新内容照常钉底；模态独占期滚动手势不泄
+// 漏（D10/D11：治理独占期交互冻结）；agents 页签交互态（Task 15 收编口径——旧
+// 模态豁免项平移，不再改底部区高度但手势冻结同语义）同钉。
 func TestModalOpenNoUnfollow(t *testing.T) {
 	m := newScrollTestModel(t)
 	// 授权卡打开（height-only：底部区 composer 行 → 卡片多行）
@@ -191,22 +192,23 @@ func TestModalOpenNoUnfollow(t *testing.T) {
 		t.Fatal("followTail must pin after modal closes")
 	}
 
-	// agents 面板（豁免集第二项）——直置面板态（面板开合流程由既有 agents
-	// 测试钉），开合同样不翻模式且保持钉底。
+	// agents 页签交互态（Task 15 收编口径——直置交互三键：开合流程由既有
+	// agents 测试钉），交互期不翻模式且保持钉底；退出交互（Esc 同效）解冻。
 	m2 := newScrollTestModel(t)
-	m2.agentsOpen = true
+	m2.panel.tab = tabAgents
+	m2.focus = focusPanel
 	if !m2.modalOpen() {
-		t.Fatal("agents panel must report modalOpen")
+		t.Fatal("agents tab interaction must report modalOpen")
 	}
 	m2.View()
 	if m2.scrollState.mode != scrollFollowTail || !m2.transcriptState.vp.AtBottom() {
-		t.Fatalf("agents panel open must not break followTail pin: mode=%v atBottom=%v",
+		t.Fatalf("agents tab interaction must not break followTail pin: mode=%v atBottom=%v",
 			m2.scrollState.mode, m2.transcriptState.vp.AtBottom())
 	}
-	m2.agentsOpen = false
+	m2.focus = focusMain
 	m2.View()
 	if m2.scrollState.mode != scrollFollowTail || !m2.transcriptState.vp.AtBottom() {
-		t.Fatal("agents panel close must not break followTail pin")
+		t.Fatal("agents tab exit must not break followTail pin")
 	}
 }
 
