@@ -94,7 +94,7 @@ func TestDiffFromEditInput(t *testing.T) {
 }
 
 // TestDiffHeaderCounts 钉死（brief b）：头行 +A -B 计数正确——增行绿槽
-// （T18 预留槽首个消费点，暗底手选 108）、删行红槽（167）；零侧省略
+// （T18 预留槽首个消费点，dsh dark 手选 114）、删行红槽（203）；零侧省略
 // （对照参考 diffStat）；SGR 钉点与 activeTheme 包级初值同源（T18 注记）。
 func TestDiffHeaderCounts(t *testing.T) {
 	d := diffInput{path: "a.go", verb: "改", before: "a\nb\n", after: "a\nc\nd\n"}
@@ -103,8 +103,8 @@ func TestDiffHeaderCounts(t *testing.T) {
 	if !strings.Contains(head, "+2") || !strings.Contains(head, "-1") {
 		t.Fatalf("header %q must carry +2 -1", head)
 	}
-	if !strings.Contains(head, "\x1b[38;5;108m+2") || !strings.Contains(head, "\x1b[38;5;167m-1") {
-		t.Fatalf("header counts must take green(108)/red(167) slots: %q", head)
+	if !strings.Contains(head, "\x1b[38;5;114m+2") || !strings.Contains(head, "\x1b[38;5;203m-1") {
+		t.Fatalf("header counts must take green(114)/red(203) slots: %q", head)
 	}
 	if !strings.Contains(head, "a.go") || !strings.Contains(head, "✎") {
 		t.Fatalf("header %q must carry ✎ and path", head)
@@ -121,13 +121,13 @@ func TestDiffHeaderCounts(t *testing.T) {
 			ctxRow = l
 		}
 	}
-	if !strings.HasPrefix(addRow, "\x1b[38;5;108m") {
+	if !strings.HasPrefix(addRow, "\x1b[38;5;114m") {
 		t.Fatalf("added row must lead with green SGR: %q", addRow)
 	}
-	if !strings.HasPrefix(delRow, "\x1b[38;5;167m") {
+	if !strings.HasPrefix(delRow, "\x1b[38;5;203m") {
 		t.Fatalf("deleted row must lead with red SGR: %q", delRow)
 	}
-	if strings.Contains(ctxRow, "\x1b[38;5;108m") || strings.Contains(ctxRow, "\x1b[38;5;167m") {
+	if strings.Contains(ctxRow, "\x1b[38;5;114m") || strings.Contains(ctxRow, "\x1b[38;5;203m") {
 		t.Fatalf("context row must not take add/del slots: %q", ctxRow)
 	}
 

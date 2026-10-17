@@ -218,7 +218,7 @@ func TestFenceChromaHighlight(t *testing.T) {
 		t.Fatalf("unknown language must degrade to accent fill:\n%q", outU)
 	}
 	for c := range distinct(outU) {
-		if c != "173" && c != "245" {
+		if c != "173" && c != "244" {
 			t.Fatalf("unknown-language fence must not carry chroma colors, got %s:\n%q", c, outU)
 		}
 	}

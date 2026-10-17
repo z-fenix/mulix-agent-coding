@@ -182,3 +182,48 @@ func TestThemeScrollbar(t *testing.T) {
 		t.Fatalf("scrollbar track must take the dim slot:\n%q", sb)
 	}
 }
+
+// assertSlot 槽位字符串比较 helper（256 层确定性初值口径——逐槽钉点）。
+func assertSlot(t *testing.T, got themeColor, want string) {
+	t.Helper()
+	if string(got) != want {
+		t.Fatalf("slot = %q, want %q", got, want)
+	}
+}
+
+// ---- dsh 派生槽位（2026-10-17-dsh-tui-visual-redesign Task 1）----
+
+func TestDSHDarkSlots(t *testing.T) {
+	th := defaultActiveTheme() // graphite→本任务后仍为 graphite？否——Task 8 才换默认；此处钉槽位值
+	// 本任务后 defaultActiveTheme 仍返回旧默认 accent（Task 8 换 deepseek），
+	// 但全部槽位换 dsh 值：
+	assertSlot(t, th.bgColor, "234")
+	assertSlot(t, th.surface1Color, "235")
+	assertSlot(t, th.surface2Color, "236")
+	assertSlot(t, th.surface3Color, "237")
+	assertSlot(t, th.borderColor, "238")
+	assertSlot(t, th.fgColor, "231")
+	assertSlot(t, th.fgSecondaryColor, "252")
+	assertSlot(t, th.fgTertiaryColor, "145")
+	assertSlot(t, th.dimColor, "244")
+	assertSlot(t, th.codeBlockColor, "235")
+	assertSlot(t, th.diffAddedBGColor, "22")
+	assertSlot(t, th.diffAddedMarkerColor, "114")
+	assertSlot(t, th.diffDeletedBGColor, "52")
+	assertSlot(t, th.diffDeletedMarkerColor, "203")
+	assertSlot(t, th.greenColor, "114")  // green-400 #4ED17E（FR-003 状态语义色）
+	assertSlot(t, th.yellowColor, "214") // amber-400 #F7AD31
+	assertSlot(t, th.redColor, "203")    // red-400 #F25A5A
+	assertSlot(t, th.accentColor, "173") // graphite accent 不变（Task 8 换默认）
+}
+func TestSgrBg(t *testing.T) {
+	if got := sgrBg("234"); got != "48;5;234" {
+		t.Fatalf("48 层: %q", got)
+	}
+	if got := sgrBg("#151517"); got != "48;2;21;21;23" {
+		t.Fatalf("真彩层: %q", got)
+	}
+	if got := sgrBg(""); got != "" {
+		t.Fatalf("空槽: %q", got)
+	}
+}

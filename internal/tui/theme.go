@@ -66,18 +66,48 @@ var accentPresets = []accentPreset{
 }
 
 // modeSlots 底色模式的非强调槽（移植参考 cliDarkTheme/cliLightTheme 对应槽）。
-type modeSlots struct{ dim, red, yellow, green, cyan, magenta, fg, bg slotColor }
+// surface1-3/border/fgSecondary/fgTertiary/codeBlock/diffAdded*/diffDeleted*
+// 为 dsh 派生扩充槽（设计 §4 令牌映射表）：darkSlots 已填 §4.1 值，lightSlots
+// 新槽暂零值（256 层解析为 "0"、真彩/无色层为空——当前无消费点，Task 2 补
+// §4.2 light 推导值）。
+type modeSlots struct {
+	dim, red, yellow, green, cyan, magenta, fg, bg slotColor
+	surface1, surface2, surface3, border           slotColor
+	fgSecondary, fgTertiary, codeBlock             slotColor
+	diffAddedBG, diffAddedMarker                   slotColor
+	diffDeletedBG, diffDeletedMarker               slotColor
+}
 
 var (
+	// darkSlots dsh dark 派生值（设计 §4.1，源 design-platform.css）：bg 满帧
+	// 铺底、surface1-3 表面层级、border 边框线、fg/fgSecondary/fgTertiary 正
+	// 文层级、codeBlock 围栏底、diff 加/删底与标记；green/red/yellow（amber）
+	// 为 FR-003 状态语义色（green-400/amber-400/red-400）；cyan/magenta 预留
+	// 不变（§4.1：工具类别色候选）。
 	darkSlots = modeSlots{
-		dim:     slotColor{"#858b96", 245},
-		red:     slotColor{"#e0696a", 167},
-		yellow:  slotColor{"#d9a441", 179},
-		green:   slotColor{"#74b87a", 108},
+		dim:     slotColor{"#81858C", 244},
+		red:     slotColor{"#F25A5A", 203},
+		yellow:  slotColor{"#F7AD31", 214},
+		green:   slotColor{"#4ED17E", 114},
 		cyan:    slotColor{"#56b6c2", 80},
 		magenta: slotColor{"#b18cff", 141},
-		fg:      slotColor{"#c0c4cc", 251},
-		bg:      slotColor{"#222631", 235},
+		fg:      slotColor{"#F9FAFB", 231},
+		bg:      slotColor{"#151517", 234},
+
+		surface1: slotColor{"#232324", 235},
+		surface2: slotColor{"#2C2C2E", 236},
+		surface3: slotColor{"#353638", 237},
+		border:   slotColor{"#43454A", 238},
+
+		fgSecondary: slotColor{"#CFD3D6", 252},
+		fgTertiary:  slotColor{"#ADB2B8", 145},
+		codeBlock:   slotColor{"#1B1B1C", 235},
+
+		diffAddedBG:     slotColor{"#1F3124", 22},
+		diffAddedMarker: slotColor{"#41C977", 114},
+
+		diffDeletedBG:     slotColor{"#3C1F1B", 52},
+		diffDeletedMarker: slotColor{"#FA423E", 203},
 	}
 	lightSlots = modeSlots{
 		dim:     slotColor{"#82796f", 243},
@@ -106,13 +136,31 @@ type theme struct {
 	redColor themeColor
 	// yellow 告警（warning 级通知、回合取消收口行）。
 	yellowColor themeColor
-	// green/cyan/magenta/fg/bg 预留槽（diff 加/删、工具读/proc 类别色、正文/
-	// 底色——diff 卡与选择高亮随后续任务接入；D8 槽位结构一次成型，扩展无成本）。
+	// green/cyan/magenta 预留槽（工具读/proc 类别色候选；D8 槽位结构一次成型，
+	// 扩展无成本）。
 	greenColor   themeColor
 	cyanColor    themeColor
 	magentaColor themeColor
-	fgColor      themeColor
-	bgColor      themeColor
+	// fg 正文主色（标题/正文）；bg 满帧铺底（设计 §4.3——frame 每行整行铺底，
+	// NO_COLOR 层不铺底）。
+	fgColor themeColor
+	bgColor themeColor
+	// dsh 派生扩充槽（设计 §4.1 消费点；消费组件随后续任务接入）。
+	// surface1 面板/侧栏/补全/选择器表面；surface2 用户气泡/卡片内衬/当前
+	// 会话高亮；surface3 键帽/次级表面；border 边框线字符/分隔线。
+	surface1Color themeColor
+	surface2Color themeColor
+	surface3Color themeColor
+	borderColor   themeColor
+	// fgSecondary 次级文本；fgTertiary 三级文本；codeBlock 围栏底。
+	fgSecondaryColor themeColor
+	fgTertiaryColor  themeColor
+	codeBlockColor   themeColor
+	// diff 加/删行底与标记（标记=标记符/行号前景）。
+	diffAddedBGColor       themeColor
+	diffAddedMarkerColor   themeColor
+	diffDeletedBGColor     themeColor
+	diffDeletedMarkerColor themeColor
 }
 
 // defaultTheme markdown nil-th 的中性缺省（Task 7 契约保留，槽位表达对齐：
@@ -165,6 +213,35 @@ func sgrFg(c themeColor) string {
 		return strconv.Itoa(82 + n) // 90 + (n-8)：基础亮色 90-97
 	default:
 		return "38;5;" + strconv.Itoa(n)
+	}
+}
+
+// sgrBg 槽位背景 SGR 参数串（镜像 sgrFg，铺底消费面——设计 §4.3 满帧铺底与
+// 表面层）：hex → 48;2;r;g;b（真彩）；0-15 → 基础 16 色（40-47 / 100-107）；
+// 16-255 → 48;5;N；空槽/不可解析返回空串（不铺底）。
+func sgrBg(c themeColor) string {
+	s := string(c)
+	if s == "" {
+		return ""
+	}
+	if strings.HasPrefix(s, "#") {
+		r, g, b, ok := parseHexRGB(s)
+		if !ok {
+			return ""
+		}
+		return fmt.Sprintf("48;2;%d;%d;%d", r, g, b)
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 0 || n > 255 {
+		return ""
+	}
+	switch {
+	case n < 8:
+		return strconv.Itoa(40 + n)
+	case n < 16:
+		return strconv.Itoa(92 + n) // 100 + (n-8)：基础亮色 100-107
+	default:
+		return "48;5;" + strconv.Itoa(n)
 	}
 }
 
@@ -252,6 +329,20 @@ func buildTheme(accentName string, dark bool, tier colorTier) (theme, bool) {
 			magentaColor: resolveSlot(mode.magenta, tier),
 			fgColor:      resolveSlot(mode.fg, tier),
 			bgColor:      resolveSlot(mode.bg, tier),
+
+			surface1Color: resolveSlot(mode.surface1, tier),
+			surface2Color: resolveSlot(mode.surface2, tier),
+			surface3Color: resolveSlot(mode.surface3, tier),
+			borderColor:   resolveSlot(mode.border, tier),
+
+			fgSecondaryColor: resolveSlot(mode.fgSecondary, tier),
+			fgTertiaryColor:  resolveSlot(mode.fgTertiary, tier),
+			codeBlockColor:   resolveSlot(mode.codeBlock, tier),
+
+			diffAddedBGColor:       resolveSlot(mode.diffAddedBG, tier),
+			diffAddedMarkerColor:   resolveSlot(mode.diffAddedMarker, tier),
+			diffDeletedBGColor:     resolveSlot(mode.diffDeletedBG, tier),
+			diffDeletedMarkerColor: resolveSlot(mode.diffDeletedMarker, tier),
 		}, true
 	}
 	return theme{}, false

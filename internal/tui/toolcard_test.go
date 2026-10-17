@@ -86,8 +86,8 @@ func TestToolCardFailure(t *testing.T) {
 			t.Fatalf("failure card %q missing %q", rendered, want)
 		}
 	}
-	if !strings.Contains(rendered, "\x1b[38;5;167m") {
-		t.Fatal("failure card must take the red slot (SGR 38;5;167)")
+	if !strings.Contains(rendered, "\x1b[38;5;203m") {
+		t.Fatal("failure card must take the red slot (SGR 38;5;203)")
 	}
 }
 
