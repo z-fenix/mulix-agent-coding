@@ -400,11 +400,11 @@ func TestNoColorFrameStructure(t *testing.T) {
 - Consumes: 全部前序任务的渲染面。
 - Produces: 事件渲染覆盖矩阵新增行：diff 卡 bg 槽行（写/改）、面板页签行（变更/agents/doctor/cache 空态与内容态）、布局档位行（W=150/120/90/80 四档 frame 构成）、符号行（●/✓/✗ 三态）；行为语义行清点无删减。
 
-- [ ] **Step 1: Write the failing test** — 上述新增行（判别性断言：错误实现必红的宽/色断言）。
-- [ ] **Step 2: verify RED** — 逐行核对（部分行可能因前序任务已绿——该情况记台账，不硬造红；现矩阵实为 **21 行**，清点以真实行为准）。
-- [ ] **Step 3: Implement** — 修矩阵暴露的漏项（若有）。
-- [ ] **Step 4: verify GREEN** — `go test ./... -count=1 && go vet ./... && gofmt -l . && go test ./internal/lint/ -count=1`。Expected: 全绿全净。
-- [ ] **Step 5: commit** — `test(tui): 事件渲染矩阵补全——diff/面板/档位/符号行`。
+- [X] **Step 1: Write the failing test** — 上述新增行（判别性断言：错误实现必红的宽/色断言）。
+- [X] **Step 2: verify RED** — 逐行核对（部分行可能因前序任务已绿——该情况记台账，不硬造红；现矩阵实为 **21 行**，清点以真实行为准）。
+- [X] **Step 3: Implement** — 修矩阵暴露的漏项（若有）。
+- [X] **Step 4: verify GREEN** — `go test ./... -count=1 && go vet ./... && gofmt -l . && go test ./internal/lint/ -count=1`。Expected: 全绿全净。
+- [X] **Step 5: commit** — `test(tui): 事件渲染矩阵补全——diff/面板/档位/符号行`。
 
 ## Task 19: 真机冒烟证据
 
@@ -415,6 +415,6 @@ func TestNoColorFrameStructure(t *testing.T) {
 - Consumes: 全部前序任务。
 - Produces: FR-108 惯例冒烟证据——引擎版本、工作区、时间线、退出码、摘录；场景：启动帧（三栏）、一次含 Read/Write 的回合（工具三态 + diff bg）、审批真实裁决、Esc 取消、面板开合与页签（变更聚合/agents/doctor/cache）、/theme deepseek 切换、暗/亮/NO_COLOR 三形态摘录。
 
-- [ ] **Step 1: 真机执行冒烟**（构建到仓外可运行位置——本机写入管控惯例），逐场景记录。
-- [ ] **Step 2: 证据落盘** — docs/evidence 文档含全部清单项；受阻项如实记录不冒充。
-- [ ] **Step 3: commit** — `docs(tui): dsh 重设计真机冒烟证据`。
+- [X] **Step 1: 真机执行冒烟**（构建到仓外可运行位置——本机写入管控惯例），逐场景记录。
+- [X] **Step 2: 证据落盘** — docs/evidence 文档含全部清单项；受阻项如实记录不冒充。
+- [X] **Step 3: commit** — `docs(tui): dsh 重设计真机冒烟证据`。
