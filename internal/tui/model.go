@@ -134,6 +134,11 @@ type tuiModel struct {
 	// 增量维护（noteChangeAggregate，panel.go），读口 collectChanges。面板态
 	// 非转写：换绑收口清空（swapDoneMsg 成功路径），转写块流不动（023 钉定）。
 	changes []changeEntry
+	// doctorLines doctor 页签存储（Task 16 双呈现）：doctorDoneMsg 到达时存储
+	//（后到覆盖——页签常驻展示最近一次诊断），转写 appendLine 照旧——两腿同源
+	// msg.lines。转写块流不随换绑清空（023 钉定），本字段同不清——双呈现两腿
+	// 必须同步存续（任一腿单独清空即失同步）。
+	doctorLines []string
 	// 委派卡状态（Task 11 FR-016）：delegCards 索引 SubSessionID → 块下标——
 	// 生命周期回执按同 ID upsert 原地收口（与工具卡同法）。
 	delegCards map[string]int
@@ -340,6 +345,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.appendLine("[会话] 已切换 → " + msg.id)
 		return m, nil
 	case doctorDoneMsg:
+		m.doctorLines = msg.lines // 页签腿存储（Task 16 双呈现——转写腿照旧）
 		for _, l := range msg.lines {
 			m.appendLine(l)
 		}
@@ -961,13 +967,13 @@ func (m *tuiModel) slash(line string) tea.Cmd {
 	case "/quit":
 		return tea.Quit
 	case "/cache":
-		rep, err := cache.ReadUsageReport(m.opts.UsageRoot, m.selfID)
-		if err != nil {
-			m.appendLine("[cache] " + err.Error())
-			return nil
+		// 同源格式器（Task 16 抽取——cacheSummaryLines，缓存页签共用）。转写
+		// 腿行为不变：错误行与汇总行照旧逐行 appendLine（零值报告照常入转写
+		// ——命令腿忽略 ok，见 cacheSummaryLines 注记）。
+		lines, _ := m.cacheSummaryLines()
+		for _, l := range lines {
+			m.appendLine(l)
 		}
-		m.appendLine(fmt.Sprintf("[cache] 回合 %d | 命中率 %.1f%% | 成本 $%.4f | 节省 $%.4f | 冷回合 %d",
-			rep.Turns, rep.SessionHit*100, rep.Cost, rep.Saving, rep.ColdTurns))
 	case "/doctor":
 		// T29 接线：与 CLI doctor 共用同一检查清单（预合成回调经 Options.Doctor
 		// 注入——探针为 cli 未导出）。异步（T29 评审 I-1）：claude --version 是
@@ -1113,6 +1119,22 @@ func (m *tuiModel) doctorCmd() tea.Cmd {
 }
 
 type doctorDoneMsg struct{ lines []string }
+
+// cacheSummaryLines /cache 汇总行（Task 16 同源抽取）：/cache 命令与缓存页签
+// 单一格式器（不出第二格式器/计数器——Task 14 计数同源纪律）。读口 = 跨进程
+// 权威 cache.ReadUsageReport（每次调用读当前缓存投影——命令为触发式现态、
+// 页签为逐帧现态，同口径）。ok = 有可用数据（读取成功且 Turns>0——零值
+// Report = 会话尚无记账，合法空态）：命令腿忽略 ok（零值报告照常入转写，
+// 行为不变），页签腿 ok=false 回空态指引（不造数；读取错误细节归转写 /cache
+// 留痕面，页签不展示错误行）。
+func (m *tuiModel) cacheSummaryLines() (lines []string, ok bool) {
+	rep, err := cache.ReadUsageReport(m.opts.UsageRoot, m.selfID)
+	if err != nil {
+		return []string{"[cache] " + err.Error()}, false
+	}
+	return []string{fmt.Sprintf("[cache] 回合 %d | 命中率 %.1f%% | 成本 $%.4f | 节省 $%.4f | 冷回合 %d",
+		rep.Turns, rep.SessionHit*100, rep.Cost, rep.Saving, rep.ColdTurns)}, rep.Turns > 0
+}
 
 // swapSession 异步换绑（/new //resume 复用换绑接缝 SessionSwapper）。评审
 // 两轮结论的合成：T28 首轮 Critical-1（Update 内同步等待冻结事件循环）+

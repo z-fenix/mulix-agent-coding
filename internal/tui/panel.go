@@ -110,9 +110,9 @@ func (m *tuiModel) cyclePanelTab() {
 
 // panelView 面板列视图（宽 w = columnWidths 的 panel 档，32）：页签行 →
 // border 色分隔线 → 当前页签内容区（变更页签 = 聚合条目视图——Task 14；agents
-// 页签 = 旧模态列表收编——Task 15；doctor/cache 空态指引，Task 16 逐签换内容）。
-// 页签行四签并排（22 显示列 ≤ 32）；内容行 clampWidth 收口列宽——超宽行不得
-// 撑破面板列。
+// 页签 = 旧模态列表收编——Task 15；doctor 页签 = doctorLines 双呈现、cache
+// 页签 = cacheSummaryLines 同源现态——Task 16）。页签行四签并排（22 显示列
+// ≤ 32）；内容行 clampWidth 收口列宽——超宽行不得撑破面板列。
 func (m *tuiModel) panelView(width int) string {
 	var b strings.Builder
 	// 页签行：active 段 = accent fg + SGR 4 下划线合成单条 SGR（panelTabActive
@@ -135,6 +135,10 @@ func (m *tuiModel) panelView(width int) string {
 		b.WriteString(m.changesTabView(width))
 	case tabAgents:
 		b.WriteString(m.agentsTabView(width))
+	case tabDoctor:
+		b.WriteString(m.doctorTabView(width))
+	case tabCache:
+		b.WriteString(m.cacheTabView(width))
 	default:
 		b.WriteString(panelEmptyState(m.panel.tab, width))
 	}
@@ -154,8 +158,10 @@ func panelTabActive(s string) string {
 // panelEmptyState 页签空态指引（spec Edge Cases：空态给文案不渲染空白框）：
 // 首行状态、次行行动指引（doctor/cache 指引含命令字面——「/doctor 命令运行」
 // 口径）。两行显式拆分不走自动换行——CJK 换行点不可预测会劈开断言字面；行宽
-// 均 ≤ 面板列 32，clampWidth 兜底。变更/agents 页签自带内容视图（Task 14/15
-// 各自的空态分支），不走本表；doctor/cache Task 16 接线后替换。
+// 均 ≤ 面板列 32，clampWidth 兜底。变更/agents/doctor/cache 页签各自的空态
+// 分支进内容视图调用本表（Task 14/15/16）；doctor/cache 内容视图接线后本表
+// 仍为其无数据态的唯一文案源（Task 16 双呈现——页签腿与转写腿同源存续，空态
+// = 无数据非占位）。
 func panelEmptyState(tab panelTab, width int) string {
 	var lines []string
 	switch tab {
@@ -431,4 +437,45 @@ func (m *tuiModel) agentsTabRow(width int, in subagent.Info, selected bool) stri
 		return row
 	}
 	return sidebarSelWrap(padToWidth(row, width))
+}
+
+// ---- doctor/cache 页签双呈现（2026-10-17-dsh-tui-visual-redesign Task 16）----
+//
+// 双呈现纪律（FR-012）：页签内容与转写行同源——doctor 腿同源 doctorDoneMsg
+// 的 lines（model.go 存储于 doctorLines，转写 appendLine 照旧，两腿同步存续，
+// 换绑同不清）；cache 腿经 cacheSummaryLines 与 /cache 命令共用单一格式器与
+// 读口（model.go——不出第二格式器/计数器，Task 14 计数同源纪律）。转写行为行
+// 不变（矩阵面 TestSlashCache 持有）。
+
+// doctorTabView doctor 页签内容（Task 16）：doctorLines 逐行 dim 平文（面板
+// 约定——行宽 clampWidth 收口列宽，超宽行尾省略不撑破面板列）。空表回空态指
+// 引（panelEmptyState——「/doctor 命令运行」字面，不造数）。无显式行预算：
+// doctor 输出为短清单（检查逐行），超帧高由 panelColumn 行数收口兜底。
+func (m *tuiModel) doctorTabView(width int) string {
+	if len(m.doctorLines) == 0 {
+		return panelEmptyState(tabDoctor, width)
+	}
+	out := make([]string, 0, len(m.doctorLines))
+	for _, l := range m.doctorLines {
+		out = append(out, activeTheme.dim(clampWidth(l, width)))
+	}
+	return strings.Join(out, "\n")
+}
+
+// cacheTabView 缓存页签内容（Task 16）：cacheSummaryLines 同源读口（/cache
+// 命令同款）。/cache 输出为动态现态（每次调用读当前缓存投影），页签同为动态
+// ——逐帧呈现当前缓存状态（非 /cache 时刻冻结快照；换绑后随 selfID 切至新会
+// 话投影，与命令腿同口径）。无数据（零值 Report = 会话尚无记账，或读取失败）
+// 回空态指引（不造数——零壳「回合 0」不当数据渲染；错误细节归转写 /cache 留
+// 痕面）。
+func (m *tuiModel) cacheTabView(width int) string {
+	lines, ok := m.cacheSummaryLines()
+	if !ok {
+		return panelEmptyState(tabCache, width)
+	}
+	out := make([]string, 0, len(lines))
+	for _, l := range lines {
+		out = append(out, activeTheme.dim(clampWidth(l, width)))
+	}
+	return strings.Join(out, "\n")
 }

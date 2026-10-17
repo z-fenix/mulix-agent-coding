@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"mulix/internal/cache"
 	"mulix/internal/event"
 )
 
@@ -445,5 +446,101 @@ func TestPanelFocusKeys(t *testing.T) {
 	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
 	if m.panel.sel != 0 {
 		t.Fatalf("narrow width with stale focus must not route panel keys: %d", m.panel.sel)
+	}
+}
+
+// ---- doctor/cache 页签双呈现（2026-10-17-dsh-tui-visual-redesign Task 16）----
+//
+// 双呈现纪律（FR-012）：页签内容与转写行同源——doctor 腿同源 doctorDoneMsg
+// .lines（转写 appendLine 照旧，本文件转写断言持矩阵面）；cache 腿经
+// cacheSummaryLines 与 /cache 命令共用单一格式器（model.go——不出第二格式器，
+// Task 14 计数同源纪律）。转写行为行不变（tui_test.go TestSlashCache 持有）。
+
+// TestDoctorTabDualRender 钉（brief Step 1）：doctorDoneMsg 后转写行仍在
+// （appendLine 照旧——矩阵面不动）+ doctor 页签渲染同 lines（无色层平文等值
+// ——dim 槽去 SGR 即原文；断言行 ≤ 32 列不触钳位）；空态（未运行 /doctor）
+// 指引字面在场（不造数）。
+func TestDoctorTabDualRender(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	lines := []string{"[doctor] 引擎 OK", "[doctor] 缓存 OK"}
+	m = update(t, m, doctorDoneMsg{lines: lines})
+	if !hasTraceLine(m, lines[0]) || !hasTraceLine(m, lines[1]) {
+		t.Fatal("doctorDoneMsg must keep appending lines to the transcript（双呈现转写腿不变）")
+	}
+	m.panel.tab = tabDoctor
+	v := ansi.Strip(m.panelView(32))
+	for _, l := range lines {
+		if !strings.Contains(v, l) {
+			t.Fatalf("doctor tab must render the same-source lines, missing %q:\n%s", l, v)
+		}
+	}
+	// 空态：doctorLines 未存储时指引字面在场。
+	m2, _, _ := newTestModel(t)
+	m2.panel.tab = tabDoctor
+	if v := m2.panelView(32); !strings.Contains(v, "/doctor 命令运行") {
+		t.Fatalf("empty doctor tab must keep the guidance copy:\n%q", v)
+	}
+}
+
+// seedUsageTurn 播种一个记账回合（TestSlashCache 同款直连 cache.NewMeter——
+// tui 不 import cli 装配路径）：Close 释放句柄（Windows）后 ReadUsageReport
+// 方可读；turnOffset 错开多轮播种的行号（ReconcileUsage 同行号后行覆盖——不
+// 错开会折成一回合）。
+func seedUsageTurn(t *testing.T, root, id string, turnOffset int64) {
+	t.Helper()
+	meter, err := cache.NewMeter(cache.MeterOptions{
+		Root: root, SessionID: id, TurnOffset: turnOffset,
+		Pricing: cache.Pricing{InputPerMTok: 3, OutputPerMTok: 15},
+	})
+	if err != nil {
+		t.Fatalf("meter: %v", err)
+	}
+	if _, err := meter.Observe(cache.TurnUsage{InputTokens: 100, CacheReadTokens: 300, OutputTokens: 20}); err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	if err := meter.Close(); err != nil { // 落盘并释放 usage 文件（Windows 句柄）
+		t.Fatalf("meter close: %v", err)
+	}
+}
+
+// TestCacheTabSameSource 钉（brief Step 1）：缓存页签与 /cache 输出同源——
+// 单一格式器产物（cacheSummaryLines）：播种 1 回合后 /cache 转写行在场（行为
+// 不变）且页签同段（无色层对账——32 列钳位以「回合 N」「命中率」可容首段断
+// 言，超宽行不进面板列）；再播种一回合页签随现态刷新（/cache 输出为动态现态
+// ——页签逐帧同口径，非 /cache 时刻冻结快照）；无记账（零值 Report = 会话尚
+// 无记账，合法空态）页签回指引文案（不造数——零壳「回合 0」不当数据渲染）。
+func TestCacheTabSameSource(t *testing.T) {
+	root := t.TempDir()
+	id := "tui-cache-tab-01"
+	seedUsageTurn(t, root, id, 0)
+	sink := NewSink()
+	m := newTuiModel(Options{UsageRoot: root, Sink: sink}, &stubController{}, sink.Events(), id)
+	m.testMode = true
+	// 转写腿：/cache 行为不变（TestSlashCache 同款分流路径）。
+	m = update(t, m, typeStr(m, "/cache"))
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !hasTraceLine(m, "回合") || !hasTraceLine(m, "命中率") {
+		t.Fatal("precondition: /cache must append the summary line to the transcript")
+	}
+	// 页签腿：同源格式器产物（含数据段——非空态壳）。
+	m.panel.tab = tabCache
+	v := ansi.Strip(m.panelView(32))
+	if !strings.Contains(v, "回合 1") || !strings.Contains(v, "命中率") {
+		t.Fatalf("cache tab must render the same-source summary:\n%s", v)
+	}
+	if strings.Contains(v, "暂无用量数据") {
+		t.Fatalf("cache tab must not show the empty state when data exists:\n%s", v)
+	}
+	// 动态现态：再播种一回合，页签随当前缓存投影刷新（回合 1 → 回合 2）。
+	seedUsageTurn(t, root, id, 1)
+	v = ansi.Strip(m.panelView(32))
+	if !strings.Contains(v, "回合 2") || strings.Contains(v, "回合 1 |") {
+		t.Fatalf("cache tab must track the current cache state (dynamic, not frozen):\n%s", v)
+	}
+	// 空态：无记账合法态 → 指引文案（不造数）。
+	m2, _, _ := newTestModel(t)
+	m2.panel.tab = tabCache
+	if v := m2.panelView(32); !strings.Contains(v, "暂无用量数据") || !strings.Contains(v, "/cache 查看缓存汇总") {
+		t.Fatalf("empty cache tab must show guidance, not a zero-value shell:\n%q", v)
 	}
 }
