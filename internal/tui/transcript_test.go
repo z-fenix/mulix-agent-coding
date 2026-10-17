@@ -5,6 +5,13 @@ import (
 	"testing"
 )
 
+// flattenTranscript 测试观测面（024 T3：生产 lines() 删除后，测试经缓存
+// sync + 前缀展平等价观测——断言语义与原 lines() 返回逐字一致）。
+func flattenTranscript(ts *transcriptState, width int) []string {
+	ts.syncWrappedLines(width, false)
+	return ts.wrappedLines
+}
+
 // ---- 转写块模型（FR-001：语义保留块 → 按宽渲染行）----
 
 // TestBlockAppendRewrite pins：append 3 块 + rewriteLast 后 lines(80) 反映
@@ -20,11 +27,11 @@ func TestBlockAppendRewrite(t *testing.T) {
 	if len(ts.blocks) != 3 {
 		t.Fatalf("blocks = %d, want 3（rewriteLast 必须原地改写不增块）", len(ts.blocks))
 	}
-	lines := ts.lines(80)
+	lines := flattenTranscript(&ts, 80)
 	if len(lines) != 3 {
 		t.Fatalf("lines = %d, want 3", len(lines))
 	}
-	if strings.TrimSpace(lines[0]) != "alpha" || strings.TrimSpace(lines[1]) != "beta" {
+	if strings.TrimSpace(lines[0]) != "alpha" || strings.TrimSpace(lines[1]) != "› beta" {
 		t.Fatalf("earlier blocks must be untouched: %q / %q", lines[0], lines[1])
 	}
 	if strings.TrimSpace(lines[2]) != "gamma-rewritten" {
@@ -36,14 +43,14 @@ func TestBlockAppendRewrite(t *testing.T) {
 	// SoftLineBreak→' '；硬断行走 fixCJKEmphasis 前源不受影响）
 	ts2 := newTranscriptState()
 	ts2.append(assistantBlock{text: "l1\nl2"})
-	if got := ts2.lines(80); len(got) != 1 || strings.TrimSpace(got[0]) != "l1 l2" {
+	if got := flattenTranscript(&ts2, 80); len(got) != 1 || strings.TrimSpace(got[0]) != "l1 l2" {
 		t.Fatalf("soft line break must merge to a space (markdown): %q", got)
 	}
 
 	// 防御：空块流上 rewriteLast 视为追加（不 panic）
 	ts3 := newTranscriptState()
 	ts3.rewriteLast(plainBlock{text: "first"})
-	if len(ts3.blocks) != 1 || strings.TrimSpace(ts3.lines(80)[0]) != "first" {
+	if len(ts3.blocks) != 1 || strings.TrimSpace(flattenTranscript(&ts3, 80)[0]) != "first" {
 		t.Fatalf("rewriteLast on empty transcript must append: %d blocks", len(ts3.blocks))
 	}
 }

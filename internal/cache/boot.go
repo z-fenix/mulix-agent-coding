@@ -34,6 +34,10 @@ type BootArtifact struct {
 	AllowedTools       []string // --allowedTools（config allow 清单，显式顺序去重）
 	DisallowedTools    []string // --disallowedTools（config deny 清单，显式顺序去重）
 	PermissionMode     string   // --permission-mode（引擎侧映射值）
+	// SettingsJSON 是注入引擎的 --settings 文件内容（治理面：permissions.ask
+	// 强制 shell 工具走审批回路——引擎只读自动放行类的对冲；固定治理常量，
+	// 不经用户配置——红线无旁路开关）。字节钉死（encoding/json map 键序稳定）。
+	SettingsJSON string
 	// EngineEnv 是引擎进程 env 追加面（Boot Env 通道——与回调地址同款的
 	// "KEY=VALUE" 串，由 control 并入 boot.Env）。M14 条目 MCP_TOOL_TIMEOUT
 	//（R1：外部工具超时由引擎原生读取，mulix 不代理协议；全组取最小生效
@@ -92,6 +96,7 @@ func Compose(cfg config.Config, workspace string, reg Registry) (BootArtifact, e
 		AllowedTools:       dedupePreserveOrder(cfg.Permissions.Allow),
 		DisallowedTools:    dedupePreserveOrder(cfg.Permissions.Deny),
 		PermissionMode:     mode,
+		SettingsJSON:       composeShellAskRules(),
 		EngineEnv:          engineEnv,
 	}
 	artifact.Fingerprint = fingerprint(artifact)
@@ -195,6 +200,24 @@ func dedupePreserveOrder(in []string) []string {
 	return out
 }
 
+// governanceAskTools 是强制询问的引擎工具清单（治理常量；ask 规则优先于
+// 引擎 allow 规则与内置只读自动放行——2026-10-16 实验 r1/r3，证据见变更
+// 2026-10-16-engine-tool-governance-fix 设计 §1）。
+var governanceAskTools = []string{"Bash", "PowerShell"}
+
+// composeShellAskRules 序列化强制询问面（encoding/json map 键序稳定——
+// 字节钉死；同输入同字节护栏口径）。常量序列化不会失败；防御性兜底与
+// fingerprint 同姿态。
+func composeShellAskRules() string {
+	payload, err := json.Marshal(map[string]any{
+		"permissions": map[string]any{"ask": governanceAskTools},
+	})
+	if err != nil {
+		return ""
+	}
+	return string(payload)
+}
+
 // fingerprint 计算启动面摘要（sha256 前 16 hex；规范化 JSON 保证字段序稳定）。
 func fingerprint(a BootArtifact) string {
 	canonical, err := json.Marshal(struct {
@@ -203,6 +226,7 @@ func fingerprint(a BootArtifact) string {
 		AllowedTools       []string `json:"allowed_tools"`
 		DisallowedTools    []string `json:"disallowed_tools"`
 		PermissionMode     string   `json:"permission_mode"`
+		SettingsJSON       string   `json:"settings_json"`
 		EngineEnv          []string `json:"engine_env"`
 	}{
 		AppendSystemPrompt: a.AppendSystemPrompt,
@@ -210,6 +234,7 @@ func fingerprint(a BootArtifact) string {
 		AllowedTools:       a.AllowedTools,
 		DisallowedTools:    a.DisallowedTools,
 		PermissionMode:     a.PermissionMode,
+		SettingsJSON:       a.SettingsJSON,
 		EngineEnv:          a.EngineEnv,
 	})
 	if err != nil {

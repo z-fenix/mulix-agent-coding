@@ -521,3 +521,30 @@ func TestComposeRejectsDuplicateExternalNames(t *testing.T) {
 		t.Fatalf("duplicate external names must fail compose, got %v", err)
 	}
 }
+
+// TestComposeInjectsShellAskRules pins：治理常量注入面（字节钉死）——
+// 引擎自主放行类（只读/沙箱）经 ask 规则强制走审批回路（2026-10-16 旁路修复）。
+func TestComposeInjectsShellAskRules(t *testing.T) {
+	artifact, err := Compose(baseCfg(), "ws", nil)
+	if err != nil {
+		t.Fatalf("compose: %v", err)
+	}
+	const want = `{"permissions":{"ask":["Bash","PowerShell"]}}`
+	if artifact.SettingsJSON != want {
+		t.Fatalf("SettingsJSON = %q, want %q", artifact.SettingsJSON, want)
+	}
+}
+
+// TestFingerprintCoversSettingsJSON pins：指纹 canonical struct 覆盖
+// SettingsJSON——漏字段即指纹漂移（CLAUDE.md 维护警告的字段覆盖探针）。
+func TestFingerprintCoversSettingsJSON(t *testing.T) {
+	artifact, err := Compose(baseCfg(), "ws", nil)
+	if err != nil {
+		t.Fatalf("compose: %v", err)
+	}
+	f1 := fingerprint(artifact)
+	artifact.SettingsJSON = `{"permissions":{"ask":["Bash"]}}`
+	if f2 := fingerprint(artifact); f1 == f2 {
+		t.Fatal("fingerprint ignores SettingsJSON (drift)")
+	}
+}

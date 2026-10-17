@@ -14,6 +14,16 @@ Subagent (general-purpose):
 
     Read your task brief first: [BRIEF_FILE]
     It contains the full task text from the plan.
+    Approved plan: [PLAN_FILE]; task number: [N].
+    Under mulix, tasks.md owns step status; the brief is a derived snapshot.
+    After each step actually runs and its expected result is verified,
+    change only that step's marker in this task in PLAN_FILE from `- [ ]`
+    to `- [X]`, then refresh this brief using
+    `bash <skills-dir>/subagent-driven-development/scripts/task-brief PLAN_FILE N`.
+    Locate your own task for status edits; you need not read the whole plan.
+    Keep all definitions and commands unchanged. Future/unperformed steps,
+    skipped or unauthorized commits, and fenced checkbox examples stay `[ ]`.
+    Report skipped steps explicitly; GREEN is not evidence every step ran.
 
     ## Context
 

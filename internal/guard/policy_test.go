@@ -132,6 +132,39 @@ func TestBashSpecifier(t *testing.T) {
 	}
 }
 
+// TestPowerShellSpecifier pins：PowerShell 与 Bash 同命令语义（claude 2.1.30x
+// 起 Windows 上 PowerShell 为 shell 工具——allow 清单必须能治理它，否则
+// PowerShell 调用永远问询/拒绝，allow 迁移语义断裂）。词边界红线同 Bash。
+func TestPowerShellSpecifier(t *testing.T) {
+	p, err := NewPolicy(PresetDefault, mustRules(t,
+		ruleIn{raw: "PowerShell(echo:*)", effect: DecisionAllow},
+		ruleIn{raw: "PowerShell(Remove-Item C:\\x)", effect: DecisionDeny},
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		cmd  string
+		want Decision
+	}{
+		{"echo hi", DecisionAllow},          // 前缀命中
+		{"echo", DecisionAllow},             // 恰为前缀
+		{"echox", DecisionAsk},              // 前缀必须按词面起始（非子串）
+		{"echo;rm", DecisionAsk},            // 词边界红线：分号渗漏不放行
+		{"Get-Date", DecisionAsk},           // 无匹配 → fallback
+		{"Remove-Item C:\\x", DecisionDeny}, // 精确命中
+	}
+	for _, c := range cases {
+		if got := p.Decide("PowerShell", bashInput(c.cmd)); got != c.want {
+			t.Fatalf("Decide(PowerShell, %q) = %v, want %v", c.cmd, got, c.want)
+		}
+	}
+	// input 缺 command 字段 → fallback
+	if got := p.Decide("PowerShell", json.RawMessage(`{}`)); got != DecisionAsk {
+		t.Fatalf("missing command must fall back, got %v", got)
+	}
+}
+
 // TestFileSpecifierGlob pins：文件工具 specifier = glob（`**` 跨段、`*` 单段）；
 // Windows 反斜杠路径先规范化再匹配。
 func TestFileSpecifierGlob(t *testing.T) {

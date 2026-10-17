@@ -29,18 +29,26 @@ import (
 // 样式随主题 dim 槽派生，refreshThemeStyles 重铸，T18）。
 func (m *tuiModel) statusView() string {
 	s := m.statusState.snapshot
-	right := shortID(m.selfID)
+	// 行 1（025 FR-006）：模式徽章 pill（accent 反白）居左 +「模型 <model>」
+	// 右对齐；会话 id8 退场（对照基线行 1 无会话标识）。
+	right := ""
 	if s.Model != "" {
-		right = s.Model + " · " + right
+		right = "模型 " + s.Model
 	}
-	row1 := joinStatusSides(m.statusMode(), right, m.width)
+	row1 := joinStatusSides(styleBadge.Render(" "+m.statusMode()+" "), right, m.width)
+	// 行 2（025 FR-006）：缓存命中率（本次 = TurnTokens.CacheRead/(Input+Write
+	// +Read)，与 Meter.Hit 同式 cache/meter.go:145-146；平均 = SessionHit）+
+	// 费用；上下文/压缩/余额段无数据源省略（D7）。
+	tt := s.TurnTokens
+	hitDen := tt.InputTokens + tt.CacheWriteTokens + tt.CacheReadTokens
+	turnHit := 0.0
+	if hitDen > 0 {
+		turnHit = float64(tt.CacheReadTokens) / float64(hitDen) * 100
+	}
 	groups := []string{
-		fmt.Sprintf("命中率 %.1f%%", s.MeterReport.SessionHit*100),
-		// 回合累计：回合号 + 本回合 tokens（口径同迁移前状态栏——ThinkingTokens
-		// 为 output 细目，回试行单独呈现，此处不重计）。
-		fmt.Sprintf("回合 t%d %d tok", s.Turn, s.TurnTokens.InputTokens+s.TurnTokens.CacheWriteTokens+
-			s.TurnTokens.CacheReadTokens+s.TurnTokens.OutputTokens),
-		fmt.Sprintf("成本 $%.4f", s.MeterReport.Cost),
+		fmt.Sprintf("缓存 本次命中 %.1f%%", turnHit),
+		fmt.Sprintf("平均 %.1f%%", s.MeterReport.SessionHit*100),
+		fmt.Sprintf("费用 $%.4f", s.MeterReport.Cost),
 	}
 	if s.MeterReport.ColdTurns > 0 {
 		groups = append(groups, fmt.Sprintf("❄冷回合 %d", s.MeterReport.ColdTurns))
@@ -93,22 +101,39 @@ type receipt struct {
 	usage event.UsageEvent
 }
 
-// line 回试行（设计 §6）：`✓ 回合 tN · 入N/写N/读N/出N/思N tok · $0.xxxx ·
-// 命中N%`。零值为 Meter 真实记账（引擎未报 usage 的回合），如实渲染。
+// line 回执行（025 FR-005，形态对照基线 `本轮  9.6K tok · in 8.1K · cached
+// 7.6K · new 541 · reasoning 1.2K · ≈¥0.0066`）：字段名/次序/分隔对齐
+// reasonix，数值取 mulix UsageEvent 真实字段映射（in=UncachedInputTokens、
+// cached=ReadTokens、new=WriteTokens、out=OutputTokens、reasoning=
+// ThinkingTokens）；币种保持 mulix 的 $。零值为 Meter 真实记账，如实渲染。
+// 人性化计数（≥1000 → %.1fK）对照基线排版。
 func (b receipt) line() string {
 	u := b.usage
-	return fmt.Sprintf("✓ 回合 t%d · 入%d/写%d/读%d/出%d/思%d tok · $%.4f · 命中%.0f%%",
-		b.turn, u.UncachedInputTokens, u.WriteTokens, u.ReadTokens, u.OutputTokens,
-		u.ThinkingTokens, u.CostUSD, u.HitRate*100)
+	total := u.UncachedInputTokens + u.WriteTokens + u.ReadTokens + u.OutputTokens + u.ThinkingTokens
+	return fmt.Sprintf("本轮  %s tok · in %s · cached %s · new %s · out %s · reasoning %s · ≈$%.4f",
+		humanizeTok(total), humanizeTok(u.UncachedInputTokens), humanizeTok(u.ReadTokens),
+		humanizeTok(u.WriteTokens), humanizeTok(u.OutputTokens), humanizeTok(u.ThinkingTokens),
+		u.CostUSD)
 }
 
-// render 回试行按宽渲染（块接口）：先按宽换行再逐行弱化（思考块同法——回执
-// 是历史留痕，用比运行态安静的色阶，对照参考 renderTurnReceipt 的 quieter
-// palette 注记）。
-func (b receipt) render(width int) []string {
-	lines := wrapText(b.line(), width)
-	for i, l := range lines {
-		lines[i] = dimLine(l)
+// humanizeTok token 计数人性化（对照基线 9.6K 排版）：≥1000 → %.1fK，其余
+// 原样整数。
+func humanizeTok(n int64) string {
+	if n >= 1000 {
+		return fmt.Sprintf("%.1fK", float64(n)/1000)
 	}
-	return lines
+	return fmt.Sprintf("%d", n)
+}
+
+// render 回执块按宽渲染（块接口）：首行为通栏分隔线（对照基线回执上缘
+// `─────`），次行回执正文——分隔线是 receipt 块的首行而非独立块（024 A4：
+// 块拓扑稳定）。逐行弱化（历史留痕安静色阶）。
+func (b receipt) render(width int) []string {
+	inner := max(width-2, 1)
+	lines := wrapText(b.line(), inner)
+	out := []string{"  " + dimLine(strings.Repeat("─", inner))}
+	for _, l := range lines {
+		out = append(out, "  "+dimLine(l))
+	}
+	return out
 }

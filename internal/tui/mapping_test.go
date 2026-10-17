@@ -69,8 +69,8 @@ func TestEventRenderMatrix(t *testing.T) {
 					t.Fatalf("turn start must reset the answer cursor: pending=%q idx=%d flushed=%d",
 						m.pendingMD, m.answerIdx, m.answerFlushed)
 				}
-				if len(m.transcriptState.blocks) != 1 {
-					t.Fatalf("sealed residue must land as one block, blocks = %d", len(m.transcriptState.blocks))
+				if len(m.transcriptState.blocks) != 2 {
+					t.Fatalf("头行+答文(残留冲刷原地复写) = 2 blocks, got %d", len(m.transcriptState.blocks))
 				}
 			},
 		},
@@ -207,7 +207,7 @@ func TestEventRenderMatrix(t *testing.T) {
 				event.UsageEvent{Seq: 2, Turn: 1, UncachedInputTokens: 10, WriteTokens: 20,
 					ReadTokens: 30, OutputTokens: 40, ThinkingTokens: 42, CostUSD: 0.5, HitRate: 0.5},
 			},
-			wantBlocks: []string{"✓ 回合 t1", "入10/写20/读30/出40/思42 tok", "$0.5000", "命中50%"},
+			wantBlocks: []string{"────", "本轮  142 tok · in 10 · cached 30 · new 20 · out 40 · reasoning 42 · ≈$0.5000"},
 			wantState: func(t *testing.T, m *tuiModel) {
 				if m.thinkingIdx != -1 {
 					t.Fatalf("Usage must close the thinking block, thinkingIdx = %d", m.thinkingIdx)
@@ -247,14 +247,15 @@ func TestEventRenderMatrix(t *testing.T) {
 				event.AssistantTextEvent{Seq: 2, Turn: 1, Text: "未完段落"},
 				event.TurnDoneEvent{Seq: 3, Turn: 6, Subtype: "success", DurationMS: 4500},
 			},
-			wantBlocks: []string{"✓ 已思考", "未完段落", "✓ 回合完成 t6 · 4.5s"},
+			wantBlocks: []string{"▸ 思考了", "未完段落"},
+			wantAbsent: []string{"回合完成"},
 			wantState: func(t *testing.T, m *tuiModel) {
 				if m.pendingMD != "" || m.thinkingIdx != -1 {
 					t.Fatalf("turn close must flush residue and collapse thinking: pending=%q idx=%d",
 						m.pendingMD, m.thinkingIdx)
 				}
-				if len(m.transcriptState.blocks) != 3 {
-					t.Fatalf("collapse + sealed answer + close line = 3 blocks, got %d", len(m.transcriptState.blocks))
+				if len(m.transcriptState.blocks) != 2 {
+					t.Fatalf("折叠思考+冲刷残留 = 2 blocks（无 Usage 无回执；无 TurnStarted 不发头行）, got %d", len(m.transcriptState.blocks))
 				}
 			},
 		},
@@ -368,6 +369,43 @@ func TestEventRenderMatrix(t *testing.T) {
 				}
 			},
 		},
+		{
+			// 16.（024 FR-002）EngineExited 清扫运行中工具卡为中断终态：
+			// 不再永久渲染「· 运行中」；已终态卡不受影响（幂等——二次
+			// EngineExited 零改写）；多卡场景缓存失效须覆盖全部被改块。
+			name: "EngineExited 清扫运行中工具卡",
+			events: []any{
+				event.ToolUseRequestedEvent{Seq: 1, Turn: 1, ToolUseID: "toolu-8", Tool: "Bash", Input: json.RawMessage(`{"command":"boom"}`)},
+				event.ToolResultEvent{Seq: 2, Turn: 1, ToolUseID: "toolu-8", Content: "boom", IsError: true},
+				event.ToolUseRequestedEvent{Seq: 3, Turn: 1, ToolUseID: "toolu-9", Tool: "Bash", Input: json.RawMessage(`{"command":"sleep 100"}`)},
+				event.ToolUseRequestedEvent{Seq: 4, Turn: 1, ToolUseID: "toolu-7", Tool: "Bash", Input: json.RawMessage(`{"command":"sleep 99"}`)},
+				// 中段 sync（真实 UI 每帧都做，且用 transcriptContentWidth——
+				// 与 finalize 同宽，否则宽度差触发全量重建会洗掉缓存失效漏洞
+				// 的现场；024 终审 Important-1 的判别力所在）。
+				func(m *tuiModel) {
+					flattenTranscript(&m.transcriptState, transcriptContentWidth(m.width))
+				},
+				event.EngineExitedEvent{Seq: 5, Code: 1, Reason: "crashed"},
+				event.EngineExitedEvent{Seq: 6, Code: 1, Reason: "crashed"},
+			},
+			wantBlocks: []string{"⊘", "引擎已退出，工具未返回", "boom"},
+			wantAbsent: []string{"· 运行中"},
+			wantState: func(t *testing.T, m *tuiModel) {
+				// 3 卡 + 2 退出留痕行（每次 EngineExited 各一行——幂等仅针对
+				// 卡片清扫，留痕行如实重复）。
+				if len(m.transcriptState.blocks) != 5 {
+					t.Fatalf("blocks = %d, want 5（3 卡 + 2 退出行）", len(m.transcriptState.blocks))
+				}
+				for i, want := range []toolState{toolFailed, toolFailed, toolFailed} {
+					if card := m.transcriptState.blocks[i].(*toolCard); card.state != want {
+						t.Fatalf("block %d state = %d, want %d", i, card.state, want)
+					}
+				}
+				if got := m.transcriptState.blocks[0].(*toolCard).failedDetail; got != "boom" {
+					t.Fatalf("pre-failed card detail must be untouched, got %q", got)
+				}
+			},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -382,7 +420,7 @@ func TestEventRenderMatrix(t *testing.T) {
 					m = update(t, m, tuiEvent{ev: e})
 				}
 			}
-			joined := strings.Join(m.transcriptState.lines(80), "\n")
+			joined := strings.Join(flattenTranscript(&m.transcriptState, transcriptContentWidth(m.width)), "\n")
 			for _, want := range tc.wantBlocks {
 				if !strings.Contains(joined, want) {
 					t.Errorf("transcript missing %q\n--- transcript ---\n%s", want, joined)

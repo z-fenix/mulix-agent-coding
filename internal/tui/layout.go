@@ -69,6 +69,14 @@ func (m *tuiModel) frame() string {
 	}
 	prevH := m.transcriptState.vp.Height()
 	fed := m.transcriptState.syncViewport(transcriptContentWidth(m.width), vpH)
+	// 阅读锚点恢复（024 FR-001）：新宽重排完成后按块对位置回顶行，一次性
+	// 消费；尾随态不恢复（钉底接管，锚点作废）。
+	if m.pendingAnchor != nil {
+		if !m.shouldFollowTail() {
+			m.transcriptState.vp.SetYOffset(m.transcriptState.offsetForAnchor(*m.pendingAnchor))
+		}
+		m.pendingAnchor = nil
+	}
 	if m.scrollState.forceGotoBottom || (m.shouldFollowTail() && (fed || vpH != prevH)) {
 		m.transcriptState.vp.GotoBottom()
 		m.markFollowTail() // force 消费即恢复跟随（对照参考 chat_tui.go:998-1012）

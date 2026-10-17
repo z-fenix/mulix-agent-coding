@@ -96,15 +96,15 @@ func TestThinkingCollapse(t *testing.T) {
 	m = update(t, m, tuiEvent{ev: event.AssistantThinkingEvent{Seq: 3, Thinking: "more"}})
 	m.noteThinkingTokens(0, 45) // 思考事件 Turn 未设（0）——同回合守卫放行
 	m = update(t, m, tuiEvent{ev: event.TurnDoneEvent{Seq: 4, Subtype: "success"}})
-	if len(m.transcriptState.blocks) != 2 { // 折叠块 + 回合完成收口行
+	if len(m.transcriptState.blocks) != 1 { // 025 FR-005：完成行移除——仅折叠思考块
 		t.Fatalf("collapse must not add blocks beyond the system line, blocks = %d", len(m.transcriptState.blocks))
 	}
 	tb, ok = m.transcriptState.blocks[0].(thinkingBlock)
 	if !ok || !tb.collapsed || tb.tokens != 45 {
 		t.Fatalf("turn close must collapse with tokens=45 (ok=%v collapsed=%v tokens=%d)", ok, tb.collapsed, tb.tokens)
 	}
-	if line := tb.render(80)[0]; !strings.Contains(line, "✓ 已思考 3s · 45 tok") {
-		t.Fatalf("collapsed line = %q, want ✓ 已思考 3s · 45 tok", line)
+	if line := tb.render(80)[0]; !strings.Contains(line, "▸ 思考了 3 秒 (Ctrl+O)") || strings.Contains(line, "tok") {
+		t.Fatalf("collapsed line = %q, want ▸ 思考了 3 秒 (Ctrl+O) 无 tok 槽(025 FR-004)", line)
 	}
 
 	// (c) 非思考事件折叠（Notice 打断）+ token 槽位缺省省略
@@ -115,9 +115,9 @@ func TestThinkingCollapse(t *testing.T) {
 	if !ok || !tb2.collapsed {
 		t.Fatalf("next non-thinking event must collapse the block (ok=%v collapsed=%v)", ok, tb2.collapsed)
 	}
-	want := fmt.Sprintf("✓ 已思考 %ds", int64(tb2.endedAt.Sub(tb2.startedAt).Seconds()))
-	if line := tb2.render(80)[0]; !strings.Contains(line, want) || strings.Contains(line, "tok") {
-		t.Fatalf("collapsed line = %q, want %q without token slot", line, want)
+	want := fmt.Sprintf("▸ 思考了 %d 秒 (Ctrl+O)", int64(tb2.endedAt.Sub(tb2.startedAt).Seconds()))
+	if line := tb2.render(80)[0]; !strings.Contains(line, want) {
+		t.Fatalf("collapsed line = %q, want %q", line, want)
 	}
 
 	// (d) 收口后 token 回填（Task 17 到账晚于收口的路径：usage → done 已折叠）
@@ -126,8 +126,8 @@ func TestThinkingCollapse(t *testing.T) {
 	if !ok || tb2.tokens != 7 {
 		t.Fatalf("post-collapse backfill must stamp the latest thinking block, tokens = %d", tb2.tokens)
 	}
-	if line := tb2.render(80)[0]; !strings.Contains(line, "· 7 tok") {
-		t.Fatalf("backfilled line = %q, want · 7 tok", line)
+	if line := tb2.render(80)[0]; strings.Contains(line, "tok") {
+		t.Fatalf("backfilled line must not render tok slot (025 FR-004): %q", line)
 	}
 
 	// (e) 折叠后新思考开新块（块生命周期重启）

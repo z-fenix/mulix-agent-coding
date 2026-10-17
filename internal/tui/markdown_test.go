@@ -149,11 +149,11 @@ func TestStreamingParagraphCommit(t *testing.T) {
 		t.Fatalf("TurnDone must flush pending and reset cursor: pending=%q idx=%d flushed=%d",
 			m.pendingMD, m.answerIdx, m.answerFlushed)
 	}
-	// 答案块 + [回合完成] 行
-	if got := len(m.transcriptState.blocks); got != 2 {
-		t.Fatalf("after TurnDone want answer block + done line, blocks = %d", got)
+	// 答案块（025 FR-005：正常完成无收口行——回执另由 UsageEvent 驱动）
+	if got := len(m.transcriptState.blocks); got != 1 {
+		t.Fatalf("after TurnDone want answer block only, blocks = %d", got)
 	}
-	joined := strings.Join(m.transcriptState.lines(80), "\n")
+	joined := strings.Join(flattenTranscript(&m.transcriptState, 80), "\n")
 	// Task 19 起 go 围栏经 chroma 高亮——token 间夹 SGR，内容比对先剥样式
 	//（chroma 不改文本，见 TestFenceChromaHighlight 的 strip 钉点）。
 	if !strings.Contains(ansi.Strip(joined), "fmt.Println()") {
@@ -162,8 +162,8 @@ func TestStreamingParagraphCommit(t *testing.T) {
 	// 下一条消息从新块开始（游标复位后 append 而非续写旧块）
 	m.handleEvent(event.AssistantTextEvent{Text: "第二条回答\n\n"})
 	m.handleEvent(event.TurnDoneEvent{Turn: 2})
-	if got := len(m.transcriptState.blocks); got != 4 {
-		t.Fatalf("second message must open a fresh block (answer + done), blocks = %d", got)
+	if got := len(m.transcriptState.blocks); got != 2 {
+		t.Fatalf("second message must open a fresh answer block, blocks = %d", got)
 	}
 }
 

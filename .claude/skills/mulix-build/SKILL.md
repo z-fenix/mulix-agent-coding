@@ -70,6 +70,12 @@ these mulix specifics:
   commit actually succeeds; a skipped or unauthorized commit stays `[ ]`
   and is reported, never bulk-checked. Checkboxes record progress; they
   do not replace the ledger completion line or RED/GREEN reports.
+  tasks.md is the step-status source of truth; briefs are derived snapshots.
+  After each verified status edit, refresh that task's brief with
+  `bash <skills-dir>/subagent-driven-development/scripts/task-brief PLAN_FILE N`.
+  Leave fenced checkbox examples and other tasks unchanged. For subagents,
+  pass PLAN_FILE and N explicitly and include this status-edit contract in
+  the dispatch; they may locate their own task without reading the whole plan.
 - **Keep the workspace.** The executor skills' finish keeps it (the
   build-complete guard reads it); never `rm -rf` it or `git clean` it
   away.
@@ -86,8 +92,9 @@ mulix state transition build-complete
 
 The guard checks that `execution_method` is recorded, the ledger at
 `.mulix/.runtime/<change>/sdd/tasks/progress.md` names tasks.md on its
-first line and has a `Task N: complete` line for every `## Task N`
-section, and every task has a report with RED and GREEN evidence. A fix
+first line and has a `- Task N: complete` list item for every `## Task N`
+section (legacy plain completion lines also count), and every task has a
+report with RED and GREEN evidence. A fix
 round or a Ruling line is not a completion line.
 
 If a task can't be completed as planned, keep its definitions unchanged;

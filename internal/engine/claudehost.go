@@ -34,13 +34,14 @@ type ClaudeHost struct {
 	lock EngineLock
 	cfg  BootConfig
 
-	cmd     *exec.Cmd
-	stdin   io.WriteCloser
-	stdinMu sync.Mutex
-	stdinCl bool
-	stdout  io.Reader // StdoutPipe 读端（pump 持有）
-	stderr  io.Reader // StderrPipe 读端（pump 持有）
-	mcpTemp string    // --mcp-config 物化文件（Close/失败路径清理）
+	cmd          *exec.Cmd
+	stdin        io.WriteCloser
+	stdinMu      sync.Mutex
+	stdinCl      bool
+	stdout       io.Reader // StdoutPipe 读端（pump 持有）
+	stderr       io.Reader // StderrPipe 读端（pump 持有）
+	mcpTemp      string    // --mcp-config 物化文件（Close/失败路径清理）
+	settingsTemp string    // --settings 物化文件（Close/失败路径清理）
 
 	eventsOut chan Event
 	done      chan struct{} // Close 关闭：让路由/监视协程退出投递阻塞
@@ -137,11 +138,12 @@ func (h *ClaudeHost) Start(ctx context.Context, cfg BootConfig) error {
 	h.cfg = cfg
 	h.ring = newStderrRing(h.opts.StderrRingSize, buildRedactors(cfg.Env))
 
-	args, mcpTemp, err := h.buildArgs(cfg)
+	args, mcpTemp, settingsTemp, err := h.buildArgs(cfg)
 	if err != nil {
 		return err
 	}
 	h.mcpTemp = mcpTemp
+	h.settingsTemp = settingsTemp
 
 	cmd := exec.Command(cfg.EnginePath, args...)
 	cmd.Dir = cfg.Workspace
@@ -619,11 +621,19 @@ func (h *ClaudeHost) cleanupTemp() {
 		_ = os.Remove(h.mcpTemp)
 		h.mcpTemp = ""
 	}
+	if h.settingsTemp != "" {
+		_ = os.Remove(h.settingsTemp)
+		h.settingsTemp = ""
+	}
 }
 
+// createTempFile 是临时文件物化 seam（测试注入失败用；生产 = os.CreateTemp）。
+var createTempFile = os.CreateTemp
+
 // buildArgs 构造 §7.2 参数集（顺序固定——字节稳定 Boot 面的可预测投影）。
-// MCPConfigJSON 物化为临时文件（Close/失败路径清理）。返回 (args, mcpTempPath, err)。
-func (h *ClaudeHost) buildArgs(cfg BootConfig) ([]string, string, error) {
+// MCPConfigJSON 与 SettingsJSON 各物化为临时文件（Close/失败路径清理）。
+// 返回 (args, mcpTempPath, settingsTempPath, err)。
+func (h *ClaudeHost) buildArgs(cfg BootConfig) ([]string, string, string, error) {
 	args := []string{
 		"--input-format", "stream-json",
 		"--output-format", "stream-json",
@@ -631,23 +641,47 @@ func (h *ClaudeHost) buildArgs(cfg BootConfig) ([]string, string, error) {
 		"--permission-mode", cfg.PermissionMode,
 		"--setting-sources", strings.Join(cfg.SettingSources, ","),
 	}
+	settingsTemp := ""
+	if cfg.SettingsJSON != "" {
+		f, err := createTempFile("", "mulix-settings-*.json")
+		if err != nil {
+			return nil, "", "", fmt.Errorf("engine: materialize settings: %w", err)
+		}
+		if _, err := f.WriteString(cfg.SettingsJSON); err != nil {
+			f.Close()
+			os.Remove(f.Name())
+			return nil, "", "", fmt.Errorf("engine: write settings: %w", err)
+		}
+		if err := f.Close(); err != nil {
+			os.Remove(f.Name())
+			return nil, "", "", fmt.Errorf("engine: close settings: %w", err)
+		}
+		settingsTemp = f.Name()
+		args = append(args, "--settings", settingsTemp)
+	}
 	if cfg.Model != "" {
 		args = append(args, "--model", cfg.Model)
 	}
 	mcpTemp := ""
 	if cfg.MCPConfigJSON != "" {
-		f, err := os.CreateTemp("", "mulix-mcp-*.json")
+		f, err := createTempFile("", "mulix-mcp-*.json")
 		if err != nil {
-			return nil, "", fmt.Errorf("engine: materialize mcp-config: %w", err)
+			_ = os.Remove(settingsTemp) // 失败路径零残留（本调用已物化面）
+			settingsTemp = ""
+			return nil, "", "", fmt.Errorf("engine: materialize mcp-config: %w", err)
 		}
 		if _, err := f.WriteString(cfg.MCPConfigJSON); err != nil {
 			f.Close()
 			os.Remove(f.Name())
-			return nil, "", fmt.Errorf("engine: write mcp-config: %w", err)
+			_ = os.Remove(settingsTemp) // 失败路径零残留（本调用已物化面）
+			settingsTemp = ""
+			return nil, "", "", fmt.Errorf("engine: write mcp-config: %w", err)
 		}
 		if err := f.Close(); err != nil {
 			os.Remove(f.Name())
-			return nil, "", fmt.Errorf("engine: close mcp-config: %w", err)
+			_ = os.Remove(settingsTemp) // 失败路径零残留（本调用已物化面）
+			settingsTemp = ""
+			return nil, "", "", fmt.Errorf("engine: close mcp-config: %w", err)
 		}
 		mcpTemp = f.Name()
 		args = append(args, "--mcp-config", mcpTemp)
@@ -670,7 +704,7 @@ func (h *ClaudeHost) buildArgs(cfg BootConfig) ([]string, string, error) {
 	if cfg.ForkSession {
 		args = append(args, "--fork-session")
 	}
-	return args, mcpTemp, nil
+	return args, mcpTemp, settingsTemp, nil
 }
 
 // ---- stderr 脱敏环形缓冲（§7.4） ----

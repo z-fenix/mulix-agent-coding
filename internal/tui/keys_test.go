@@ -158,11 +158,11 @@ func TestCancelledTurnRendersPausedLine(t *testing.T) {
 	if m.cancelIntent {
 		t.Fatal("cancelIntent must clear after the cancelled close")
 	}
-	// 对照组：无取消意图 → 既有收口语义不变。
+	// 对照组：无取消意图 → 025 FR-005 正常完成零收口行（回执即收口），⏹ 不误渲染。
 	m2, _, _ := newTestModel(t)
 	m2 = update(t, m2, tuiEvent{ev: event.TurnDoneEvent{Seq: 2, Turn: 8, Subtype: "success"}})
-	if !strings.Contains(m2.View().Content, "✓ 回合完成 t8") {
-		t.Fatalf("normal close line missing:\n%s", m2.View().Content)
+	if strings.Contains(m2.View().Content, "回合已取消") || strings.Contains(m2.View().Content, "回合完成") {
+		t.Fatalf("normal completion must render no close line:\n%s", m2.View().Content)
 	}
 }
 

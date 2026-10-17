@@ -129,14 +129,18 @@ and the new one resumes from the same ledger.
   artifact for THIS plan: ledger, briefs, review packages. Another plan's
   directory is never yours to read or write.
 - Check for this plan's ledger at `<workspace>/progress.md`. If its first
-  line names your plan file, tasks with a `Task <N>: complete` line are
+  line names your plan file, tasks with a `- Task <N>: complete` line are
   DONE — do not redo them; resume at the first task without one. Their
   commits exist in git even when your context no longer remembers making
   them: after compaction, trust the ledger and `git log` over your own
   recollection. A ledger whose first line names a different plan file is
   another plan's progress: leave it and start your own, fresh.
 - Create the ledger with its identity as the first line:
-  `# SDD ledger — plan: <plan file path>`.
+  `# SDD ledger — plan: <plan file path>`, followed by a blank line.
+  Write each event as a Markdown list item: `- Task <N>: ...`,
+  `- Ruling: ...`, or `- Final: ...`; pre-flight tables stay tables.
+  On resume, both list items and legacy plain completion lines count.
+  Keep existing ledger history unchanged.
 - `git clean -fdx` will destroy the workspace (it's git-ignored scratch);
   if that happens, recover from `git log`.
 
@@ -197,7 +201,7 @@ read its output, and compare. Three outcomes:
 - **The plan is wrong** — a step contradicts the spec, an interface from an
   earlier task doesn't match what this task consumes, a command that
   cannot work. Rule on the smallest change that satisfies the spec, ledger
-  it as `Task <N>: Ruling: <finding> — <what you decided and why>`, and
+  it as `- Task <N>: Ruling: <finding> — <what you decided and why>`, and
   continue. The ruling is carried, not remembered: later tasks that touch
   the same interface read it from the ledger.
 
@@ -223,10 +227,17 @@ the claim. If any item is missing, the task is not complete: finish it.
 
 Run this skill's `scripts/task-done PLAN_FILE N BASE -- <test command>`
 with the test command the brief names for the whole task. It runs the
-tests, keeps the full output in the workspace, prints the tail, and — only
-if they pass — appends the completion line to the ledger:
+tests, keeps the full output in the workspace, and prints the tail. Only
+if they pass, it refreshes this task's brief from the approved plan via
+`task-brief`, then appends the completion list item to the ledger:
 
-`Task <N>: complete (commits <base7>..<head7>, tests: <command> → <result>)`
+`- Task <N>: complete (commits <base7>..<head7>, tests: <command> → <result>)`
+
+The plan owns step status; the brief is a derived snapshot. Under mulix,
+record each verified step in tasks.md as mulix-build requires before
+calling task-done. Skipped/unperformed steps and fenced examples keep their
+original markers. A brief refresh failure records no completion; resolve
+it before continuing.
 
 A failing run records nothing; the task is not complete. When it records,
 mark the todo complete and take the next task.
@@ -341,7 +352,7 @@ Task 1: Hook installation script
 [Step 4: run it — PASS 1/1. Matches Expected.]
 [Step 5: commit — d4e5f6a]
 [Contract: tests ran, output read, no deviations]
-[task-done plan 1 a1b2c3d -- npm test -- hooks → ledger: Task 1: complete (commits a1b2c3d..d4e5f6a, tests: npm test -- hooks → 1/1 pass)]
+[task-done plan 1 a1b2c3d -- npm test -- hooks → ledger: - Task 1: complete (commits a1b2c3d..d4e5f6a, tests: npm test -- hooks → 1/1 pass)]
 
 Task 2: Recovery modes
 
@@ -349,9 +360,9 @@ Task 2: Recovery modes
 [Step 2: run failing test — FAIL, but on an import error: Task 1 exported
  installHook, brief consumes install_hook]
 [Ruling: brief's consumer name is a typo against Task 1's Produces block;
- use installHook — Ledger: Task 2: Ruling: install_hook → installHook — matches Task 1 Produces — cost if wrong: one rename]
+ use installHook — Ledger: - Task 2: Ruling: install_hook → installHook — matches Task 1 Produces — cost if wrong: one rename]
 [Steps 2-5 as planned; commit b7c8d9e]
-[task-done plan 2 d4e5f6a -- npm test -- recovery → ledger: Task 2: complete (commits d4e5f6a..b7c8d9e, tests: npm test -- recovery → 8/8 pass)]
+[task-done plan 2 d4e5f6a -- npm test -- recovery → ledger: - Task 2: complete (commits d4e5f6a..b7c8d9e, tests: npm test -- recovery → 8/8 pass)]
 
 ...
 

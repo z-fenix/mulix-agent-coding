@@ -383,9 +383,36 @@ func resolveMemoryStore(o Options, cfg config.Config) (*memory.Store, error) {
 func productionHostFactory(o Options) func(engine.BootConfig) (engine.Host, error) {
 	return func(boot engine.BootConfig) (engine.Host, error) {
 		return engine.NewClaudeHost(engine.ClaudeHostOptions{
-			LockPath: "engine.lock",
+			LockPath: resolveEngineLockPath(o.Workspace),
 		}), nil
 	}
+}
+
+// resolveEngineLockPath 引擎锁解析链（026 FR-001）：工作区根（仓库提交的
+// 治理面优先）→ 可执行文件同目录（全局安装形态——任意目录可执行）→ 现行
+// 相对路径（全缺时回退，Host 层报缺失保持既有错误形态）。命中即止；校验
+// 语义（漂移拒绝/放行/损坏拒绝）零改动。
+func resolveEngineLockPath(workspace string) string {
+	return resolveEngineLockPathFrom(engineLockCandidates(workspace))
+}
+
+// engineLockCandidates 候选序组装：工作区根 → exe 同目录 → 相对路径。
+func engineLockCandidates(workspace string) []string {
+	candidates := []string{filepath.Join(workspace, "engine.lock")}
+	if exe, err := os.Executable(); err == nil {
+		candidates = append(candidates, filepath.Join(filepath.Dir(exe), "engine.lock"))
+	}
+	return append(candidates, "engine.lock")
+}
+
+// resolveEngineLockPathFrom 候选序命中即止（纯函数——解析策略表驱动可测）。
+func resolveEngineLockPathFrom(candidates []string) string {
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			return c
+		}
+	}
+	return candidates[len(candidates)-1]
 }
 
 // newRegistryServer 构造内置 MCP 注册面（mulix stdio 自 spawn 条目 → Boot

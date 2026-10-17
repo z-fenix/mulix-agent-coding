@@ -57,32 +57,33 @@ type thinkingBlock struct {
 }
 
 func (b thinkingBlock) render(width int) []string {
+	inner := max(width-2, 1)
 	if b.collapsed && !verboseThinking {
-		return []string{dimLine(b.summary())}
+		return []string{"  " + dimLine("▸ "+b.summary())}
 	}
-	lines := wrapText(strings.TrimRight(b.tail, "\n"), width)
+	lines := wrapText(strings.TrimRight(b.tail, "\n"), inner)
 	if !b.collapsed && len(lines) > reasoningTailLines { // 流式期仍走尾窗（对照参考
 		lines = lines[len(lines)-reasoningTailLines:] // reasoningBlockLines 的 maxLines）
 	}
-	for i, l := range lines {
-		lines[i] = dimLine(l)
+	// 流式标记行（025 FR-004）：对照基线 `▎ thinking…`——首行标记 + 尾窗文本，
+	// 收口后折叠行接管。
+	out := []string{"  " + dimLine("▎ thinking…")}
+	for _, l := range lines {
+		out = append(out, "  "+dimLine(l))
 	}
-	return lines
+	return out
 }
 
-// summary 折叠行：✓ 已思考 Ns[ · N tok]。Ns = 首末思考事件到达的本地钟差
-// （非回合时长按比例摊派）；tok = 回合末 UsageEvent.ThinkingTokens（noteThinking
-// Tokens 回填）。token 未回填时槽位整体省略——EstimatedTokens 恒零，渲染
-// 「0 tok」是死 UI（D14 / TestNoZeroTokenRender）。
+// summary 折叠行：思考了 N 秒 (Ctrl+O)。Ns = 首末思考事件到达的本地钟差
+// （非回合时长按比例摊派）。025 FR-004：形态对齐基线 `▸ 思考了 0 秒 (Ctrl+O)`
+// ——tok 槽移除（reasoning 数据仍在回执行；noteThinkingTokens 回填链保留，
+// 供将来需要时取用）。
 func (b thinkingBlock) summary() string {
 	secs := int64(b.endedAt.Sub(b.startedAt).Seconds())
 	if secs < 0 { // 防御：缺省时间戳的块不得渲染负数
 		secs = 0
 	}
-	if b.tokens > 0 {
-		return fmt.Sprintf("✓ 已思考 %ds · %d tok", secs, b.tokens)
-	}
-	return fmt.Sprintf("✓ 已思考 %ds", secs)
+	return fmt.Sprintf("思考了 %d 秒 (Ctrl+O)", secs)
 }
 
 // dimLine 弱化槽（dim）色分：思考文本与折叠摘要（对照参考 reasoningBlockLines

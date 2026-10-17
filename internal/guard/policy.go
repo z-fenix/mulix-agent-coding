@@ -144,7 +144,7 @@ func ruleMatches(r Rule, tool string, input json.RawMessage) bool {
 		return true // 裸工具规则：任意输入命中
 	}
 	switch tool {
-	case "Bash":
+	case "Bash", "PowerShell": // PowerShell 与 Bash 同命令语义（2.1.30x Windows shell 工具）
 		cmd := inputString(input, "command")
 		if cmd == "" {
 			return false

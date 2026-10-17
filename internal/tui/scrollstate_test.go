@@ -232,30 +232,3 @@ func TestScrollSwapRestoresFollow(t *testing.T) {
 			m.scrollState.forceGotoBottom, m.scrollState.mode, m.transcriptState.vp.AtBottom())
 	}
 }
-
-// TestUseLegacyViewportScrollClear 钉 Warp 专属重绘 workaround 的平台裁定
-// （参考 scroll_state_test.go:15-41；#8090：Windows 一律禁用——即使 Warp 自报
-// 家门也不启用，Bubble Tea 在该平台本就避开不兼容优化）。
-func TestUseLegacyViewportScrollClear(t *testing.T) {
-	for _, tt := range []struct {
-		name    string
-		goos    string
-		environ []string
-		want    bool
-	}{
-		{name: "windows", goos: "windows", environ: []string{"TERM_PROGRAM=Windows_Terminal"}},
-		{name: "windows Warp", goos: "windows", environ: []string{"TERM_PROGRAM=WarpTerminal"}},
-		{name: "macOS Warp", goos: "darwin", environ: []string{"TERM_PROGRAM=WarpTerminal"}, want: true},
-		{name: "Linux Warp case and whitespace", goos: "linux", environ: []string{"TERM_PROGRAM=  warPterminal  "}, want: true},
-		{name: "Apple Terminal", goos: "darwin", environ: []string{"TERM_PROGRAM=Apple_Terminal"}},
-		{name: "iTerm", goos: "darwin", environ: []string{"TERM_PROGRAM=iTerm.app"}},
-		{name: "empty environment", goos: "linux"},
-		{name: "lookalike variable", goos: "linux", environ: []string{"OTHER_TERM_PROGRAM=WarpTerminal"}},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := useLegacyViewportScrollClear(tt.goos, tt.environ); got != tt.want {
-				t.Fatalf("useLegacyViewportScrollClear(%q, %q) = %v, want %v", tt.goos, tt.environ, got, tt.want)
-			}
-		})
-	}
-}

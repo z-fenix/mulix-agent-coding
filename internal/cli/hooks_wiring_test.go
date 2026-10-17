@@ -288,6 +288,7 @@ func TestHookWiringEmptyRulesZeroDelta(t *testing.T) {
 	bootAbsent, sinkAbsent := run(t, nil)
 	if bootEmpty.AppendSystemPrompt != bootAbsent.AppendSystemPrompt ||
 		bootEmpty.MCPConfigJSON != bootAbsent.MCPConfigJSON ||
+		bootEmpty.SettingsJSON != bootAbsent.SettingsJSON ||
 		strings.Join(bootEmpty.AllowedTools, ",") != strings.Join(bootAbsent.AllowedTools, ",") {
 		t.Fatalf("boot face diverges between empty rules and absent hooks:\nempty:  %+v\nabsent: %+v", bootEmpty, bootAbsent)
 	}

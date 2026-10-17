@@ -36,10 +36,51 @@ type plainBlock struct{ text string }
 
 func (b plainBlock) render(width int) []string { return wrapText(b.text, width) }
 
-// userBlock 用户输入块（composer 提交回显接线随后续任务；本任务先立块型）。
+// userBlock 用户输入气泡（025 FR-002）：`  › ` 前缀 + 2 空格槽续行
+// （对照基线 `  › 你好`）。
 type userBlock struct{ text string }
 
-func (b userBlock) render(width int) []string { return wrapText(b.text, width) }
+func (b userBlock) render(width int) []string {
+	inner := wrapText(b.text, max(width-4, 1))
+	out := make([]string, len(inner))
+	for i, l := range inner {
+		if i == 0 {
+			out[i] = "  › " + l
+			continue
+		}
+		out[i] = "    " + l
+	}
+	return out
+}
+
+// bannerBlock 启动横幅（025 FR-001）：`◆ mulix · <model>` + 提示行，会话
+// 启动渲染一次（Run 装配；/new 换绑不重复）。提示行形态对照基线、内容按
+// mulix 实际退出方式（/quit / 双击 Ctrl+C）。
+type bannerBlock struct{ model string }
+
+func (b bannerBlock) render(width int) []string {
+	return []string{
+		activeTheme.accent("◆ mulix · " + b.model),
+		dimLine("对话上下文将跨轮保留。输入 /quit 或按两次 Ctrl+C 退出。"),
+	}
+}
+
+// assistantHeaderBlock 助手头行（025 FR-003）：`◆ mulix`，每回合首个内容块
+// 前合成一次（turnHeaderPending 消费）。
+type assistantHeaderBlock struct{}
+
+func (assistantHeaderBlock) render(width int) []string {
+	return []string{"  " + activeTheme.accent("◆ mulix")}
+}
+
+// gutterLines 全体行加 2 空格槽（025 FR-003：正文/卡片/回执整体入槽——
+// 对照基线所有内容行两空格缩进）。就地改写 freshly-rendered 切片。
+func gutterLines(lines []string) []string {
+	for i, l := range lines {
+		lines[i] = "  " + l
+	}
+	return lines
+}
 
 // assistantBlock 助手文本块：markdown 源经 renderMarkdown 按宽渲染（标题/
 // 加粗/行内代码/围栏/列表 + CJK 强调修正）。主题线程化（Task 18 FR-014/D8）：
@@ -48,7 +89,7 @@ func (b userBlock) render(width int) []string { return wrapText(b.text, width) }
 type assistantBlock struct{ text string }
 
 func (b assistantBlock) render(width int) []string {
-	return renderMarkdown(b.text, width, &activeTheme)
+	return gutterLines(renderMarkdown(b.text, max(width-2, 1), &activeTheme))
 }
 
 // transcriptState 是 transcript 渲染关注点容器：语义块流 + 按块换行缓存
@@ -87,12 +128,44 @@ func (ts *transcriptState) rewriteLast(b block) {
 	ts.invalidateWrapFrom(len(ts.blocks) - 1)
 }
 
-// lines 全量行：经换行缓存同步（增量——append 只重排后缀；宽度变更/历史收缩/
-// 空缓存才全量重建）后返回展平行。返回内部缓存切片——消费方只读；viewport
-// 喂给经 feedViewportContent 克隆。
-func (ts *transcriptState) lines(width int) []string {
-	ts.syncWrappedLines(width, false)
-	return ts.wrappedLines
+// ---- 阅读锚点（024 FR-001；对照参考 transcript.go:261 transcriptResizeAnchor
+// 的离散变体：块内位移截断不插值）----
+
+// anchorPoint 阅读锚点：视口顶行所属块 + 块内行偏移。
+type anchorPoint struct{ blockIdx, lineInBlock int }
+
+// anchorForOffset 由绝对行 yoff 反解锚点（按当前缓存 wrapBlockLines 前缀和；
+// 越界钳到末行）。
+func (ts *transcriptState) anchorForOffset(yoff int) anchorPoint {
+	total := len(ts.wrappedLines)
+	if total == 0 {
+		return anchorPoint{}
+	}
+	yoff = min(yoff, total-1)
+	acc := 0
+	for i, lines := range ts.wrapBlockLines {
+		if yoff < acc+len(lines) {
+			return anchorPoint{blockIdx: i, lineInBlock: yoff - acc}
+		}
+		acc += len(lines)
+	}
+	return anchorPoint{blockIdx: len(ts.wrapBlockLines) - 1}
+}
+
+// offsetForAnchor 按新宽缓存把锚点换算为绝对行：块前缀行数累加 + 块内行
+// （越界截断到该块末行；整体截断到末行）。
+func (ts *transcriptState) offsetForAnchor(a anchorPoint) int {
+	if len(ts.wrapBlockLines) == 0 {
+		return 0
+	}
+	a.blockIdx = min(max(a.blockIdx, 0), len(ts.wrapBlockLines)-1)
+	off := 0
+	for i := range a.blockIdx {
+		off += len(ts.wrapBlockLines[i])
+	}
+	lines := ts.wrapBlockLines[a.blockIdx]
+	a.lineInBlock = min(max(a.lineInBlock, 0), len(lines)-1)
+	return min(off+a.lineInBlock, len(ts.wrappedLines)-1)
 }
 
 // syncViewport 按宽高同步转写视口：缓存 sync（增量）→ 行列表有变才克隆喂给。

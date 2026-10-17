@@ -101,7 +101,7 @@ func TestThemeSwitch(t *testing.T) {
 	}
 	// 预置已渲染 markdown（标题走 accent 槽）。
 	m = update(t, m, tuiEvent{ev: event.AssistantTextEvent{Seq: 1, Turn: 1, Text: "# 标题\n\n正文"}})
-	before := strings.Join(m.transcriptState.lines(80), "\n")
+	before := strings.Join(flattenTranscript(&m.transcriptState, 80), "\n")
 	if !strings.Contains(before, "\x1b[38;2;217;119;87m") { // graphite #d97757
 		t.Fatalf("graphite accent SGR missing before switch:\n%s", before)
 	}
@@ -111,7 +111,7 @@ func TestThemeSwitch(t *testing.T) {
 	if m.themeState.name != "ember" {
 		t.Fatalf("themeState.name = %q, want ember", m.themeState.name)
 	}
-	after := strings.Join(m.transcriptState.lines(80), "\n")
+	after := strings.Join(flattenTranscript(&m.transcriptState, 80), "\n")
 	if !strings.Contains(after, "\x1b[38;2;240;109;56m") { // ember #f06d38
 		t.Fatalf("ember accent SGR missing after switch:\n%s", after)
 	}
@@ -124,14 +124,14 @@ func TestThemeSwitch(t *testing.T) {
 	if m.themeState.name != "ember" {
 		t.Fatalf("unknown name must not switch, name = %q", m.themeState.name)
 	}
-	log := strings.Join(m.transcriptState.lines(80), "\n")
+	log := strings.Join(flattenTranscript(&m.transcriptState, 80), "\n")
 	if !strings.Contains(log, "未知主题 nope") || !strings.Contains(log, "graphite-light") {
 		t.Fatalf("unknown theme must list the catalog:\n%s", log)
 	}
 	// 无参：列清单 + 当前名。
 	m = update(t, m, typedInput("/theme"))
 	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	log = strings.Join(m.transcriptState.lines(80), "\n")
+	log = strings.Join(flattenTranscript(&m.transcriptState, 80), "\n")
 	if !strings.Contains(log, "midnight-light") || !strings.Contains(log, "（当前 ember）") {
 		t.Fatalf("bare /theme must list catalog with current theme:\n%s", log)
 	}
