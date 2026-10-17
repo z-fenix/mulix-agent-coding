@@ -38,9 +38,8 @@ import (
 // 渲染符号唯一来源：本任务接线工具/委派卡三态与取消态、连接槽；其余符号
 // （品牌 ◆/通知 ·/！/折叠 ▸/提示符 ❯/滚动条 █│）由后续任务在各自渲染点接线
 // （表先行落位，杜绝各任务私造字面量）。着色按 §7 表：运行 accent、完成
-// green、失败/委派失败 red、通知 dim（warning ！ amber）、折叠/track dim、
-// thumb/prompt accent；⎿ 槽 §7 记 border 色——border 槽方法未落地，暂随
-// 输出尾 dim 渲染（收口任务归位）。
+// green、失败/委派失败 red、连接槽 border（T4 deferred minor 已随 T18 归位）、
+// 通知 dim（warning ！ amber）、折叠/track dim、thumb/prompt accent。
 const (
 	symBrand     = "◆" // 品牌/头行/横幅
 	symRun       = "●" // 工具/委派运行中
@@ -282,9 +281,9 @@ func (c *toolCard) header(width int) string {
 }
 
 // tail 连接槽输出尾：折叠态出保尾 toolTailLines 行，展开态（Ctrl+B）出驻留
-// 全量（≤toolExpandMaxLines）；首行携 ⎿ 槽、续行按槽宽对齐（对照参考
-// renderConnectorBlock）；整行弱化（对照参考 collapseToolOutput 的 dim
-// 预览），逐行按余宽截断。
+// 全量（≤toolExpandMaxLines）；首行携 ⎿ 槽（border 色——设计 §7 符号表连接槽
+// 槽位，T4 deferred minor 归位；内容照旧 dim 整行弱化）、续行按槽宽对齐（对
+// 照参考 renderConnectorBlock），逐行按余宽截断。
 func (c *toolCard) tail(width int) []string {
 	lines := c.outputTail
 	if !c.expanded && len(lines) > toolTailLines {
@@ -298,11 +297,12 @@ func (c *toolCard) tail(width int) []string {
 	avail := max(width-slot, 4)
 	out := make([]string, 0, len(lines))
 	for i, l := range lines {
-		prefix := indent
 		if i == 0 {
-			prefix = toolConnector
+			// 首行连接槽 border 色（显示宽同槽：⎿ + 2 空格），内容 dim。
+			out = append(out, borderLine(symConnector)+"  "+dimLine(clampWidth(l, avail)))
+			continue
 		}
-		out = append(out, dimLine(prefix+clampWidth(l, avail)))
+		out = append(out, dimLine(indent+clampWidth(l, avail)))
 	}
 	return out
 }
@@ -317,6 +317,10 @@ func failLine(s string) string { return activeTheme.red(s) }
 // greenLine 绿槽色分（设计 §7：完成态 ✓——对照 accentLine/failLine 同族
 // helper；方法驻 diffview.go，归属原 T18/T19 文件清单注记）。
 func greenLine(s string) string { return activeTheme.green(s) }
+
+// borderLine 边框线槽（border）色分（设计 §7：连接槽 ⎿——T4 deferred minor
+// 归位，消费点 toolCard.tail / delegationBlock 完成尾）。
+func borderLine(s string) string { return activeTheme.border(s) }
 
 // clampWidth 按显示宽截断（SGR 零宽计列、全角计两列；超宽补省略号——对照
 // 参考 clampPlain 的按宽收口，经 x/ansi 保持宽度感知）。

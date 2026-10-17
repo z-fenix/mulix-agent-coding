@@ -200,6 +200,11 @@ func (t *theme) dim(s string) string    { return sgrWrap(sgrFg(t.dimColor), s) }
 func (t *theme) red(s string) string    { return sgrWrap(sgrFg(t.redColor), s) }
 func (t *theme) yellow(s string) string { return sgrWrap(sgrFg(t.yellowColor), s) }
 
+// border 边框线槽（设计 §7 符号表：连接槽 ⎿ = border——toolcard.go 输出尾/
+// model.go 委派完成尾消费，T4 deferred minor 归位）。空槽原样返回（中性缺省/
+// 无色层不着色）。
+func (t *theme) border(s string) string { return sgrWrap(sgrFg(t.borderColor), s) }
+
 // fg 正文主色槽（fg-primary——标题行文字层级消费，设计 §6「标题行 fg-primary
 // 加粗」；dsh 换装 Task 5 接线）。空槽原样返回（中性缺省/无色层不着色）。
 func (t *theme) fg(s string) string { return sgrWrap(sgrFg(t.fgColor), s) }

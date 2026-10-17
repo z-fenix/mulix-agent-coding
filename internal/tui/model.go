@@ -653,8 +653,10 @@ func (b *delegationBlock) renderInner(width int) []string {
 	}
 	lines := []string{clampWidth(head, width)}
 	if b.state == delegDone && (b.tokens > 0 || b.costCents > 0) {
-		tail := toolConnector + fmt.Sprintf("%d tok · $%.2f", b.tokens, float64(b.costCents)/100)
-		lines = append(lines, dimLine(clampWidth(tail, width)))
+		// 连接槽 border 色（设计 §7 符号表——工具卡输出尾同符号同槽，T4
+		// deferred minor 归位），明细文本照旧 dim；显示宽同槽（⎿ + 2 空格）。
+		tail := fmt.Sprintf("%d tok · $%.2f", b.tokens, float64(b.costCents)/100)
+		lines = append(lines, borderLine(symConnector)+"  "+dimLine(clampWidth(tail, max(width-3, 1))))
 	}
 	return lines
 }

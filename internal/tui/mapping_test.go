@@ -1,13 +1,16 @@
 package tui
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
 
 	"charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"mulix/internal/event"
+	"mulix/internal/subagent"
 )
 
 // ---- Task 11（023 FR-016/SC-004）：事件渲染覆盖矩阵 ----
@@ -140,7 +143,7 @@ func TestEventRenderMatrix(t *testing.T) {
 					Input: json.RawMessage(`{"command":"go vet"}`)},
 				event.ToolResultEvent{Seq: 2, Turn: 1, ToolUseID: "tu-r", Content: "vet ok\nall good"},
 			},
-			wantBlocks: []string{"\x1b[38;5;114m✓\x1b[0m", "⎿", "vet ok", "all good", "完成"}, // 符号表：完成 ✓ green 槽
+			wantBlocks: []string{"\x1b[38;5;114m✓\x1b[0m", "\x1b[38;5;238m⎿\x1b[0m", "vet ok", "all good", "完成"}, // 符号表：完成 ✓ green 槽；连接槽 ⎿ border 槽（T4 deferred minor 归位）
 			wantAbsent: []string{"运行中"},
 			wantState: func(t *testing.T, m *tuiModel) {
 				if len(m.transcriptState.blocks) != 1 {
@@ -323,7 +326,7 @@ func TestEventRenderMatrix(t *testing.T) {
 				event.DelegationCompletedEvent{Seq: 2, SubSessionID: "sub-12345678",
 					Summary: "全部通过", TotalTokens: 1500, CostUSDCents: 21},
 			},
-			wantBlocks: []string{"\x1b[38;5;114m✓\x1b[0m", "子代理 sub-1234… 完成", "全部通过", "⎿", "1500 tok · $0.21"}, // 符号表：完成 ✓ green 槽
+			wantBlocks: []string{"\x1b[38;5;114m✓\x1b[0m", "子代理 sub-1234… 完成", "全部通过", "\x1b[38;5;238m⎿\x1b[0m", "1500 tok · $0.21"}, // 符号表：完成 ✓ green 槽；连接槽 ⎿ border 槽（T4 deferred minor 归位——委派完成尾同符号同槽）
 			wantState: func(t *testing.T, m *tuiModel) {
 				if len(m.transcriptState.blocks) != 1 {
 					t.Fatalf("lifecycle must upsert one card in place, blocks = %d", len(m.transcriptState.blocks))
@@ -381,9 +384,11 @@ func TestEventRenderMatrix(t *testing.T) {
 				event.ToolUseRequestedEvent{Seq: 4, Turn: 1, ToolUseID: "toolu-7", Tool: "Bash", Input: json.RawMessage(`{"command":"sleep 99"}`)},
 				// 中段 sync（真实 UI 每帧都做，且用 transcriptContentWidth——
 				// 与 finalize 同宽，否则宽度差触发全量重建会洗掉缓存失效漏洞
-				// 的现场；024 终审 Important-1 的判别力所在）。
+				// 的现场；024 终审 Important-1 的判别力所在。T18：口径对齐
+				// mainWidth——finalize 的换行宽即 transcriptContentWidth(mainWidth)，
+				// 窄档 W=80 下与 m.width 同值，行为不变）。
 				func(m *tuiModel) {
-					flattenTranscript(&m.transcriptState, transcriptContentWidth(m.width))
+					flattenTranscript(&m.transcriptState, transcriptContentWidth(m.mainWidth()))
 				},
 				event.EngineExitedEvent{Seq: 5, Code: 1, Reason: "crashed"},
 				event.EngineExitedEvent{Seq: 6, Code: 1, Reason: "crashed"},
@@ -406,6 +411,268 @@ func TestEventRenderMatrix(t *testing.T) {
 				}
 			},
 		},
+		// ---- Task 18（矩阵补全）：新面逐行 —— diff 卡 bg 槽 / 面板页签 / 布局档位 ----
+		//
+		// 判别性口径：色断言钉 SGR 复合段（错误实现必红）、档位行钉列位与签名
+		// 在场/离场；前序任务已绿的行如实记台账（不硬造红）。符号行（●/✓/✗ 三
+		// 态）T4 已钉（行 4/5/6 + EngineExited 清扫行 + 委派卡行）——本批不再重
+		// 复造行，仅把连接槽 ⎿ 升级为 border 槽复合断言（T4 deferred minor 归位）。
+
+		// 22. diff 卡 bg 槽（写类）：Write 请求即渲染 diff（D9 请求即渲染），
+		//     增行整行 48;5;22 底 + 114 marker（dsh dark 手选）；纯新增无删行带。
+		{
+			name: "diff 卡 bg 槽（写类）：Write 卡增行整行槽色",
+			events: []any{
+				event.ToolUseRequestedEvent{Seq: 1, Turn: 1, ToolUseID: "tu-dw", Tool: "Write",
+					Input: json.RawMessage(`{"file_path":"new.txt","content":"one\ntwo\n"}`)},
+			},
+			wantBlocks: []string{
+				"\x1b[48;5;22m\x1b[38;5;114m", // diffRow 复合段：增行 bg 槽 + marker 前景
+				"✎", "写",
+			},
+			wantAbsent: []string{"\x1b[48;5;52m"}, // Write 整文件纯新增——删行带不得出现
+			wantState: func(t *testing.T, m *tuiModel) {
+				// 标记与代码段被行内回铺 SGR 分隔（Task 6 换装）——内容连续性按
+				// 剥离文本判定（diffview_test.go 同口径）。
+				plain := ansi.Strip(strings.Join(flattenTranscript(&m.transcriptState,
+					transcriptContentWidth(m.mainWidth())), "\n"))
+				for _, want := range []string{"+ one", "+ two"} {
+					if !strings.Contains(plain, want) {
+						t.Fatalf("Write diff rows missing %q:\n%s", want, plain)
+					}
+				}
+			},
+		},
+		// 23. diff 卡 bg 槽（改写类）：Edit 请求 → 增/删双侧槽色同卡在场。
+		{
+			name: "diff 卡 bg 槽（改写类）：Edit 卡增删双侧槽色",
+			events: []any{
+				event.ToolUseRequestedEvent{Seq: 1, Turn: 1, ToolUseID: "tu-de", Tool: "Edit",
+					Input: json.RawMessage(`{"file_path":"src/app.go","old_string":"old line","new_string":"new line"}`)},
+			},
+			wantBlocks: []string{
+				"\x1b[48;5;22m\x1b[38;5;114m", // 增行：22 底 + 114 marker
+				"\x1b[48;5;52m\x1b[38;5;203m", // 删行：52 底 + 203 marker
+			},
+			wantState: func(t *testing.T, m *tuiModel) {
+				plain := ansi.Strip(strings.Join(flattenTranscript(&m.transcriptState,
+					transcriptContentWidth(m.mainWidth())), "\n"))
+				for _, want := range []string{"+ new line", "- old line"} {
+					if !strings.Contains(plain, want) {
+						t.Fatalf("Edit diff rows missing %q:\n%s", want, plain)
+					}
+				}
+			},
+		},
+		// 24. 面板页签行（变更·空态）：active accent+下划线合成段、inactive dim
+		//     段、空态指引（T12 Ruling：页签显示名字面钉点路由本矩阵）。
+		{
+			name: "面板页签（变更·空态）：字面与槽位钉点",
+			wantState: func(t *testing.T, m *tuiModel) {
+				v := m.panelView(32)
+				for _, want := range []string{
+					"\x1b[38;5;111;4m变更\x1b[0m",                                                     // active：accent+SGR4 单条合成
+					"\x1b[38;5;244m代理\x1b[0m", "\x1b[38;5;244m诊断\x1b[0m", "\x1b[38;5;244m缓存\x1b[0m", // inactive dim
+					"暂无变更文件", "写类工具变更后在此汇总",
+				} {
+					if !strings.Contains(v, want) {
+						t.Fatalf("panelView missing %q:\n%q", want, v)
+					}
+				}
+			},
+		},
+		// 25. 面板页签行（变更·内容态）：写类收口沿聚合条目行（path + green/red
+		//     计数槽）；条目在场时空态指引离场。
+		{
+			name: "面板页签（变更·内容态）：聚合条目行与计数槽",
+			events: []any{
+				event.ToolUseRequestedEvent{Seq: 1, Turn: 1, ToolUseID: "tu-dp", Tool: "Edit",
+					Input: json.RawMessage(`{"file_path":"src/main.go","old_string":"a","new_string":"b"}`)},
+				event.ToolResultEvent{Seq: 2, Turn: 1, ToolUseID: "tu-dp", Content: "ok"},
+			},
+			wantState: func(t *testing.T, m *tuiModel) {
+				v := m.panelView(32)
+				for _, want := range []string{"src/main.go", "\x1b[38;5;114m+1\x1b[0m", "\x1b[38;5;203m-1\x1b[0m"} {
+					if !strings.Contains(v, want) {
+						t.Fatalf("changes tab must render the aggregated entry (%q):\n%q", want, v)
+					}
+				}
+				if strings.Contains(v, "暂无变更文件") {
+					t.Fatalf("entries present must retire the empty state:\n%q", v)
+				}
+			},
+		},
+		// 26. 面板页签行（agents·未接线）：直渲口径空态（stub 无 Manager）。
+		{
+			name: "面板页签（agents）：子代理未启用空态",
+			events: []any{
+				func(m *tuiModel) { m.panel.tab = tabAgents },
+			},
+			wantState: func(t *testing.T, m *tuiModel) {
+				v := m.panelView(32)
+				for _, want := range []string{"\x1b[38;5;111;4m代理\x1b[0m", "子代理未启用", "[esc] 返回"} {
+					if !strings.Contains(v, want) {
+						t.Fatalf("agents tab missing %q:\n%q", want, v)
+					}
+				}
+			},
+		},
+		// 27. 面板页签行（agents·列表行）：真实 Manager + stub 句柄——表头、行载
+		//     任务、键位提示（TestTUIAgentsTabEmpty 持有「暂无子代理」接线空态）。
+		{
+			name: "面板页签（agents）：列表行与键位提示",
+			events: []any{
+				func(m *tuiModel) {
+					mgr, err := subagent.NewManager(subagent.Options{
+						Root: t.TempDir(),
+						Factory: func(context.Context, string) (subagent.SessionHandle, error) {
+							return &agentsStubHandle{id: "stub-mx", done: make(chan struct{})}, nil
+						},
+						Publish: func(any) {},
+					})
+					if err != nil {
+						t.Fatalf("manager: %v", err)
+					}
+					if _, err := mgr.Spawn(context.Background(), "p", "子任务甲", 0); err != nil {
+						t.Fatalf("spawn: %v", err)
+					}
+					m.ctrl.(*stubController).sub = mgr
+					m.panel.tab = tabAgents
+				},
+			},
+			wantState: func(t *testing.T, m *tuiModel) {
+				v := m.panelView(32)
+				for _, want := range []string{"\x1b[38;5;111;4m代理\x1b[0m", "ID | 状态 | 任务 | 深度", "子任务甲", agentsTabHint} {
+					if !strings.Contains(v, want) {
+						t.Fatalf("agents tab missing %q:\n%q", want, v)
+					}
+				}
+			},
+		},
+		// 28. 面板页签行（doctor·内容行）：doctorLines 双呈现（FR-012——转写腿
+		//     行为不变，行 10 已持；页签腿随 doctorLines 在场）。
+		{
+			name: "面板页签（doctor）：内容行呈现",
+			events: []any{
+				func(m *tuiModel) {
+					m.doctorLines = []string{"引擎锁：已锁定", "缓存根：可用"}
+					m.panel.tab = tabDoctor
+				},
+			},
+			wantState: func(t *testing.T, m *tuiModel) {
+				v := m.panelView(32)
+				for _, want := range []string{"\x1b[38;5;111;4m诊断\x1b[0m", "引擎锁：已锁定", "缓存根：可用"} {
+					if !strings.Contains(v, want) {
+						t.Fatalf("doctor tab missing %q:\n%q", want, v)
+					}
+				}
+			},
+		},
+		// 29. 面板页签行（cache·指引）：无数据（tempdir 零报告）→ 空态指引字面
+		//     （「/cache 查看缓存汇总」——panelEmptyState 唯一文案源）。
+		{
+			name: "面板页签（cache）：无数据指引",
+			events: []any{
+				func(m *tuiModel) { m.panel.tab = tabCache },
+			},
+			wantState: func(t *testing.T, m *tuiModel) {
+				v := m.panelView(32)
+				for _, want := range []string{"\x1b[38;5;111;4m缓存\x1b[0m", "暂无用量数据", "/cache 查看缓存汇总"} {
+					if !strings.Contains(v, want) {
+						t.Fatalf("cache tab missing %q:\n%q", want, v)
+					}
+				}
+			},
+		},
+		// 30. 布局档位 W=150（宽档三栏）：侧栏列（列 0–15 品牌）+ 主列 + 面板列
+		//     （列 118–149 页签行）齐在场；主列宽换行判别——122 显示宽 notice 须
+		//     在主列内容宽 101 处折行（T10 deferred minor 收口：harness 扁平化对
+		//     齐 mainWidth——仍按 m.width=149 扁平化则整行不折、本断言必红）。
+		{
+			name: "布局档位 W=150：三栏构成与主列宽换行（mainWidth 对齐）",
+			events: []any{
+				tea.WindowSizeMsg{Width: 150, Height: 24},
+				event.NoticeEvent{Seq: 1, Level: "info", Content: strings.Repeat("长", 60)},
+			},
+			wantAbsent: []string{"· " + strings.Repeat("长", 60)}, // 122 显示宽 > 101——整行在场即扁平化宽度错档
+			wantState: func(t *testing.T, m *tuiModel) {
+				if got := m.mainWidth(); got != 102 {
+					t.Fatalf("W=150 全开 mainWidth = %d, want 102（150−16−32）", got)
+				}
+				lines := strings.Split(m.frame(), "\n")
+				if len(lines) != 24 {
+					t.Fatalf("帧高漂移：%d != 24", len(lines))
+				}
+				first := ansi.Strip(lines[0])
+				if side := ansi.Cut(first, 0, 16); !strings.Contains(side, "◆ mulix") {
+					t.Fatalf("首行列 0–15 缺侧栏品牌行：%q", side)
+				}
+				if panel := ansi.Cut(first, 118, 150); !strings.Contains(panel, "变更") || !strings.Contains(panel, "缓存") {
+					t.Fatalf("首行列 118–149 缺面板页签行：%q", panel)
+				}
+			},
+		},
+		// 31. 布局档位 W=120（中档双栏）：侧栏在场（16 列）、面板几何让位（恒 0
+		//     ——页签行合成段离场；状态行「缓存 本次命中」不含页签复合段，不误
+		//     伤）。mainWidth = 120−16。
+		{
+			name:   "布局档位 W=120：双栏（侧栏在场、面板让位）",
+			events: []any{tea.WindowSizeMsg{Width: 120, Height: 24}},
+			wantState: func(t *testing.T, m *tuiModel) {
+				if got := m.mainWidth(); got != 104 {
+					t.Fatalf("W=120 中档 mainWidth = %d, want 104（120−16）", got)
+				}
+				frame := m.frame()
+				first := ansi.Strip(strings.Split(frame, "\n")[0])
+				if side := ansi.Cut(first, 0, 16); !strings.Contains(side, "◆ mulix") {
+					t.Fatalf("中档首行缺侧栏品牌行：%q", side)
+				}
+				if banned := "\x1b[38;5;111;4m变更\x1b[0m"; strings.Contains(frame, banned) {
+					t.Fatalf("中档面板列必须离场（页签行在场）：\n%s", frame)
+				}
+			},
+		},
+		// 32. 布局档位 W=90（窄档单列）：几何退化 (0,W,0)——侧栏品牌与面板页签
+		//     合成段齐离场；每行显示宽 ≤ 90（单列收口）。
+		{
+			name:   "布局档位 W=90：窄档单列（侧栏面板齐让位）",
+			events: []any{tea.WindowSizeMsg{Width: 90, Height: 24}},
+			wantState: func(t *testing.T, m *tuiModel) {
+				if got := m.mainWidth(); got != 90 {
+					t.Fatalf("W=90 窄档 mainWidth = %d, want 90（恒等于 W）", got)
+				}
+				frame := m.frame()
+				for _, banned := range []string{"◆ mulix", "\x1b[38;5;111;4m变更\x1b[0m"} {
+					if strings.Contains(frame, banned) {
+						t.Fatalf("窄档单列不得渲染侧栏/面板列（%q 在场）：\n%s", banned, frame)
+					}
+				}
+				for i, l := range strings.Split(frame, "\n") {
+					if w := ansi.StringWidth(l); w > 90 {
+						t.Fatalf("行 %d 显示宽 %d > 90（单列超宽）", i, w)
+					}
+				}
+			},
+		},
+		// 33. 布局档位 W=80（窄档基线）：TestFrameThreeTierComposition 持有逐行
+		//     等价钉点；矩阵行持档位构成面（单列、帧高 24、mainWidth=W）。
+		{
+			name: "布局档位 W=80：窄档基线单列",
+			wantState: func(t *testing.T, m *tuiModel) {
+				if got := m.mainWidth(); got != 80 {
+					t.Fatalf("W=80 窄档 mainWidth = %d, want 80", got)
+				}
+				frame := m.frame()
+				for _, banned := range []string{"◆ mulix", "\x1b[38;5;111;4m变更\x1b[0m"} {
+					if strings.Contains(frame, banned) {
+						t.Fatalf("窄档基线不得渲染侧栏/面板列（%q 在场）：\n%s", banned, frame)
+					}
+				}
+				if n := len(strings.Split(frame, "\n")); n != 24 {
+					t.Fatalf("帧高漂移：%d != 24", n)
+				}
+			},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -414,13 +681,15 @@ func TestEventRenderMatrix(t *testing.T) {
 				switch x := e.(type) {
 				case tea.KeyPressMsg:
 					m = update(t, m, x)
+				case tea.WindowSizeMsg: // 布局档位行：宽度驱动的真实路径（Update 接线）
+					m = update(t, m, x)
 				case func(*tuiModel):
 					x(m)
 				default:
 					m = update(t, m, tuiEvent{ev: e})
 				}
 			}
-			joined := strings.Join(flattenTranscript(&m.transcriptState, transcriptContentWidth(m.width)), "\n")
+			joined := strings.Join(flattenTranscript(&m.transcriptState, transcriptContentWidth(m.mainWidth())), "\n")
 			for _, want := range tc.wantBlocks {
 				if !strings.Contains(joined, want) {
 					t.Errorf("transcript missing %q\n--- transcript ---\n%s", want, joined)
