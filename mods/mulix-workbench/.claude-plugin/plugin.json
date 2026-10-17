@@ -1,0 +1,7 @@
+{
+  "name": "mulix-workbench",
+  "version": "0.1.0",
+  "author": { "name": "mulix project" },
+  "description": "Read-only mulix workflow and native main-session usage workbench for Claude Code 2.1.301",
+  "types": "./types/index.d.ts"
+}
