@@ -110,6 +110,34 @@ func diffFromInput(tool string, input json.RawMessage) (diffInput, bool) {
 	return d, true
 }
 
+// diffHunks 统一 diff 计算（renderDiff 与 Task 14 变更聚合同源——同一
+// ToUnifiedDiff 参数化不出第二算式）：D9 口径（before/after → Lines →
+// ToUnifiedDiff，缺省上下文行）。失败防御 false（Lines 产物与内容自洽——
+// 不可达；同 renderDiff 原 nil 降级，不出半成品）。
+func diffHunks(d diffInput) ([]*udiff.Hunk, bool) {
+	hunks, err := udiff.ToUnifiedDiff("", "", d.before, udiff.Lines(d.before, d.after), udiff.DefaultContextLines)
+	if err != nil {
+		return nil, false
+	}
+	return hunks.Hunks, true
+}
+
+// countDiffLines 增删行计数单源（renderDiff 头行 + Task 14 变更聚合共用——
+// 不出第二计数器）。
+func countDiffLines(hunks []*udiff.Hunk) (added, removed int) {
+	for _, h := range hunks {
+		for _, l := range h.Lines {
+			switch l.Kind {
+			case udiff.Insert:
+				added++
+			case udiff.Delete:
+				removed++
+			}
+		}
+	}
+	return added, removed
+}
+
 // renderDiff diff 视图按宽渲染（块内挂载于工具卡头行之后）：✎ 动词 <path>
 // +A -B 头 + 行号 hunk 体（增/删行 diff bg 槽整行 + marker 前景 gutter/标记
 // 段——diffRow；上下文行 dim 行号 + chroma 代码着色——按 path 选 lexer；
@@ -121,28 +149,18 @@ func renderDiff(d diffInput, width int, th theme) []string {
 	if width <= 0 {
 		width = 80
 	}
-	hunks, err := udiff.ToUnifiedDiff("", "", d.before, udiff.Lines(d.before, d.after), udiff.DefaultContextLines)
-	if err != nil {
+	hunks, ok := diffHunks(d)
+	if !ok {
 		return nil // Lines 产物与内容自洽——不可达；防御降级（不出半成品视图）
 	}
-	added, removed := 0, 0
-	for _, h := range hunks.Hunks {
-		for _, l := range h.Lines {
-			switch l.Kind {
-			case udiff.Insert:
-				added++
-			case udiff.Delete:
-				removed++
-			}
-		}
-	}
+	added, removed := countDiffLines(hunks)
 	out := []string{diffHead(d, width, added, removed, th)}
-	if len(hunks.Hunks) == 0 {
+	if len(hunks) == 0 {
 		return out
 	}
-	gw := diffGutterWidth(hunks.Hunks)
+	gw := diffGutterWidth(hunks)
 	avail := max(width-2-gw-3, 4) // 2 缩进 + gutter + 空格/符号/空格
-	for hi, h := range hunks.Hunks {
+	for hi, h := range hunks {
 		if hi > 0 {
 			out = append(out, "  "+th.dim("⋮"))
 		}

@@ -1,9 +1,13 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 
 	"charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
+
+	"mulix/internal/event"
 )
 
 // ---- 右栏面板（2026-10-17-dsh-tui-visual-redesign Task 12；设计 §6 面板页签）----
@@ -33,7 +37,8 @@ var panelTabLabels = []string{"变更", "代理", "诊断", "缓存"}
 // panelState 面板状态：open 开合（**newTuiModel 显式置 true**——Go 零值 false
 // 不可用；Task 11 的平铺 panelOpen 已收编此字段，单源无双源）；focus 聚焦
 // （Task 15/17 接线）；tab 当前页签；sel 页签内选中游标（Task 14/15）；
-// previewPath diff 预览路径与 scroll 预览滚动（Task 14）。
+// previewPath diff 预览路径与 scroll 预览滚动（Task 14——取窗钳位见
+// changesTabView，按键驱动归 Task 17 焦点全模型）。
 type panelState struct {
 	open        bool
 	focus       bool
@@ -69,6 +74,11 @@ func (m *tuiModel) togglePanel() tea.Cmd {
 	}
 	m.capturePendingAnchor()
 	m.panel.open = !m.panel.open
+	if !m.panel.open && m.focus == focusPanel {
+		// 关沿焦点失效重置（Task 14；侧栏 toggleSidebar 同款——评审
+		// Important-1 口径）：不可见面板不得持焦。
+		m.focus = focusMain
+	}
 	m.composerState.ta.SetWidth(m.mainWidth())
 	return nil
 }
@@ -86,8 +96,9 @@ func (m *tuiModel) cyclePanelTab() {
 }
 
 // panelView 面板列视图（宽 w = columnWidths 的 panel 档，32）：页签行 →
-// border 色分隔线 → 当前页签空态指引（Task 14–16 换内容）。页签行四签并排
-// （22 显示列 ≤ 32）；指引行 clampWidth 收口列宽——超宽行不得撑破面板列。
+// border 色分隔线 → 当前页签内容区（变更页签 = 聚合条目视图——Task 14；其余
+// 页签空态指引，Task 15/16 逐签换内容）。页签行四签并排（22 显示列 ≤ 32）；
+// 内容行 clampWidth 收口列宽——超宽行不得撑破面板列。
 func (m *tuiModel) panelView(width int) string {
 	var b strings.Builder
 	// 页签行：active 段 = accent fg + SGR 4 下划线合成单条 SGR（panelTabActive
@@ -105,7 +116,11 @@ func (m *tuiModel) panelView(width int) string {
 	b.WriteString("\n")
 	b.WriteString(sgrWrap(sgrFg(activeTheme.borderColor), strings.Repeat("─", width)))
 	b.WriteString("\n")
-	b.WriteString(panelEmptyState(m.panel.tab, width))
+	if m.panel.tab == tabChanges {
+		b.WriteString(m.changesTabView(width))
+	} else {
+		b.WriteString(panelEmptyState(m.panel.tab, width))
+	}
 	return b.String()
 }
 
@@ -162,4 +177,169 @@ func (m *tuiModel) panelColumn(w int) string {
 		rows[r] = strings.Repeat(" ", w)
 	}
 	return strings.Join(rows, "\n")
+}
+
+// ---- 变更聚合 + 变更页签（2026-10-17-dsh-tui-visual-redesign Task 14）----
+//
+// 聚合缓存制（评审 Issue 3 修正）：工具卡收口点（ToolResultEvent 关卡）对写类
+// done 卡按 path upsert 累计 +/−——缓存读口渲染，无帧时扫描；计数口径与
+// renderDiff 同源（diffHunks+countDiffLines，不出第二计数器）。换绑收口清空
+// 聚合（model.go swapDoneMsg 成功路径——面板聚合态归零，转写块流不动是 023
+// 钉定语义）。
+
+// panelChromeRows 面板列固定 chrome 行数（页签行 + 分隔线——内容区行预算的
+// 扣除项；列高 = m.height，panelColumn）。
+const panelChromeRows = 2
+
+// changeEntry 变更聚合条目（Task 14）：path 聚合键（按 path 去重）、added/
+// deleted 累计计数（renderDiff 同源）、card 回指最近一次写类卡（预览渲染源
+// ——renderDiff(*card.diff) 与工具卡 diff 视图同源）。
+type changeEntry struct {
+	path    string
+	added   int
+	deleted int
+	card    *toolCard
+}
+
+// noteChangeAggregate 变更聚合缓存维护（Task 14——工具卡收口点增量，调用点
+// model.go ToolResultEvent 分支、closeToolCard 之前）：写类卡收口沿按 path
+// upsert 累计。写类判据 = diff 位（openToolCard 只对 diffFromInput 命中的
+// 写类工具挂 diff——Edit/Write/MultiEdit/NotebookEdit 同表覆盖，brief 三例
+// 枚举为其子集）；计数经 diffHunks+countDiffLines（renderDiff 同源）。收口沿
+// 判定 = pre-state 运行中（closeToolCard 原地改写前卡态仍为 running）：重复
+// 回执（已 done）不双计、失败回执（IsError）不聚合、孤儿回执（请求缺席无卡
+// 可考）不聚合；索引失配（换绑残渍）按 toolUseID 对账拦下。
+func (m *tuiModel) noteChangeAggregate(e event.ToolResultEvent) {
+	if e.IsError {
+		return
+	}
+	idx, ok := m.cards[e.ToolUseID]
+	if !ok {
+		return
+	}
+	card, isCard := m.transcriptState.blocks[idx].(*toolCard)
+	if !isCard || card.toolUseID != e.ToolUseID || card.state != toolRunning ||
+		card.diff == nil || card.diff.path == "" {
+		return
+	}
+	added, deleted := 0, 0
+	if hunks, okH := diffHunks(*card.diff); okH {
+		added, deleted = countDiffLines(hunks)
+	}
+	for i := range m.changes {
+		if m.changes[i].path == card.diff.path {
+			m.changes[i].added += added
+			m.changes[i].deleted += deleted
+			m.changes[i].card = card
+			return
+		}
+	}
+	m.changes = append(m.changes, changeEntry{path: card.diff.path, added: added, deleted: deleted, card: card})
+}
+
+// collectChanges 变更聚合读口（Task 14 Produces）：读缓存非现算——面板渲染
+// 与键路由共用，不做帧时扫描。
+func (m *tuiModel) collectChanges() []changeEntry {
+	return m.changes
+}
+
+// changesTabView 变更页签内容（Task 14）：条目行（changeEntryRow）按插入序
+// 排布，展开条目（previewPath 命中）行下内联 renderDiff 预览——preview 取窗
+// 由 panelState.scroll 起始、余高收口钳位（窗尾不出预览、预览不出面板列；
+// scroll 按键驱动归 Task 17 焦点全模型，本任务只落取窗机制）。内容区行预算 =
+// m.height−panelChromeRows，超预算截断（panelColumn 同口径的显式收口——大清
+// 单取景窗与侧栏 Task 13 同演进路径，后续任务接管）。空表回空态指引（不造数
+// ——spec Edge Cases）。
+func (m *tuiModel) changesTabView(width int) string {
+	entries := m.collectChanges()
+	if len(entries) == 0 {
+		return panelEmptyState(tabChanges, width)
+	}
+	budget := max(m.height-panelChromeRows, 1)
+	var rows []string
+	for i, e := range entries {
+		if budget <= 0 {
+			break
+		}
+		rows = append(rows, changeEntryRow(width, e, i == m.panel.sel))
+		budget--
+		if e.path != m.panel.previewPath || e.card == nil || e.card.diff == nil {
+			continue
+		}
+		preview := renderDiff(*e.card.diff, width, activeTheme)
+		if take := min(budget, len(preview)); take > 0 {
+			// scroll 取窗：上界钳位使窗尾不出预览（窗恒 ⊆ 面板列高内）。
+			sc := min(m.panel.scroll, len(preview)-take)
+			if sc < 0 {
+				sc = 0
+			}
+			rows = append(rows, preview[sc:sc+take]...)
+			budget -= take
+		}
+	}
+	return strings.Join(rows, "\n")
+}
+
+// changeEntryRow 变更条目行（Task 14）：path + ` +n`（green 槽）` -m`（red
+// 槽）——计数零侧省略（diffHead 同口径）；path 按计数余宽截断。selected 行
+// 整行 surface2 高亮 + fg-primary（sidebarSelWrap 同槽）：内嵌计数段的 reset
+// 会截断底色——diffRow「重置点即重铺」同法逐段重开 surface SGR，pad 在底色
+// 区内补齐列宽后统一收 reset；无色层（NO_COLOR/中性缺省）退化为 padToWidth
+// 平文——结构保留仅去色（sidebarSelWrap 同契约）。
+func changeEntryRow(width int, e changeEntry, selected bool) string {
+	var segs []string // 计数色段（内嵌 SGR——selected 行重铺 surface 用）
+	if e.added > 0 {
+		segs = append(segs, " "+activeTheme.green("+"+strconv.Itoa(e.added)))
+	}
+	if e.deleted > 0 {
+		segs = append(segs, " "+activeTheme.red("-"+strconv.Itoa(e.deleted)))
+	}
+	stat := strings.Join(segs, "")
+	path := clampWidth(e.path, max(width-ansi.StringWidth(stat), 1))
+	row := path + stat
+	if !selected {
+		return row
+	}
+	params := sidebarSelParams()
+	if params == "" {
+		return padToWidth(row, width)
+	}
+	open := "\x1b[" + params + "m"
+	var b strings.Builder
+	b.WriteString(open)
+	b.WriteString(path)
+	for _, s := range segs {
+		b.WriteString(s)
+		b.WriteString(open) // 重置点即重铺（diffRow 同法）
+	}
+	b.WriteString(padToWidth("", width-ansi.StringWidth(row)))
+	b.WriteString("\x1b[0m")
+	return b.String()
+}
+
+// movePanelSel 变更条目游标环绕移动（Task 14——moveSidebar 同公式；空表
+// no-op）。
+func (m *tuiModel) movePanelSel(delta int) {
+	n := len(m.collectChanges())
+	if n == 0 {
+		return
+	}
+	m.panel.sel = ((m.panel.sel+delta)%n + n) % n
+}
+
+// togglePanelPreview Enter 预览开合（Task 14）：选中条目展开 → previewPath =
+// 条目 path、scroll 归零（新预览从头读）；展开态同条目再按收起；切换他条目
+// 直接换预览。无条目/游标越界 no-op（brief：目标外不动作）。
+func (m *tuiModel) togglePanelPreview() {
+	entries := m.collectChanges()
+	if len(entries) == 0 || m.panel.sel < 0 || m.panel.sel >= len(entries) {
+		return
+	}
+	path := entries[m.panel.sel].path
+	if m.panel.previewPath == path {
+		m.panel.previewPath = ""
+	} else {
+		m.panel.previewPath = path
+	}
+	m.panel.scroll = 0
 }

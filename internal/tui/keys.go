@@ -37,8 +37,9 @@ type pendingSubmit struct {
 // handleEscapeKey 渲染态 Esc 阶梯（D10）：忙碌且气泡未上屏 → 丢弃在途提交并
 // 还原草稿（代际递增——迟到的 TurnStarted 不上屏、迟到的收据不渲染失败行）；
 // 忙碌且回合进行中 → 本地取消意图 + 异步 Cancel（已在途则幂等不重发）；换绑
-// 过渡期 no-op；空闲 → 侧栏聚焦先取焦回主列（Task 13 最小焦点形——阶梯扩展
-// 档，清空档之前；取焦消费本次 Esc 不连清输入），否则清空输入。忙碌/换绑档
+// 过渡期 no-op；空闲 → 聚焦态（侧栏/面板——Task 14 扩展面板档）先取焦回主列
+// （Task 13 最小焦点形——阶梯扩展档，清空档之前；取焦消费本次 Esc 不连清输入
+// ，预览/开合态保留），否则清空输入。忙碌/换绑档
 // 语义不动（取消优先于取焦——焦点保持，Esc 取消后仍可侧栏导航）。
 func (m *tuiModel) handleEscapeKey() (tea.Model, tea.Cmd) {
 	if m.swapping {
@@ -61,7 +62,9 @@ func (m *tuiModel) handleEscapeKey() (tea.Model, tea.Cmd) {
 		}
 		return m, nil // 取消已在途——幂等
 	}
-	if m.focus == focusSidebar {
+	if m.focus != focusMain { // 侧栏/面板聚焦先取焦回主列（Task 13 最小焦点形
+		// + Task 14 面板档——阶梯扩展档，清空档之前；取焦消费本次 Esc 不连清
+		// 输入，预览/开合态保留）
 		m.focus = focusMain
 		return m, nil
 	}

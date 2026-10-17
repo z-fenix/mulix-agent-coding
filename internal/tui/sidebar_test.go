@@ -309,7 +309,7 @@ func TestSidebarFocusNav(t *testing.T) {
 	if m.sidebar.sel != 0 {
 		t.Fatalf("↓ must wrap back to first, sel = %d", m.sidebar.sel)
 	}
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF6}) // 回主列
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF6}) // 出侧栏（Task 14：宽档进面板档——本断言与焦点档无关）
 	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyUp})
 	if m.sidebar.sel != 0 {
 		t.Fatalf("main-focus ↑ must not move sidebar sel: %d", m.sidebar.sel)
@@ -390,8 +390,9 @@ func TestSidebarEnterFailClosed(t *testing.T) {
 }
 
 // TestSidebarF6Guard 钉：侧栏关着 F6 不可聚焦（留痕——与 F2/F3/F4 守卫同
-// 口径：静默会让人以为已聚焦）；开后 F6 两态轮换（主列↔侧栏）；窄档 <100
-// 侧栏不渲染（几何退化）——开态残值同样拦截并留痕。
+// 口径：静默会让人以为已聚焦）；开后 F6 轮换（主列↔侧栏↔面板——Task 14
+// 面板档最小形，面板不可见跳过）；窄档 <100 侧栏不渲染（几何退化）——开态
+// 残值同样拦截并留痕。
 func TestSidebarF6Guard(t *testing.T) {
 	m, _, _ := newTestModel(t)
 	m = update(t, m, tea.WindowSizeMsg{Width: 130, Height: 24})
@@ -408,9 +409,25 @@ func TestSidebarF6Guard(t *testing.T) {
 	if m.focus != focusSidebar {
 		t.Fatal("F6 with open sidebar must focus it")
 	}
+	// Task 14 扩展（面板档最小形——Task 17 全模型前）：宽档面板常开，第二次
+	// F6 进面板档，第三次回主列。
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF6})
+	if m.focus != focusPanel {
+		t.Fatal("second F6 must move to the panel (open at wide width)")
+	}
 	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF6})
 	if m.focus != focusMain {
-		t.Fatal("second F6 must cycle back to main")
+		t.Fatal("third F6 must cycle back to main")
+	}
+	// 中档（<130 面板不可见）跳过面板档：侧栏 → 主列。
+	m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 24})
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF6})
+	if m.focus != focusSidebar {
+		t.Fatal("mid-width F6 must focus the sidebar")
+	}
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF6})
+	if m.focus != focusMain {
+		t.Fatal("mid-width cycle must skip the invisible panel")
 	}
 	m = update(t, m, tea.WindowSizeMsg{Width: 90, Height: 24}) // 窄档（开态残值）
 	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF6})

@@ -139,17 +139,27 @@ func (m *tuiModel) toggleSidebar() tea.Cmd {
 	return nil
 }
 
-// cycleFocus F6 聚焦轮换（Task 13 最小焦点形）：主列↔侧栏两态循环。在途换绑
-// 窗口冻结焦点操作（评审 Important-2——swapping 单飞不变量，留痕拒绝）；侧栏
-// 不可见即不可聚焦——窄档 <100（几何退化不渲染）与未开启（F3 关态）都留痕
-// 拒绝（与 F2/F3/F4 守卫同口径：静默会让人以为已聚焦）；已聚焦侧栏则回主列。
-// focusPanel 与聚焦可见性归 Task 17。
+// cycleFocus F6 聚焦轮换（Task 13 最小焦点形；Task 14 扩展面板档——主列→
+// 侧栏→面板→主列；聚焦可见性/状态栏焦点名/主列起未开区跳过归 Task 17 全
+// 模型）：在途换绑窗口冻结焦点操作（评审 Important-2——swapping 单飞不变量，
+// 留痕拒绝）；主列→侧栏原守卫不动（窄档 <100 与未开启留痕拒绝——与 F2/F3/F4
+// 守卫同口径：静默会让人以为已聚焦）；侧栏下一段：面板可见（开 + 宽档 ≥130）
+// 进面板档，不可见跳过落回主列（轮换落点仍是可见区，无「以为聚焦了」歧义）；
+// 面板聚焦回主列。
 func (m *tuiModel) cycleFocus() tea.Cmd {
 	if m.swapping {
 		m.appendLine("[换绑] 换绑进行中，稍候再试")
 		return nil
 	}
 	if m.focus == focusSidebar {
+		if m.panel.open && m.width >= 130 {
+			m.focus = focusPanel
+			return nil
+		}
+		m.focus = focusMain
+		return nil
+	}
+	if m.focus == focusPanel {
 		m.focus = focusMain
 		return nil
 	}
@@ -208,22 +218,33 @@ func (m *tuiModel) sidebarView(width int) string {
 	return b.String()
 }
 
-// sidebarSelWrap 当前会话行整行高亮（设计 §6：surface2 底 + fg-primary 文字）
-// ——fg/bg 槽合成单条 SGR（空槽跳过；双空回落平文——NO_COLOR 层不着色不破
-// 结构，TestNoColorFrameStructure 口径一致）。调用方先行 padToWidth，底色
-// 覆盖整列宽；行尾 reset 由帧出口 paintBG 的重置点重铺锚接（layout.go）。
-func sidebarSelWrap(s string) string {
+// sidebarSelParams 当前会话行整行高亮的 SGR 参数串（设计 §6：surface2 底 +
+// fg-primary 文字——fg/bg 槽合成；空槽跳过，双空回落空串 = 平文）。Task 14
+// 变更条目 sel 行复用同槽（changeEntryRow 重铺消费）；重命名/独立化归 Task 17
+// 整理。
+func sidebarSelParams() string {
 	fg := sgrFg(activeTheme.fgColor)
 	bg := sgrBg(activeTheme.surface2Color)
 	switch {
 	case fg == "" && bg == "":
-		return s
+		return ""
 	case fg == "":
-		return sgrWrap(bg, s)
+		return bg
 	case bg == "":
-		return sgrWrap(fg, s)
+		return fg
 	}
-	return sgrWrap(fg+";"+bg, s)
+	return fg + ";" + bg
+}
+
+// sidebarSelWrap 当前会话行整行高亮——fg/bg 槽合成单条 SGR（sidebarSelParams
+// 参数化）。调用方先行 padToWidth，底色覆盖整列宽；行尾 reset 由帧出口
+// paintBG 的重置点重铺锚接（layout.go）。
+func sidebarSelWrap(s string) string {
+	params := sidebarSelParams()
+	if params == "" {
+		return s
+	}
+	return sgrWrap(params, s)
 }
 
 // sidebarColumn 侧栏列合成（frame 消费，Task 11——取代 Task 10 的空白占位）：

@@ -130,6 +130,10 @@ type tuiModel struct {
 	// 工具卡状态（Task 9 FR-005）：cards 索引 toolUseID → 块下标——回执按同
 	// ID upsert 原地关卡（卡片本体指针驻块流，见 toolcard.go）。
 	cards map[string]int
+	// changes 变更聚合缓存（Task 14）：会话级写类卡按 path 去重累计——收口点
+	// 增量维护（noteChangeAggregate，panel.go），读口 collectChanges。面板态
+	// 非转写：换绑收口清空（swapDoneMsg 成功路径），转写块流不动（023 钉定）。
+	changes []changeEntry
 	// 委派卡状态（Task 11 FR-016）：delegCards 索引 SubSessionID → 块下标——
 	// 生命周期回执按同 ID upsert 原地收口（与工具卡同法）。
 	delegCards map[string]int
@@ -162,14 +166,16 @@ type tuiModel struct {
 
 // focusZone 键盘焦点域（Task 13 最小焦点形——控制裁定，见台账 Ruling：焦点
 // 模型计划落 Task 17，但侧栏 ↑/↓/Enter 需「聚焦」语义先成立，故本任务落最
-// 小两态；focusPanel、聚焦可见性（聚焦区 accent 边框 + 状态栏焦点名）与审批
-// 拦截钉面归 Task 17 扩展）。零值 focusMain 即缺省焦点（Go 零值语义恰为所
-// 愿——与 panelState.open 的显式置位不同，无需构造补偿）。
+// 小两态；Task 14 扩展 focusPanel 第三档——变更页签 ↑/↓/Enter 键路由所需，
+// 聚焦可见性（聚焦区 accent 边框 + 状态栏焦点名）与审批拦截钉面仍归 Task 17
+// 扩展）。零值 focusMain 即缺省焦点（Go 零值语义恰为所愿——与 panelState.open
+// 的显式置位不同，无需构造补偿）。
 type focusZone uint8
 
 const (
 	focusMain    focusZone = iota // 主列（composer/转写——缺省）
 	focusSidebar                  // 侧栏（清单 ↑/↓/Enter 接线，Task 13）
+	focusPanel                    // 面板（变更页签 ↑/↓/Enter 接线，Task 14——路由守卫见 handleKey，F6 轮换见 cycleFocus）
 )
 
 // ---- 关注点子结构（D4 骨架）----
@@ -315,6 +321,12 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ctrl = msg.ctrl // Critical-A：换绑后控制面必须指向新控制器
 		m.selfID = msg.id
 		m.refreshSidebarSessions() // 侧栏清单快照刷新（Task 13——换绑收口即新「打开时刻」，sel 随刷新复位）
+		// 变更聚合随会话归零（Task 14——面板聚合态非转写，转写块流不动是 023
+		// 钉定语义）；面板游标/预览随清（快照刷新即游标复位——侧栏同款）。
+		m.changes = nil
+		m.panel.sel = 0
+		m.panel.previewPath = ""
+		m.panel.scroll = 0
 		m.statusState.snapshot = control.Snapshot{}
 		m.approval = nil // 旧会话的审批卡作废（对旧桥的裁决路径已不存在）
 		// 旧会话的流式答案缓冲一并作废：换绑排空丢弃旧残响（不经 handleEvent），
@@ -490,9 +502,11 @@ func (m *tuiModel) handleEvent(ev any) {
 		m.openToolCard(e)
 	case event.ToolResultEvent:
 		// 工具卡回执关卡（FR-005：同 ToolUseID upsert——运行中卡原地转完成/
-		// 失败）；收口纪律同上。
+		// 失败）；收口纪律同上。变更聚合在关卡前增量维护（Task 14——收口沿
+		// 判定读 closeToolCard 改写前的运行中卡态，防重复回执双计）。
 		m.closeThinking()
 		m.sealAnswer()
+		m.noteChangeAggregate(e)
 		m.closeToolCard(e)
 	case event.TurnDoneEvent:
 		m.closeThinking() // D14：回合收口折叠思考块（Ns 定格在末次思考事件到达）
@@ -796,6 +810,24 @@ func (m *tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case tea.KeyEnter:
 			return m.handleSidebarEnter()
+		}
+	}
+	// 面板聚焦键路由（Task 14 最小焦点形）：focus==focusPanel 且面板可见
+	//（开 + 宽档——侧栏同款双保险：关沿重置为主，几何退化/残值兜底）且页签
+	// 为变更时 ↑/↓/Enter 交面板（条目游标/预览开合），其余键照常落 composer
+	// ——数字与文本键永不劫持（与侧栏同口径）；其余页签本任务无键位（agents/
+	// doctor/cache 归 Task 15/16 接线）。补全菜单在场时其导航优先（上方分支）。
+	if m.focus == focusPanel && m.panel.open && m.width >= 130 && m.panel.tab == tabChanges {
+		switch msg.Code {
+		case tea.KeyUp:
+			m.movePanelSel(-1)
+			return m, nil
+		case tea.KeyDown:
+			m.movePanelSel(+1)
+			return m, nil
+		case tea.KeyEnter:
+			m.togglePanelPreview()
+			return m, nil
 		}
 	}
 	// 转写滚动手势（023 D5）：审批/agents 独占态在上方分支拦截——治理独占期

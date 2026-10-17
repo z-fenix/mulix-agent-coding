@@ -1,11 +1,15 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
+
+	"mulix/internal/event"
 )
 
 // ---- 右栏面板骨架与 F2/F4 守卫（2026-10-17-dsh-tui-visual-redesign Task 12）----
@@ -205,4 +209,239 @@ func hasTraceLine(m *tuiModel, s string) bool {
 		}
 	}
 	return false
+}
+
+// ---- 变更聚合 + 变更 tab（2026-10-17-dsh-tui-visual-redesign Task 14）----
+//
+// 聚合缓存制（评审 Issue 3 修正）：工具卡收口点（ToolResultEvent 关卡）对写类
+// done 卡按 path upsert 累计 +/−（计数与 renderDiff 同源——diffHunks+
+// countDiffLines，不出第二计数器）；换绑收口清空聚合缓存，转写块流不动（023
+// 钉定语义——TestSwapResetsChangesPanel 钉点）。SGR 钉点用 deepseek dark 出厂
+// 256 层字面（文件头注记同源）：green 114、red 203、sel 行 surface2 236 + fg 231。
+
+// seedDoneEdit 桩收口路径（brief Step 1）：Edit 请求开卡 + 完成回执关卡——
+// 聚合缓存的唯一写入沿（收口点增量维护，无帧时扫描）。
+func seedDoneEdit(t *testing.T, m *tuiModel, seq int64, id, path, oldS, newS string) *tuiModel {
+	t.Helper()
+	raw, err := json.Marshal(struct {
+		FilePath string `json:"file_path"`
+		Old      string `json:"old_string"`
+		New      string `json:"new_string"`
+	}{path, oldS, newS})
+	if err != nil {
+		t.Fatalf("seed input marshal: %v", err)
+	}
+	m = update(t, m, tuiEvent{ev: event.ToolUseRequestedEvent{Seq: seq, ToolUseID: id, Tool: "Edit", Input: raw}})
+	return update(t, m, tuiEvent{ev: event.ToolResultEvent{Seq: seq + 1, ToolUseID: id, Content: "ok"}})
+}
+
+// TestCollectChangesAggregation 钉（brief Step 1）：收口路径聚合——2 个不同
+// path 的 done Edit 卡恰 2 条目且计数正确（单行替换 = +1 −1）；运行中卡（未
+// 收口）与失败卡（IsError）不聚合。
+func TestCollectChangesAggregation(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m = seedDoneEdit(t, m, 1, "c1", "a.go", "x", "y")
+	m = seedDoneEdit(t, m, 3, "c2", "b.go", "p", "q")
+	m = update(t, m, tuiEvent{ev: event.ToolUseRequestedEvent{Seq: 5, ToolUseID: "c3", Tool: "Edit",
+		Input: json.RawMessage(`{"file_path":"c.go","old_string":"r","new_string":"s"}`)}})
+	m = update(t, m, tuiEvent{ev: event.ToolUseRequestedEvent{Seq: 7, ToolUseID: "c4", Tool: "Edit",
+		Input: json.RawMessage(`{"file_path":"d.go","old_string":"t","new_string":"u"}`)}})
+	m = update(t, m, tuiEvent{ev: event.ToolResultEvent{Seq: 8, ToolUseID: "c4", IsError: true, Content: "boom"}})
+
+	entries := m.collectChanges()
+	if len(entries) != 2 {
+		t.Fatalf("collectChanges must hold exactly the 2 done cards, got %d: %+v", len(entries), entries)
+	}
+	if entries[0].path != "a.go" || entries[0].added != 1 || entries[0].deleted != 1 || entries[0].card == nil {
+		t.Fatalf("a.go entry = %+v, want +1 -1 with card backref", entries[0])
+	}
+	if entries[1].path != "b.go" || entries[1].added != 1 || entries[1].deleted != 1 {
+		t.Fatalf("b.go entry = %+v, want +1 -1", entries[1])
+	}
+}
+
+// TestCollectChangesSamePathAccumulates 钉（brief Step 1）：同 path 两卡累计
+// ——按 path 去重单条目，+/− 求和。
+func TestCollectChangesSamePathAccumulates(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m = seedDoneEdit(t, m, 1, "c1", "a.go", "x", "y")
+	m = seedDoneEdit(t, m, 3, "c2", "a.go", "p", "q")
+	entries := m.collectChanges()
+	if len(entries) != 1 {
+		t.Fatalf("same-path cards must dedupe into one entry, got %d: %+v", len(entries), entries)
+	}
+	if entries[0].path != "a.go" || entries[0].added != 2 || entries[0].deleted != 2 {
+		t.Fatalf("accumulated entry = %+v, want a.go +2 -2", entries[0])
+	}
+}
+
+// TestChangesTabRows 钉（brief Step 1）：条目行 = path + `+n`（green 114 槽）
+// `-m`（red 203 槽；零侧省略与 diffHead 同口径——b.go 双行替换 +2 −1）；sel
+// 行 surface2（236）+ fg（231）整行高亮。
+func TestChangesTabRows(t *testing.T) {
+	resetTheme(t)
+	applyTheme(defaultActiveTheme())
+	m, _, _ := newTestModel(t)
+	m = seedDoneEdit(t, m, 1, "c1", "a.go", "x", "y")
+	m = seedDoneEdit(t, m, 3, "c2", "b.go", "p\nq", "p\nr\ns")
+	v := m.panelView(32)
+	if !strings.Contains(v, "a.go") || !strings.Contains(v, "b.go") {
+		t.Fatalf("changes tab must render entry paths:\n%q", v)
+	}
+	for _, seg := range []string{"\x1b[38;5;114m+1\x1b[0m", "\x1b[38;5;114m+2\x1b[0m", "\x1b[38;5;203m-1\x1b[0m"} {
+		if !strings.Contains(v, seg) {
+			t.Fatalf("counts must take the green/red slots, missing %q:\n%q", seg, v)
+		}
+	}
+	m.panel.sel = 1
+	v = m.panelView(32)
+	if !strings.Contains(v, "\x1b[38;5;231;48;5;236m") {
+		t.Fatalf("selected row must take the surface2 highlight:\n%q", v)
+	}
+}
+
+// TestPanelPreviewToggle 钉（brief Step 1）：聚焦面板 Enter 展开 renderDiff
+// 预览（行内容与工具卡 diff 同源——同源即同一 diffInput 的 unified 视图）、
+// 再按收起；非聚焦 Enter 不开预览（键路由聚焦门禁——主列 Enter 仍是提交档）。
+func TestPanelPreviewToggle(t *testing.T) {
+	resetTheme(t)
+	applyTheme(defaultActiveTheme())
+	m, _, _ := newTestModel(t)
+	m = seedDoneEdit(t, m, 1, "c1", "a.go", "old line", "new line")
+	m = update(t, m, tea.WindowSizeMsg{Width: 130, Height: 24})
+	m.focus = focusPanel
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.panel.previewPath != "a.go" {
+		t.Fatalf("Enter must expand the selected entry, previewPath = %q", m.panel.previewPath)
+	}
+	if v := ansi.Strip(m.panelView(32)); !strings.Contains(v, "- old line") || !strings.Contains(v, "+ new line") {
+		t.Fatalf("expanded entry must render the renderDiff-sourced preview:\n%s", v)
+	}
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.panel.previewPath != "" {
+		t.Fatalf("second Enter must collapse, previewPath = %q", m.panel.previewPath)
+	}
+	if strings.Contains(ansi.Strip(m.panelView(32)), "+ new line") {
+		t.Fatal("collapsed entry must drop the preview")
+	}
+
+	// 非聚焦 Enter 不开预览（focus 路由门禁——主列 Enter 走提交档，空稿 no-op）。
+	m2, _, _ := newTestModel(t)
+	m2 = seedDoneEdit(t, m2, 1, "c1", "a.go", "x", "y")
+	m2 = update(t, m2, tea.WindowSizeMsg{Width: 130, Height: 24})
+	m2 = update(t, m2, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m2.panel.previewPath != "" {
+		t.Fatalf("unfocused Enter must not expand, previewPath = %q", m2.panel.previewPath)
+	}
+}
+
+// TestPanelPreviewScrollClamped 钉（brief：预览经 panelState.scroll 取窗、钳
+// 位面板列高——scroll 推进窗首离场、窗尾不出预览）。
+func TestPanelPreviewScrollClamped(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m = update(t, m, tuiEvent{ev: event.ToolUseRequestedEvent{Seq: 1, ToolUseID: "c1", Tool: "Write",
+		Input: json.RawMessage(`{"file_path":"big.txt","content":"l00\nl01\nl02\nl03\nl04\nl05\nl06\nl07\nl08\nl09\nl10\nl11"}`)}})
+	m = update(t, m, tuiEvent{ev: event.ToolResultEvent{Seq: 2, ToolUseID: "c1", Content: "ok"}})
+	m = update(t, m, tea.WindowSizeMsg{Width: 130, Height: 8}) // 内容预算 6 行（8−2 chrome）
+	m.focus = focusPanel
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !strings.Contains(ansi.Strip(m.panelView(32)), "l00") {
+		t.Fatal("scroll 0 must show the head of the preview")
+	}
+	m.panel.scroll = 6 // 窗内推进（未达上界）：窗首行离场
+	v := ansi.Strip(m.panelView(32))
+	if strings.Contains(v, "l00") {
+		t.Fatalf("advanced window must drop the head:\n%s", v)
+	}
+	if !strings.Contains(v, "l05") {
+		t.Fatalf("advanced window must start at the scroll offset:\n%s", v)
+	}
+	m.panel.scroll = 99 // 超上界——钳位窗尾对齐（窗尾不出预览、不出面板列）
+	v = ansi.Strip(m.panelView(32))
+	if strings.Contains(v, "l00") || !strings.Contains(v, "l11") {
+		t.Fatalf("over-range scroll must clamp to the tail:\n%s", v)
+	}
+}
+
+// TestSwapResetsChangesPanel 钉（Review Focus 5——brief Produces 指定测试名）：
+// 换绑回执清空聚合缓存与面板游标/预览；转写块流不动（023 钉定语义——聚合是
+// 面板态非转写，仅追加切换留痕行）。
+func TestSwapResetsChangesPanel(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m = seedDoneEdit(t, m, 1, "c1", "a.go", "x", "y")
+	m = seedDoneEdit(t, m, 3, "c2", "b.go", "p", "q")
+	blocksBefore := len(m.transcriptState.blocks)
+	if len(m.collectChanges()) != 2 {
+		t.Fatal("precondition: two aggregated entries")
+	}
+	newCtrl := &stubController{}
+	sw := &fakeSwapper{sink: m.sink, ctrl: newCtrl, id: "s-new"}
+	m.swapper = sw
+	m.panel.sel = 1
+	m.panel.previewPath = "a.go"
+	m.panel.scroll = 3
+	m = update(t, m, typeStr(m, "/new"))
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if len(m.collectChanges()) != 0 {
+		t.Fatalf("swap receipt must clear the changes cache, got %d", len(m.collectChanges()))
+	}
+	if len(m.transcriptState.blocks) != blocksBefore+1 {
+		t.Fatalf("swap must not reset the transcript block stream（023 钉定）: %d → %d（仅切换留痕行 +1）",
+			blocksBefore, len(m.transcriptState.blocks))
+	}
+	if _, ok := m.transcriptState.blocks[0].(*toolCard); !ok {
+		t.Fatal("pre-swap tool cards must persist in the block stream")
+	}
+	if m.panel.sel != 0 || m.panel.previewPath != "" || m.panel.scroll != 0 {
+		t.Fatalf("panel cursors must reset with the aggregate: %+v", m.panel)
+	}
+}
+
+// TestPanelFocusKeys 钉（brief：↑/↓ 移 sel——聚焦面板且变更页签才路由；文本
+// 键永不劫持照常进 composer；Esc 取焦回主列且预览态保留（取焦不关面板）；
+// F2 关面板沿焦点失效重置；窄档 <130 残值焦点不路由）。
+func TestPanelFocusKeys(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m = seedDoneEdit(t, m, 1, "c1", "a.go", "x", "y")
+	m = seedDoneEdit(t, m, 3, "c2", "b.go", "p", "q")
+	m = update(t, m, tea.WindowSizeMsg{Width: 130, Height: 24})
+	m.focus = focusPanel
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.panel.sel != 1 {
+		t.Fatalf("focused ↓ must move the changes cursor, sel = %d", m.panel.sel)
+	}
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyUp})
+	if m.panel.sel != 0 {
+		t.Fatalf("focused ↑ must move back, sel = %d", m.panel.sel)
+	}
+	m = update(t, m, keyPress('x'))
+	if m.composerValue() != "x" {
+		t.Fatalf("text keys must reach the composer while panel focused: %q", m.composerValue())
+	}
+	if m.panel.sel != 0 {
+		t.Fatalf("text keys must not move the cursor: %d", m.panel.sel)
+	}
+	// Esc 取焦回主列；预览态保留（Task 17「Esc 取焦不关面板」同口径先行）。
+	m.panel.previewPath = "a.go"
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
+	if m.focus != focusMain {
+		t.Fatal("idle Esc with panel focus must refocus main")
+	}
+	if m.panel.previewPath != "a.go" {
+		t.Fatal("refocus Esc must not collapse the preview")
+	}
+	// F2 关面板沿焦点失效重置（侧栏关沿同款——不可见面板不得持焦）。
+	m.focus = focusPanel
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF2})
+	if m.panel.open || m.focus != focusMain {
+		t.Fatalf("closing the panel must reset focus, open=%v focus=%d", m.panel.open, m.focus)
+	}
+	// 窄档路由门禁（<130 面板不可见——路由前置守卫兜底残值焦点）。
+	m.panel.open = true
+	m.focus = focusPanel
+	m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 24})
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.panel.sel != 0 {
+		t.Fatalf("narrow width with stale focus must not route panel keys: %d", m.panel.sel)
+	}
 }
