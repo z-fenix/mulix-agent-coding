@@ -25,13 +25,15 @@ type sidebarState struct {
 // toggleSidebar F3 开合（brief）：W<100 窄档不进入开态并经 appendLine 留痕
 // （档位判定用 W 直接比较——Task 9 契约：columnWidths 的 sidebar==0 亦可能
 // 来自 open=false，不是窄档判据；提示走 appendLine 非 appendNotice）。开合
-// 生效时 composer 跟 mainWidth 重排（同宽开合不走 WindowSizeMsg——model.go
-// Update 注记的开合同步；锚点显式捕获随 Task 12 评审 Issue 4 接线）。
+// 生效时：重排前显式捕获阅读锚点（评审 Issue 4——同宽开合不走 WindowSizeMsg，
+// 见 panel.go capturePendingAnchor），composer 跟 mainWidth 重排（同宽开合
+// 不走 WindowSizeMsg——model.go Update 注记的开合同步）。
 func (m *tuiModel) toggleSidebar() tea.Cmd {
 	if m.width < 100 {
 		m.appendLine("[侧栏] 侧栏需 ≥100 列")
 		return nil
 	}
+	m.capturePendingAnchor()
 	m.sidebarOpen = !m.sidebarOpen
 	m.composerState.ta.SetWidth(m.mainWidth())
 	return nil
@@ -85,9 +87,9 @@ func sidebarSelWrap(s string) string {
 }
 
 // sidebarColumn 侧栏列合成（frame 消费，Task 11——取代 Task 10 的空白占位）：
-// sidebarView 逐行右补空格收口列宽、不足帧高补空白行——与 blankColumn 同契约
-// （列高 = m.height、列宽 = sidebar 档），保证 JoinHorizontal 列位与帧宽
-// （列和 = W）不变。w≤0 防御性返回空串（调用方已按档位让位过滤）。
+// sidebarView 逐行右补空格收口列宽、不足帧高补空白行——与 panelColumn 同契约
+// （Task 12；列高 = m.height、列宽 = sidebar 档），保证 JoinHorizontal 列位与
+// 帧宽（列和 = W）不变。w≤0 防御性返回空串（调用方已按档位让位过滤）。
 func (m *tuiModel) sidebarColumn(w int) string {
 	if w <= 0 {
 		return ""

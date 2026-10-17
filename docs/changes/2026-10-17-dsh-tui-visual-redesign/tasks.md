@@ -290,7 +290,7 @@ func TestNoColorFrameStructure(t *testing.T) {
 - [X] **Step 2: verify RED**。Expected: FAIL（编译期 RED——新符号未定义，见台账 Ruling）。
 - [X] **Step 3: Implement**。
 - [X] **Step 4: verify GREEN**。Expected: PASS。
-- [ ] **Step 5: 门禁 + commit** — `feat(tui): 侧栏视图与 F3 开合守卫`。
+- [X] **Step 5: 门禁 + commit** — `feat(tui): 侧栏视图与 F3 开合守卫`。
 
 ## Task 12: 面板骨架与 F2/F4 守卫
 
@@ -304,10 +304,10 @@ func TestNoColorFrameStructure(t *testing.T) {
 - Produces: `type panelTab uint8` + 常量 `tabChanges/tabAgents/tabDoctor/tabCache`；`type panelState struct { open, focus bool; tab panelTab; sel int; previewPath string; scroll int }`（**open 缺省 true 须在 newTuiModel 显式初始化**——Go 零值 open:false）；`func (m *tuiModel) panelView(width int) string`——页签行（active accent + 其余 dim）、分隔线、空态指引；`func (m *tuiModel) togglePanel() tea.Cmd`（**W<130 时经 appendLine 留痕「面板需 ≥130 列」**）；`func (m *tuiModel) cyclePanelTab()`（W<130 时留痕）。本任务各 tab 内容区为空态占位（Task 13–16 落内容）。
 - **本任务追加（评审 Issue 4 移入）**：侧栏/面板开合路径**显式捕获 pendingAnchor**（重排前 `anchorForOffset` 记录视口顶行块位、重排后 `offsetForAnchor` 恢复——不能依赖 WindowSizeMsg，同宽开合不触发 resize 路径）；`TestAnchorSurvivesPanelToggle`：溢出转写上翻中部、同宽（150→150）面板开合，视口锚回同块（±1 行）。
 
-- [ ] **Step 1: Write the failing test** — panelView 页签行断言（active accent）；W=120 togglePanel 留痕；cyclePanelTab 环绕。
-- [ ] **Step 2: verify RED**。Expected: FAIL。
-- [ ] **Step 3: Implement**。
-- [ ] **Step 4: verify GREEN**。Expected: PASS。
+- [X] **Step 1: Write the failing test** — panelView 页签行断言（active accent）；W=120 togglePanel 留痕；cyclePanelTab 环绕。
+- [X] **Step 2: verify RED**。Expected: FAIL。
+- [X] **Step 3: Implement**。
+- [X] **Step 4: verify GREEN**。Expected: PASS。
 - [ ] **Step 5: 门禁 + commit** — `feat(tui): 右栏面板骨架——页签与开合守卫`。
 
 ## Task 13: 侧栏会话清单接线 + 聚焦恢复

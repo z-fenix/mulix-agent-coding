@@ -299,12 +299,13 @@ func TestColumnWidthsThresholds(t *testing.T) {
 
 // TestFrameThreeTierComposition 钉（Task 10 Step 1；Task 11 侧栏接线修钉）两档构成：
 //
-//   - W=150 全开（侧栏 Task 11 接线 m.sidebarOpen——缺省 true 设计裁定默认
-//     三栏常开；面板列 Task 12 前仍空白占位）：三列 JoinHorizontal——首行
-//     16 列侧栏列区（列 0–15 侧栏视图：品牌行 ◆ mulix 领衔）、转写内容自主
-//     列（列 16）起、滚动条列在列 117（主列 101+1 收口凭据）、
-//     32 列面板列区（列 118–149 空白）；帧宽断言：每行显示宽 ≤150
-//     （ansi.StringWidth——底部区未收口主列即超宽破版 / paintBG 折行漂高）。
+//   - W=150 全开（侧栏 Task 11 接线 m.sidebarOpen、面板 Task 12 接线
+//     m.panel.open——缺省均 true，设计裁定默认三栏常开）：三列 JoinHorizontal
+//     ——首行 16 列侧栏列区（列 0–15 侧栏视图：品牌行 ◆ mulix 领衔）、转写
+//     内容自主列（列 16）起、滚动条列在列 117（主列 101+1 收口凭据）、
+//     32 列面板列区（列 118–149 面板视图：页签行变更/代理/诊断/缓存 领衔）；
+//     帧宽断言：每行显示宽 ≤150（ansi.StringWidth——底部区未收口主列即超宽
+//     破版 / paintBG 折行漂高）。
 //   - W=80 窄档与单列基线逐行一致：基线 = 旧单列构成公式（转写‖滚动条 +
 //     底部区 + 铺底）对同输入孪生模型的重建。无色层（NO_COLOR）跑——有色层
 //     paintBG 会把各行归一填充到帧宽，构成偏差（如误走 JoinVertical 的行填
@@ -346,8 +347,8 @@ func TestFrameThreeTierComposition(t *testing.T) {
 	if sb := ansi.Cut(first, 117, 118); strings.TrimSpace(sb) == "" {
 		t.Fatalf("首行列 117 非滚动条列（主列宽 101+1 收口凭据）：%q", sb)
 	}
-	if panel := ansi.Cut(first, 118, 150); strings.TrimSpace(panel) != "" {
-		t.Fatalf("首行列 118–149 非空白（32 列面板列区缺失）：%q", panel)
+	if panel := ansi.Cut(first, 118, 150); !strings.Contains(panel, "变更") || !strings.Contains(panel, "缓存") {
+		t.Fatalf("首行列 118–149 缺面板页签行（Task 12 面板视图）：%q", panel)
 	}
 
 	// ---- W=80 窄档与单列基线逐行一致（无色层）----

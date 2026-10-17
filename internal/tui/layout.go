@@ -14,8 +14,8 @@ import (
 // 底部固定区自上而下：模态面板（/agents，有则）→ 授权卡/编辑器（互斥）→
 // 状态行，宽度收口主列（mainWidth——评审 Issue 7）。模态面板渲染沿用迁移前
 // 形态（023 Task 2 逐字节迁移件）；授权卡键位与参数摘要见 approval.go（023
-// D11）。本文件负责把它们与视口合成满屏帧；侧栏视图已随 Task 11 接线
-//（sidebar.go sidebarColumn），面板列仍空白占位（Task 12）；末列滚动条拖拽
+// D11）。本文件负责把它们与视口合成满屏帧；侧栏/面板列视图已随 Task 11/12
+// 接线（sidebar.go sidebarColumn / panel.go panelColumn）；末列滚动条拖拽
 // 与选区高亮随 Task 21 落地（023 Story4——transcript.go transcriptView 绘制
 // 可见窗口）。
 
@@ -71,7 +71,8 @@ func (m *tuiModel) bottomView() string {
 // 或高度变化（模态开合收窄视口——#6430 的 height-only 场景）都钉底；上翻锁定
 // 下 offset 不动；forceGotoBottom 单帧豁免置底并恢复跟随（对照参考
 // chat_tui.go:989-1012 的 postUpdate 钉底）。帧总行数恰为 H（alt-screen 满屏
-// 接管）。侧栏/面板开合的重排与锚点显式捕获归 Task 12（评审 Issue 4）。
+// 接管）。侧栏/面板开合的重排与锚点显式捕获已随 Task 12 接线（panel.go
+// capturePendingAnchor——评审 Issue 4：同宽开合不走 WindowSizeMsg）。
 func (m *tuiModel) frame() string {
 	bottom := m.bottomView()
 	vpH := m.height - lipgloss.Height(bottom)
@@ -79,10 +80,9 @@ func (m *tuiModel) frame() string {
 		vpH = 1
 	}
 	prevH := m.transcriptState.vp.Height()
-	// 三档列宽几何（Task 9）：开合接线（Task 10 硬编码 true,true 的两处之一
-	// ——此处与 mainWidth 同批替换）：m.sidebarOpen Task 11（F3，sidebar.go）、
-	// m.panelOpen Task 12（F2/F4，panel.go）——窄档由几何退化兜住。
-	sidebarW, mainW, panelW := columnWidths(m.width, m.sidebarOpen, m.panelOpen)
+	// 三档列宽几何（Task 9）：开合接线——m.sidebarOpen Task 11（F3，sidebar.go）、
+	// m.panel.open Task 12（F2/F4，panel.go）——窄档由几何退化兜住。
+	sidebarW, mainW, panelW := columnWidths(m.width, m.sidebarOpen, m.panel.open)
 	fed := m.transcriptState.syncViewport(transcriptContentWidth(mainW), vpH)
 	// 阅读锚点恢复（024 FR-001）：新宽重排完成后按块对位置回顶行，一次性
 	// 消费；尾随态不恢复（钉底接管，锚点作废）。
@@ -107,8 +107,8 @@ func (m *tuiModel) frame() string {
 	} else {
 		// 宽/中档三列合成：主列 = JoinVertical(转写‖滚动条, 底部区)——底部区
 		// 四消费点已收口 mainWidth（评审 Issue 7），短行右补不撑破帧宽；侧栏/
-		// 面板列恒空白（视图 Task 11/12 落地），高随主列（不足由 JoinHorizontal
-		// 底部补空行，铺底归帧出口 paintBG）。
+		// 面板列视图随 Task 11/12 接线（sidebarColumn/panelColumn），高随主列
+		//（不足由 JoinHorizontal 底部补空行，铺底归帧出口 paintBG）。
 		mainCol := lipgloss.JoinVertical(lipgloss.Left, main, bottom)
 		var cols []string
 		if sidebarW > 0 {
@@ -118,29 +118,15 @@ func (m *tuiModel) frame() string {
 		}
 		cols = append(cols, mainCol)
 		if panelW > 0 {
-			cols = append(cols, blankColumn(panelW, m.height))
+			// 面板列视图（Task 12——panel.go panelColumn，取代空白占位；
+			// panelW>0 蕴含 m.panel.open——几何已按开合让位）。
+			cols = append(cols, m.panelColumn(panelW))
 		}
 		rendered = lipgloss.JoinHorizontal(lipgloss.Top, cols...)
 	}
 	// 满帧铺底（设计 §4.3）：出口统一收口——帧每行过 paintBG 整行铺 bg 槽
 	// （三列列和 = m.width，帧宽不变）；无色层原样返回，结构不变。
 	return paintBG(rendered, m.width)
-}
-
-// blankColumn 恒空白列（面板列 Task 12 过渡占位——侧栏列已随 Task 11 接
-// sidebar.go sidebarColumn）：宽 w 全空格 × h 行，三列 JoinHorizontal 的列位
-// 占位，保证主列列位与帧宽（列和 = W）正确。w≤0 防御性返回空串（调用方已按
-// 档位让位过滤）。
-func blankColumn(w, h int) string {
-	if w <= 0 {
-		return ""
-	}
-	blank := strings.Repeat(" ", w)
-	rows := make([]string, max(h, 1))
-	for i := range rows {
-		rows[i] = blank
-	}
-	return strings.Join(rows, "\n")
 }
 
 // sgrResetRe 整段重置型 SGR（参数空或全零——\x1b[m / \x1b[0m / \x1b[0;0m）：
