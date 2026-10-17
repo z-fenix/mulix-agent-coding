@@ -92,16 +92,31 @@ func TestResumeChainEvents(t *testing.T) {
 	if c.EngineSessionID() != "e-resume" {
 		t.Fatalf("engine session id = %q, want e-resume (init 上报为准)", c.EngineSessionID())
 	}
-	mirror, _ := c.Mirror().ReadAllEvents()
-	found := false
-	for _, ev := range mirror {
-		if n, ok := ev.(event.NoticeEvent); ok && n.Level == "info" &&
-			strings.Contains(n.Content, "e-resume") && strings.Contains(n.Content, "resume") {
-			found = true
+	waitMirror(t, c, func(mirror []any) bool {
+		for _, ev := range mirror {
+			if n, ok := ev.(event.NoticeEvent); ok && n.Level == "info" &&
+				strings.Contains(n.Content, "e-resume") && strings.Contains(n.Content, "resume") {
+				return true
+			}
 		}
-	}
-	if !found {
-		t.Fatalf("no resume chain notice in mirror (%d events)", len(mirror))
+		return false
+	})
+}
+
+// waitMirror 轮询镜像直至谓词通过（027 异步启动：init/回执等内容由泵异步
+// 落盘——镜像断言一律经此等待；2s 上限，超时返回当前镜像供断言输出全量）。
+func waitMirror(t *testing.T, c *Controller, pred func([]any) bool) []any {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		mirror, _ := c.Mirror().ReadAllEvents()
+		if pred(mirror) {
+			return mirror
+		}
+		if time.Now().After(deadline) {
+			return mirror
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
@@ -118,17 +133,15 @@ func TestResumeEngineMismatchWarning(t *testing.T) {
 	if c.EngineSessionID() != "e-actual" {
 		t.Fatalf("engine session id = %q, want e-actual（引擎权威）", c.EngineSessionID())
 	}
-	mirror, _ := c.Mirror().ReadAllEvents()
-	warned := false
-	for _, ev := range mirror {
-		if n, ok := ev.(event.NoticeEvent); ok && n.Level == "warning" &&
-			strings.Contains(n.Content, "e-requested") && strings.Contains(n.Content, "e-actual") {
-			warned = true
+	waitMirror(t, c, func(mirror []any) bool {
+		for _, ev := range mirror {
+			if n, ok := ev.(event.NoticeEvent); ok && n.Level == "warning" &&
+				strings.Contains(n.Content, "e-requested") && strings.Contains(n.Content, "e-actual") {
+				return true
+			}
 		}
-	}
-	if !warned {
-		t.Fatalf("no mismatch warning mentioning both ids (%d events)", len(mirror))
-	}
+		return false
+	})
 }
 
 // TestResumeMirrorMismatchWarning pins（design §10）：镜像已记录的
@@ -146,18 +159,16 @@ func TestResumeMirrorMismatchWarning(t *testing.T) {
 	if err := c.Resume(context.Background(), "e-mirror"); err != nil {
 		t.Fatalf("resume: %v", err)
 	}
-	mirror, _ := c.Mirror().ReadAllEvents()
-	warned := false
-	for _, ev := range mirror {
-		if n, ok := ev.(event.NoticeEvent); ok && n.Level == "warning" &&
-			strings.Contains(n.Content, "镜像记录引擎会话 e-mirror") &&
-			strings.Contains(n.Content, "e-actual") {
-			warned = true
+	waitMirror(t, c, func(mirror []any) bool {
+		for _, ev := range mirror {
+			if n, ok := ev.(event.NoticeEvent); ok && n.Level == "warning" &&
+				strings.Contains(n.Content, "镜像记录引擎会话 e-mirror") &&
+				strings.Contains(n.Content, "e-actual") {
+				return true
+			}
 		}
-	}
-	if !warned {
-		t.Fatalf("no mirror-mismatch warning (%d events)", len(mirror))
-	}
+		return false
+	})
 	// 引擎权威：meta 已由 onInit 回填为上报值（后续 --resume 不会拿错 id）
 	meta, err := c.opts.Store.ReadMeta()
 	if err != nil {
@@ -184,18 +195,16 @@ func TestResumeDriftTraceMirrored(t *testing.T) {
 	if err := c.Resume(context.Background(), "e-drift"); err != nil {
 		t.Fatalf("resume: %v", err)
 	}
-	mirror, _ := c.Mirror().ReadAllEvents()
-	found := false
-	for _, ev := range mirror {
-		if n, ok := ev.(event.NoticeEvent); ok && n.IsMeta &&
-			strings.Contains(n.Content, "engine_drift") &&
-			strings.Contains(n.Content, "engine version drift allowed") {
-			found = true
+	waitMirror(t, c, func(mirror []any) bool {
+		for _, ev := range mirror {
+			if n, ok := ev.(event.NoticeEvent); ok && n.IsMeta &&
+				strings.Contains(n.Content, "engine_drift") &&
+				strings.Contains(n.Content, "engine version drift allowed") {
+				return true
+			}
 		}
-	}
-	if !found {
-		t.Fatalf("engine_drift trace not mirrored with code (%d events)", len(mirror))
-	}
+		return false
+	})
 }
 
 // TestRecoveryRequiredDetection pins：崩溃恢复判据——镜像存在未闭合回合
