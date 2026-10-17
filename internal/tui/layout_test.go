@@ -151,3 +151,28 @@ func TestNoColorFrameStructure(t *testing.T) {
 		t.Fatal("无色层结构缺失")
 	}
 }
+
+// TestFenceBGSurvivesFramePaint（Task 5 修复轮 1 / 评审 Important-1 钉点）：
+// 围栏底 × 帧底合成的直接证据——renderMarkdown 围栏输出经帧出口 paintBG
+// （真实宽度）后，codeBlockColor（235）在合成行存活，且每个行内重置点呈固定
+// 三元序「reset → 帧底 234（paintBG 插序在前）→ 围栏底 235（fenceBG 重铺在
+// 后）」——SGR 后写生效，围栏底不被帧底冲掉。重铺交互由本钉点作证，不再是
+// 静态推理（隐性前提：lipgloss v2 对内嵌 SGR 不重排插序——本钉点同时钉住
+// 该前提）。
+func TestFenceBGSurvivesFramePaint(t *testing.T) {
+	resetTheme(t)
+	applyTheme(defaultActiveTheme()) // 钉确定性 256 层（防前序测试主题泄漏）
+	th := defaultActiveTheme()
+	out := renderMarkdown("```go\nfmt.Println(1)\n```", 60, &th)
+	if len(out) == 0 {
+		t.Fatal("fence must render")
+	}
+	painted := paintBG(strings.Join(out, "\n"), 60)
+	if !strings.Contains(painted, "\x1b[48;5;235m") {
+		t.Fatalf("fence bg must survive the frame paint:\n%q", painted)
+	}
+	// 顺序钉点：重置点后先帧底插序、后围栏底重铺（三元序逐字面）。
+	if !strings.Contains(painted, "\x1b[0m\x1b[48;5;234m\x1b[48;5;235m") {
+		t.Fatalf("fence bg must repaint after the frame bg insert at resets:\n%q", painted)
+	}
+}

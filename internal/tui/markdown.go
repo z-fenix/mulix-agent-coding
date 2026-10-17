@@ -202,8 +202,9 @@ func (r *mdRenderer) renderFenced(buf *strings.Builder, n ast.Node, src []byte, 
 		// 硬断可能落在 token SGR 态中——续行到下一转义前短暂失色（终端
 		// 跨行 SGR 态被轨前缀收尾的 reset 清除），仅超宽代码行观感问题，
 		// 内容无损。围栏底（dsh 换装 Task 5）整行铺 codeBlockColor 槽，
-		// 行内 token reset 的重铺由 th.fenceBG 收口——帧出口 paintBG 的
-		// bg 槽重铺落点在前、围栏底 repaint 随后，后写生效不被冲掉。
+		// 行内 token reset 的重铺由 th.fenceBG 收口；与帧出口 paintBG 的
+		// 合成序（reset → 帧底插序在前 → 围栏底重铺在后，后写生效）由
+		// layout_test.go TestFenceBGSurvivesFramePaint 钉死。
 		for _, line := range strings.Split(hl, "\n") {
 			for _, wl := range strings.Split(wrapAnsi(line, avail), "\n") {
 				buf.WriteString(r.th.fenceBG(prefix + wl))

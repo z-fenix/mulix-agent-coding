@@ -204,9 +204,10 @@ func (t *theme) fg(s string) string { return sgrWrap(sgrFg(t.fgColor), s) }
 // fenceBG 围栏底（设计 §4.1 code-block-bg 槽——markdown.go renderFenced 消费，
 // dsh 换装 Task 5 接线）：整行铺 codeBlockColor。行内既有 SGR（chroma token
 // 色分）的整段重置会连底色一并清掉——重置点即重铺（复用 layout.go sgrResetRe
-// 锚点，同法不重造）；帧出口 paintBG 的 bg 槽重铺先于本序落在各重置点、围栏
-// 底 repaint 随后——SGR 后写生效，围栏底不被帧底冲掉。空槽（无色层/中性缺省）
-// 原样返回。
+// 锚点，同法不重造）。与帧出口 paintBG 的合成序（重置点 = reset → 帧底插序
+// 在前 → 围栏底重铺在后，后写生效）由 layout_test.go
+// TestFenceBGSurvivesFramePaint 钉死——是钉点不是推理。空槽（无色层/中性
+// 缺省）原样返回。
 func (t *theme) fenceBG(s string) string {
 	bg := sgrBg(t.codeBlockColor)
 	if bg == "" {
