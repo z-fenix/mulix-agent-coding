@@ -194,3 +194,33 @@ func scrollbarCell(row, total, height, thumbStart, thumbSize int) string {
 	}
 	return "│"
 }
+
+// ---- 三档列宽几何（dsh columns 让位顺序；2026-10-17-dsh-tui-visual-redesign
+// Task 9）----
+
+// columnWidths 三档列宽几何：终端宽 termW 分档让位出 侧栏/主区/面板 三列——
+// 宽档 ≥130：sidebar=16 if sidebarOpen else 0、panel=32 if panelOpen else 0、
+// main=W−sidebar−panel；中档 100–129：panel 恒 0（面板先让出）、sidebar 随
+// sidebarOpen、main=W−sidebar；窄档 <100：恒 (0, W, 0)（全部让位给主区）。
+// 纯几何函数，不做任何渲染；开合收窄 main 恒 ≥80 由档位阈值保证（130 全开
+// 130−16−32=82、100 侧开 100−16=84）。消费方守卫判定用 W 直接比较（<100
+// 侧栏守卫、<130 面板守卫），不用 sidebar==0（open=false 同样得 0）。
+func columnWidths(termW int, sidebarOpen, panelOpen bool) (sidebar, main, panel int) {
+	sidebar, main, panel = 0, termW, 0
+	if termW >= 130 {
+		if sidebarOpen {
+			sidebar = 16
+		}
+		if panelOpen {
+			panel = 32
+		}
+		return sidebar, termW - sidebar - panel, panel
+	}
+	if termW >= 100 {
+		if sidebarOpen {
+			sidebar = 16
+		}
+		return sidebar, termW - sidebar, 0
+	}
+	return sidebar, main, panel
+}

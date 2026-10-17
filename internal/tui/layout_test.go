@@ -249,3 +249,44 @@ func TestChromeSurfaceDress(t *testing.T) {
 		t.Fatalf("picker selection accent wrong: selRow=%v plainRow=%v\n%s", selRow, plainRow, m.pickerView())
 	}
 }
+
+// ---- 三档列宽几何（2026-10-17-dsh-tui-visual-redesign Task 9）----
+
+// TestColumnWidthsThresholds 钉（brief）：三档列宽几何三元组——窄档 <100 恒
+// (0,W,0)（开合无关，以双关/双开两端钉）；中档 100–129 面板恒 0；宽档 ≥130
+// 侧栏 16 / 面板 32 随开合让位，main = W−让位和。Review Focus 1 边界：99 与
+// 129 贴窄/中档上沿、130 全开与只开面板贴宽档下沿（main 恒 ≥80 由档位阈值保证）。
+func TestColumnWidthsThresholds(t *testing.T) {
+	tests := []struct {
+		name        string
+		w           int
+		sidebarOpen bool
+		panelOpen   bool
+		wantSide    int
+		wantMain    int
+		wantPanel   int
+	}{
+		{"窄档80双关", 80, false, false, 0, 80, 0},
+		{"窄档80双开——开合无关", 80, true, true, 0, 80, 0},
+		{"窄档99双关——窄档上沿", 99, false, false, 0, 99, 0},
+		{"窄档99双开——窄档上沿开合无关", 99, true, true, 0, 99, 0},
+		{"中档100只开侧栏", 100, true, false, 16, 84, 0},
+		{"中档100全开——面板恒0", 100, true, true, 16, 84, 0},
+		{"中档129全开——面板恒0", 129, true, true, 16, 113, 0},
+		{"宽档130全开", 130, true, true, 16, 82, 32},
+		{"宽档130只开面板", 130, false, true, 0, 98, 32},
+		{"宽档130只开侧栏", 130, true, false, 16, 114, 0},
+		{"宽档130全关", 130, false, false, 0, 130, 0},
+		{"宽档150全开", 150, true, true, 16, 102, 32},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			side, main, panel := columnWidths(tt.w, tt.sidebarOpen, tt.panelOpen)
+			if side != tt.wantSide || main != tt.wantMain || panel != tt.wantPanel {
+				t.Fatalf("columnWidths(%d,%v,%v) = (%d,%d,%d), want (%d,%d,%d)",
+					tt.w, tt.sidebarOpen, tt.panelOpen, side, main, panel,
+					tt.wantSide, tt.wantMain, tt.wantPanel)
+			}
+		})
+	}
+}
