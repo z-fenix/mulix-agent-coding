@@ -12,7 +12,8 @@ import (
 // ---- Task 9（023 FR-005）：工具卡 ----
 
 // TestToolCardSymbols 钉死符号表（设计 §7 glyph 词汇，Task 4 Produces：13 符号
-// 常量——后续任务引用同源，杜绝各渲染点私造字面量；值逐字面钉死）。
+// 常量 + Task 5 补「用户消息前缀 ›」= 14——后续任务引用同源，杜绝各渲染点
+// 私造字面量；值逐字面钉死）。
 func TestToolCardSymbols(t *testing.T) {
 	pairs := []struct{ name, got, want string }{
 		{"symBrand", symBrand, "◆"},
@@ -28,9 +29,10 @@ func TestToolCardSymbols(t *testing.T) {
 		{"symConnector", symConnector, "⎿"},
 		{"symThumb", symThumb, "█"},
 		{"symTrack", symTrack, "│"},
+		{"symUserMsg", symUserMsg, "›"},
 	}
-	if len(pairs) != 13 {
-		t.Fatalf("symbol table must pin exactly 13 glyphs, got %d", len(pairs))
+	if len(pairs) != 14 {
+		t.Fatalf("symbol table must pin exactly 14 glyphs, got %d", len(pairs))
 	}
 	for _, p := range pairs {
 		if p.got != p.want {

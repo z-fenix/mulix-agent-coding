@@ -36,41 +36,45 @@ type plainBlock struct{ text string }
 
 func (b plainBlock) render(width int) []string { return wrapText(b.text, width) }
 
-// userBlock 用户输入气泡（025 FR-002）：`  › ` 前缀 + 2 空格槽续行
-// （对照基线 `  › 你好`）。
+// userBlock 用户输入气泡（025 FR-002；dsh 换装 Task 5）：styleBubble 包裹
+// （surface2 底 + 1 格水平内衬，无边框——设计 §6），`›` 前缀保留在气泡内
+// 首行（符号表 symUserMsg——识别冗余线索）；续行与首行文本列对齐。内衬宽
+// = 槽 2 + 内衬 1×2 + 前缀 ›␣ 2。
 type userBlock struct{ text string }
 
 func (b userBlock) render(width int) []string {
-	inner := wrapText(b.text, max(width-4, 1))
+	inner := wrapText(b.text, max(width-6, 1))
 	out := make([]string, len(inner))
 	for i, l := range inner {
+		body := "  " + l
 		if i == 0 {
-			out[i] = "  › " + l
-			continue
+			body = symUserMsg + " " + l
 		}
-		out[i] = "    " + l
+		out[i] = "  " + styleBubble.Render(body)
 	}
 	return out
 }
 
 // bannerBlock 启动横幅（025 FR-001）：`◆ mulix · <model>` + 提示行，会话
 // 启动渲染一次（Run 装配；/new 换绑不重复）。提示行形态对照基线、内容按
-// mulix 实际退出方式（/quit / 双击 Ctrl+C）。
+// mulix 实际退出方式（/quit / 双击 Ctrl+C）。dsh 换装（Task 5）：品牌符号接
+// 符号表 symBrand、accent 着色不变结构——铺底由帧级 paintBG 统一承载。
 type bannerBlock struct{ model string }
 
 func (b bannerBlock) render(width int) []string {
 	return []string{
-		activeTheme.accent("◆ mulix · " + b.model),
+		activeTheme.accent(symBrand + " mulix · " + b.model),
 		dimLine("对话上下文将跨轮保留。输入 /quit 或按两次 Ctrl+C 退出。"),
 	}
 }
 
 // assistantHeaderBlock 助手头行（025 FR-003）：`◆ mulix`，每回合首个内容块
-// 前合成一次（turnHeaderPending 消费）。
+// 前合成一次（turnHeaderPending 消费）。dsh 换装（Task 5）：品牌符号接符号表
+// symBrand、accent 着色不变结构。
 type assistantHeaderBlock struct{}
 
 func (assistantHeaderBlock) render(width int) []string {
-	return []string{"  " + activeTheme.accent("◆ mulix")}
+	return []string{"  " + activeTheme.accent(symBrand+" mulix")}
 }
 
 // gutterLines 全体行加 2 空格槽（025 FR-003：正文/卡片/回执整体入槽——

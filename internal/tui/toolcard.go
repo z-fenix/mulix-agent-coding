@@ -55,6 +55,7 @@ const (
 	symConnector = "⎿" // 连接槽
 	symThumb     = "█" // 滚动条 thumb
 	symTrack     = "│" // 滚动条 track
+	symUserMsg   = "›" // 用户消息前缀（气泡内首行——dsh 换装 Task 5 补录）
 )
 
 const (

@@ -46,13 +46,19 @@ func TestSplitFlushable(t *testing.T) {
 // TestRenderMarkdownBasics pins（D13）：标题/加粗/行内代码/围栏/列表渲染出
 // 对应 ANSI（断言含 SGR 序列与内容）；长段落按宽换行不溢出。
 func TestRenderMarkdownBasics(t *testing.T) {
-	// 标题：内容保留 + 加粗/着色 SGR；正文段落随后
+	// 标题：内容保留 + 加粗；dsh 文字层级（Task 5）——标题行 fg-primary 加粗
+	//（设计 §6）：中性缺省无 fg 槽仅加粗；确定性 256 层主题下钉 fg SGR（231）。
 	out := strings.Join(renderMarkdown("# 标题一\n\n正文段落", 80, nil), "\n")
 	if !strings.Contains(out, "标题一") || !strings.Contains(out, "正文段落") {
 		t.Fatalf("heading/paragraph content lost:\n%q", out)
 	}
-	if !strings.Contains(out, "\x1b[1m") || !strings.Contains(out, "\x1b[36m") {
-		t.Fatalf("heading must carry bold+accent SGR:\n%q", out)
+	if !strings.Contains(out, "\x1b[1m标题一\x1b[0m") {
+		t.Fatalf("heading must be bold (neutral default has no fg slot):\n%q", out)
+	}
+	th := defaultActiveTheme()
+	outH := strings.Join(renderMarkdown("# 标题", 80, &th), "\n")
+	if !strings.Contains(outH, "\x1b[1m\x1b[38;5;231m标题\x1b[0m") {
+		t.Fatalf("heading must take the fg-primary slot (dsh 文字层级):\n%q", outH)
 	}
 	// 加粗：**x** → SGR 包裹
 	out = strings.Join(renderMarkdown("**bold** tail", 80, nil), "\n")
@@ -218,7 +224,7 @@ func TestFenceChromaHighlight(t *testing.T) {
 		t.Fatalf("unknown language must degrade to accent fill:\n%q", outU)
 	}
 	for c := range distinct(outU) {
-		if c != "173" && c != "244" {
+		if c != "173" && c != "244" && c != "235" { // 235 = 围栏底 codeBlock 槽（Task 5）
 			t.Fatalf("unknown-language fence must not carry chroma colors, got %s:\n%q", c, outU)
 		}
 	}
@@ -239,6 +245,35 @@ func TestFenceChromaHighlight(t *testing.T) {
 	outC := strings.Join(renderMarkdown(goFence, 80, &nc), "\n")
 	if strings.Contains(outC, "\x1b[") || !strings.Contains(outC, "func") || !strings.Contains(outC, "│ ") {
 		t.Fatalf("no-color tier must render fences unstyled:\n%q", outC)
+	}
+}
+
+// TestFenceCodeBlockBG（Task 5 Step 1）：围栏内容行整行铺 codeBlockColor 槽
+// （48;5;235——graphite 暗 256 出厂初值），chroma 高亮路径与降级铺色路径同装；
+// 行内 token SGR 的整段重置由围栏底 repaint 收口（重置点重铺，复用 layout.go
+// paintBG 同款锚点）——token 色分之后的正文不落回帧底；无色层零 bg。
+func TestFenceCodeBlockBG(t *testing.T) {
+	th := defaultActiveTheme()
+	// chroma 路径（go 围栏）：内容行含 codeBlock bg，且重置点后有 repaint
+	out := strings.Join(renderMarkdown("```go\nfmt.Println(1)\n```", 80, &th), "\n")
+	if !strings.Contains(out, "\x1b[48;5;235m") {
+		t.Fatalf("chroma fence lines must carry the codeBlock bg:\n%q", out)
+	}
+	if !strings.Contains(out, "\x1b[0m\x1b[48;5;235m") {
+		t.Fatalf("fence bg must repaint after in-line SGR resets:\n%q", out)
+	}
+	// 降级铺色路径（未知语言）同样整行铺底
+	outU := strings.Join(renderMarkdown("```notalang\nplain text\n```", 80, &th), "\n")
+	if !strings.Contains(outU, "\x1b[48;5;235m") {
+		t.Fatalf("plain fence lines must carry the codeBlock bg:\n%q", outU)
+	}
+	// 无色层：围栏零 bg（槽位全空——NO_COLOR 退避同路径）
+	nc, ok := buildTheme("graphite", true, tierNone)
+	if !ok {
+		t.Fatal("graphite no-color theme must resolve")
+	}
+	if outC := strings.Join(renderMarkdown("```go\nfmt.Println(1)\n```", 80, &nc), "\n"); strings.Contains(outC, "\x1b[48;") {
+		t.Fatalf("no-color tier must render fences without bg:\n%q", outC)
 	}
 }
 

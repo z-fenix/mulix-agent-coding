@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"mulix/internal/event"
 )
 
@@ -25,9 +26,29 @@ func TestChromeBanner(t *testing.T) {
 	}
 }
 
+// TestChromeBannerBG（Task 5）：横幅 accent 着色 + 满帧铺底合成——帧出口
+// paintBG 整行铺 bg 槽、重置点重铺，accent 前景不被冲掉（设计 §4.3/§6 横幅
+// 「accent 着色，bg 铺底」——铺底由帧级 paintBG 统一承载，结构不变）。
+func TestChromeBannerBG(t *testing.T) {
+	resetTheme(t)
+	line := bannerBlock{model: "claude-x"}.render(80)[0]
+	if !strings.Contains(line, "\x1b[38;5;173m") { // accent 槽（graphite 暗 256 出厂初值）
+		t.Fatalf("banner must take the accent slot:\n%q", line)
+	}
+	painted := paintBG(line, 80)
+	if !strings.Contains(painted, "\x1b[48;5;234m") { // bg 槽整行铺底
+		t.Fatalf("banner line must be bg-painted at frame exit:\n%q", painted)
+	}
+	if !strings.Contains(painted, "\x1b[38;5;173m") { // accent 在重铺后存活
+		t.Fatalf("frame bg repaint must not clobber the accent fg:\n%q", painted)
+	}
+}
+
 func TestChromeUserBubble(t *testing.T) {
 	got := userBlock{text: "你好"}.render(80)
-	if !strings.HasPrefix(strings.TrimRight(got[0], " "), "  › 你好") {
+	// dsh 气泡换装（Task 5）：styleBubble 包裹（SGR 在槽位前缀之外）——剥样式
+	// 后仍钉「槽 2 + 内衬 1 + › 」前缀字面（› 前缀保留，符号表 symUserMsg）。
+	if !strings.HasPrefix(strings.TrimRight(ansi.Strip(got[0]), " "), "   › 你好") {
 		t.Fatalf("user bubble: %q", got[0])
 	}
 }

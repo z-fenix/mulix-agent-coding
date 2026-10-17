@@ -197,6 +197,28 @@ func (t *theme) dim(s string) string    { return sgrWrap(sgrFg(t.dimColor), s) }
 func (t *theme) red(s string) string    { return sgrWrap(sgrFg(t.redColor), s) }
 func (t *theme) yellow(s string) string { return sgrWrap(sgrFg(t.yellowColor), s) }
 
+// fg 正文主色槽（fg-primary——标题行文字层级消费，设计 §6「标题行 fg-primary
+// 加粗」；dsh 换装 Task 5 接线）。空槽原样返回（中性缺省/无色层不着色）。
+func (t *theme) fg(s string) string { return sgrWrap(sgrFg(t.fgColor), s) }
+
+// fenceBG 围栏底（设计 §4.1 code-block-bg 槽——markdown.go renderFenced 消费，
+// dsh 换装 Task 5 接线）：整行铺 codeBlockColor。行内既有 SGR（chroma token
+// 色分）的整段重置会连底色一并清掉——重置点即重铺（复用 layout.go sgrResetRe
+// 锚点，同法不重造）；帧出口 paintBG 的 bg 槽重铺先于本序落在各重置点、围栏
+// 底 repaint 随后——SGR 后写生效，围栏底不被帧底冲掉。空槽（无色层/中性缺省）
+// 原样返回。
+func (t *theme) fenceBG(s string) string {
+	bg := sgrBg(t.codeBlockColor)
+	if bg == "" {
+		return s
+	}
+	seq := "\x1b[" + bg + "m"
+	if strings.Contains(s, "\x1b[") {
+		s = sgrResetRe.ReplaceAllString(s, "$0"+seq)
+	}
+	return seq + s + "\x1b[0m"
+}
+
 // sgrWrap 以 SGR 参数串包裹文本（空参数原样返回；对照参考 style.go sgr——
 // colorprofile 门控在色彩层选型时完成，此处只做参数化）。
 func sgrWrap(params, s string) string {
@@ -414,6 +436,10 @@ var (
 	// styleKeycap 键帽样式（设计 §6 授权卡/§7 键帽行）：surface3 底 +
 	// fgSecondary 前——审批卡键帽 Task 7 消费。refreshThemeStyles 重铸。
 	styleKeycap = lipgloss.NewStyle()
+	// styleBubble 用户气泡样式（设计 §6 用户消息）：surface2 底 + 1 格水平
+	// 内衬，无边框——与卡片的「边框 + 预留边框槽」形态区分。transcript.go
+	// userBlock 消费。refreshThemeStyles 重铸。
+	styleBubble = lipgloss.NewStyle()
 )
 
 // applyTheme 换肤：activeTheme 换本体 + lipgloss 样式重铸（对照参考
@@ -459,6 +485,13 @@ func refreshThemeStyles() {
 	if string(activeTheme.fgSecondaryColor) != "" {
 		styleKeycap = styleKeycap.Foreground(lipgloss.Color(string(activeTheme.fgSecondaryColor)))
 	}
+	// 用户气泡样式（设计 §6 用户消息）：surface2 底 + 1 格水平内衬（padding
+	// 为结构、无色层同样在场）；空槽（无色层）不设底——气泡退平文，结构不变。
+	styleBubble = lipgloss.NewStyle()
+	if string(activeTheme.surface2Color) != "" {
+		styleBubble = styleBubble.Background(lipgloss.Color(string(activeTheme.surface2Color)))
+	}
+	styleBubble = styleBubble.Padding(0, 1)
 }
 
 func init() { refreshThemeStyles() }

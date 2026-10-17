@@ -123,7 +123,10 @@ func (r *mdRenderer) renderBlock(buf *strings.Builder, node ast.Node, src []byte
 func (r *mdRenderer) renderHeading(buf *strings.Builder, n *ast.Heading, src []byte, indent int) {
 	inline := r.collectInline(n, src)
 	buf.WriteString(strings.Repeat(" ", indent))
-	buf.WriteString(bold(r.th.accent(inline)))
+	// dsh 文字层级（换装 Task 5，设计 §6）：标题行 fg-primary 加粗——旧
+	// accent 标题随强调槽语义收敛（accent 留给品牌/状态/交互点）；一级标题
+	// 下划线仍 accent（层级一眼可辨，深层级只靠加粗不再叠视觉重量）。
+	buf.WriteString(bold(r.th.fg(inline)))
 	buf.WriteString("\n")
 	// 一级标题补强调色下划线（对照参考 renderHeading——层级一眼可辨，深层级
 	// 只靠加粗+着色不再叠视觉重量）。
@@ -198,11 +201,12 @@ func (r *mdRenderer) renderFenced(buf *strings.Builder, n ast.Node, src []byte, 
 		// chroma 内容按可用宽换行（本仓 viewport 不软换，见文件头注记）。
 		// 硬断可能落在 token SGR 态中——续行到下一转义前短暂失色（终端
 		// 跨行 SGR 态被轨前缀收尾的 reset 清除），仅超宽代码行观感问题，
-		// 内容无损。
+		// 内容无损。围栏底（dsh 换装 Task 5）整行铺 codeBlockColor 槽，
+		// 行内 token reset 的重铺由 th.fenceBG 收口——帧出口 paintBG 的
+		// bg 槽重铺落点在前、围栏底 repaint 随后，后写生效不被冲掉。
 		for _, line := range strings.Split(hl, "\n") {
 			for _, wl := range strings.Split(wrapAnsi(line, avail), "\n") {
-				buf.WriteString(prefix)
-				buf.WriteString(wl)
+				buf.WriteString(r.th.fenceBG(prefix + wl))
 				buf.WriteString("\n")
 			}
 		}
@@ -215,14 +219,15 @@ func (r *mdRenderer) renderFenced(buf *strings.Builder, n ast.Node, src []byte, 
 
 // renderFencedPlain 中性铺色路径（无语言/无色层/中性缺省/降级——Task 7
 // 形态保持）：轨前缀 + accent 内容，按可用宽换行——本仓 viewport 不软换，
-// 放行长行会溢出破帧（参考放行，本仓收口，见文件头 adapted 注记）。
+// 放行长行会溢出破帧（参考放行，本仓收口，见文件头 adapted 注记）。围栏底
+// 随 th.fenceBG 按槽位在场（中性缺省无 codeBlock 槽 → 与 Task 7 单一样式
+// 契约同形）。
 func (r *mdRenderer) renderFencedPlain(buf *strings.Builder, n ast.Node, src []byte, prefix string, avail int) {
 	for i := range n.Lines().Len() {
 		l := n.Lines().At(i)
 		line := strings.TrimRight(string(l.Value(src)), "\n")
 		for _, wl := range strings.Split(wrapAnsi(line, avail), "\n") {
-			buf.WriteString(prefix)
-			buf.WriteString(r.th.accent(wl))
+			buf.WriteString(r.th.fenceBG(prefix + r.th.accent(wl)))
 			buf.WriteString("\n")
 		}
 	}

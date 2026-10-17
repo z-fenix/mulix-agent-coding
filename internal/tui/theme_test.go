@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"mulix/internal/event"
 )
@@ -201,6 +202,24 @@ func assertSlot(t *testing.T, got themeColor, want string) {
 	t.Helper()
 	if string(got) != want {
 		t.Fatalf("slot = %q, want %q", got, want)
+	}
+}
+
+// TestStyleBubble 用户气泡样式（Task 5 Produces：surface2 底 + 1 格水平内衬、
+// 无边框——设计 §6，transcript.go userBlock 消费）。256 层确定性初值口径钉字面
+// （TestStyleKeycap 同法）；内衬断言剥 SGR（lipgloss v2 逐段铺底——padding 段
+// 与内容段各自带 bg，SGR 零宽）。
+func TestStyleBubble(t *testing.T) {
+	resetTheme(t)
+	out := styleBubble.Render("x")
+	if !strings.Contains(out, "48;5;236") { // surface2 256 手选（graphite 暗 · 出厂初值）
+		t.Fatalf("bubble bg must take the surface2 slot:\n%q", out)
+	}
+	if strings.ContainsAny(out, "╭╮╰╯") {
+		t.Fatalf("bubble must be borderless (dsh 底色块):\n%q", out)
+	}
+	if stripped := ansi.Strip(out); stripped != " x " { // 1 格内衬（padding 结构——无色层同样在场）
+		t.Fatalf("bubble must carry 1-cell horizontal padding, stripped = %q (raw %q)", stripped, out)
 	}
 }
 
