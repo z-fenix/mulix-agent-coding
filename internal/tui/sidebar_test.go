@@ -471,9 +471,13 @@ func TestSidebarFocusInertWhenHidden(t *testing.T) {
 	if len(sw.opens) != 0 {
 		t.Fatalf("hidden-sidebar Enter must not swap: %v", sw.opens)
 	}
-	// 宽度退化兜底：聚焦态残值 + W<100——路由前置守卫拦截（focus 不随 resize
-	// 重置，守卫按当前几何判定）。
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF6})         // 聚焦侧栏（栏开着）
+	// 宽度退化兜底（fix round 2 复审——首版此腿 vacuous：关栏未重开时第二次
+	// F6 走 cycleFocus 拒绝分支，focus 停在主列，宽度条件从未在聚焦态行使；
+	// 删掉宽度条件测试仍全绿即证）：先 F3 重开 + F6 成功聚焦，再降到 W<100
+	//——路由前置守卫的 m.width >= 100 才真正兜住残值（focus 不随 resize 重置，
+	// 守卫按当前几何判定）。
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF3})         // 重开侧栏
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF6})         // 聚焦侧栏（栏已开）
 	m = update(t, m, tea.WindowSizeMsg{Width: 90, Height: 24}) // 宽度退化
 	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
 	if m.sidebar.sel != 0 {

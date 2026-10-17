@@ -113,7 +113,7 @@ func TestTogglePanelWide(t *testing.T) {
 	m, _, _ := newTestModel(t)
 	m = update(t, m, tea.WindowSizeMsg{Width: 130, Height: 24})
 	if !m.panel.open {
-		t.Fatal("panelOpen must default true（默认三栏常开）")
+		t.Fatal("panel.open must default true（默认三栏常开）")
 	}
 	if got := m.mainWidth(); got != 82 {
 		t.Fatalf("open mainWidth = %d, want 82（130−16−32）", got)
