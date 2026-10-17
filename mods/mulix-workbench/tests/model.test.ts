@@ -4,7 +4,7 @@ import {
   retireSession, cacheHit, projectNativeUsage, MAX_SEEN_TURNS,
 } from '../hooks/model'
 
-const id = { sessionId: 'native-1', startedAt: 1, root: 'C:/repo', version: '2.1.301' }
+const id = { sessionId: 'native-1', startedAt: 1, root: 'C:/repo', version: '2.1.302' }
 const u = (input: number, read: number, output: number) => ({
   input_tokens: input, cache_creation_input_tokens: 0,
   cache_read_input_tokens: read, output_tokens: output, model: 'fixture-model',

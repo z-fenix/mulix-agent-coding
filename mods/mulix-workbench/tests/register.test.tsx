@@ -140,7 +140,7 @@ test('programmatic commands, args and wrong versions do not open', async ($, on)
   await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
   await $.command.run({ ...command('mulix-cache'), origin: { kind: 'plugin', name: 'other' } })
   await $.command.run({ ...command('mulix-status'), args: '--force; DO_NOT_EXECUTE' })
-  for (const version of ['2.1.300', '2.1.302', '']) {
+  for (const version of ['2.1.301', '2.1.303', '']) {
     h.setIdentity({ version })
     await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
     const beforeMessages = h.messages.length

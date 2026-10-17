@@ -1,11 +1,11 @@
 {
-  "cli_version": "2.1.301",
+  "cli_version": "2.1.302",
   "protocol_probe": {
     "init_version_field": "claude_code_version"
   },
-  "pinned_at": "2026-10-16",
+  "pinned_at": "2026-10-17",
   "baseline": {
     "cache_hit_rate": 0.953,
-    "note": "2026-10-10 真实冒烟实测(单次会话 f59d66c2,委派任务,session_hit 加权口径;见 docs/evidence/p3-smoke.md)；历史参考，未作2.1.301缓存重测"
+    "note": "2026-10-10 真实冒烟实测(单次会话 f59d66c2,委派任务,session_hit 加权口径;见 docs/evidence/p3-smoke.md)；历史参考，未作2.1.302缓存重测"
   }
 }

@@ -1,6 +1,6 @@
 # mulix-workbench
 
-Claude Code **2.1.301** 的原生只读伴随工作台。它不替换 mulix-cli 的 Go TUI、执行循环、权限治理、审计镜像或产品会话账本。
+Claude Code **2.1.302** 的原生只读伴随工作台。它不替换 mulix-cli 的 Go TUI、执行循环、权限治理、审计镜像或产品会话账本。
 
 ## 本地使用
 
@@ -18,7 +18,7 @@ claude --plugin-dir ./mods/mulix-workbench
 
 两条命令打开同一个 Pane。面板中的工作流/原生用量按钮切换视图，刷新只读，关闭按钮或原生关闭操作离开面板。默认不自动弹出、不常驻状态带、不轮询、不发送完成通知。命令不接收参数，不从其他插件的程序式调用自动打开；正在进行的回合可由宿主排队后处理查看命令。
 
-仅支持精确 2.1.301；既有进程可能仍是升级前版本，PATH 的版本输出不代表当前原生宿主。工作台读取 session.version 判断，不支持/未知版本只提示不可用，不放宽产品漂移治理。
+仅支持精确 2.1.302；既有进程可能仍是升级前版本，PATH 的版本输出不代表当前原生宿主。工作台读取 session.version 判断，不支持/未知版本只提示不可用，不放宽产品漂移治理。
 
 开发目录的热加载询问必须由使用者独立选择；写好文件、权限模式或任务批准均不表示热加载已启用。也可使用上述显式本地 --plugin-dir，不需要插件市场、修改全局配置或安装产品 npm 依赖。
 
@@ -49,9 +49,9 @@ node --test scripts/check-mod-delivery.test.cjs
 node scripts/check-mod-delivery.cjs ./mods/mulix-workbench "<LIVE_DIR>"
 ```
 
-需要类型检查时使用已授权的 TypeScript >=5.4；开发工具不作为产品依赖。载入目标宿主后使用其生成的声明，或通过 plugin-authoring 获取精确 2.1.301 的声明，在 mod 外创建临时 tsconfig，include 该声明及 hooks/types/tests。使用 strict、noUncheckedIndexedAccess、noEmit、无 DOM/Node ambient、moduleResolution bundler、jsxFactory h / jsxFragmentFactory Fragment。TypeScript 5.4.5 的静态 target 使用 es2022、lib es2023（没有输出转译），不要直接使用它不支持的 target es2023。
+需要类型检查时使用已授权的 TypeScript >=5.4；开发工具不作为产品依赖。载入目标宿主后使用其生成的声明，或通过 plugin-authoring 获取精确 2.1.302 的声明，在 mod 外创建临时 tsconfig，include 该声明及 hooks/types/tests。使用 strict、noUncheckedIndexedAccess、noEmit、无 DOM/Node ambient、moduleResolution bundler、jsxFactory h / jsxFragmentFactory Fragment。TypeScript 5.4.5 的静态 target 使用 es2022、lib es2023（没有输出转译），不要直接使用它不支持的 target es2023。
 
-`claude-code/testing` 验证钩子与绘制描述，不证明终端物理绘制或真实热重载。真实场景与阻塞证据见本仓库 `docs/evidence/claude-2-1-301-mods-workbench.md`；未通过的场景不能用 mock 通过替代。
+`claude-code/testing` 验证钩子与绘制描述，不证明终端物理绘制或真实热重载。真实场景与阻塞证据见本仓库 `docs/evidence/claude-2-1-302-mods-workbench.md`；未通过的场景不能用 mock 通过替代。
 
 交付检查只读取固定白名单文件及元数据，拒绝链接/未知条目和不一致字节，不复制或执行两个输入目录。宿主生成的 .claude-plugin/types 与根 tsconfig 不作为交付输入；不要把设置、日志、工具、凭据或市场文件放入此包。
 

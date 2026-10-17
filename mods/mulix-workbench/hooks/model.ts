@@ -8,7 +8,7 @@ import type {
   MulixWorkbenchWorkflowSnapshot as WorkflowSnapshot,
 } from '../types'
 
-export const TARGET_VERSION = '2.1.301'
+export const TARGET_VERSION = '2.1.302'
 export const MAX_SEEN_TURNS = 4096
 const phases: readonly string[] = ['specify', 'clarify', 'design', 'tasks', 'build', 'verify', 'archive']
 const verifyStates: readonly string[] = ['pending', 'pass', 'fail']

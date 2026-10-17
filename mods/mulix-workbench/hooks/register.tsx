@@ -77,7 +77,7 @@ let flight: object | null = null
     try {
       const before = await context($)
       if (before.identity.version !== TARGET_VERSION) {
-        await fail($, generation, 'CLI 版本未验证或不可用；工作台仅支持 2.1.301')
+        await fail($, generation, `CLI 版本未验证或不可用；工作台仅支持 ${TARGET_VERSION}`)
         return
       }
       await update($, state, s => {
@@ -141,7 +141,7 @@ let flight: object | null = null
     const original = await read($, state)
     const current = await context($)
     if (current.identity.version !== TARGET_VERSION) {
-      await notify($, 'CLI 版本未验证或不可用；工作台仅支持 2.1.301')
+      await notify($, `CLI 版本未验证或不可用；工作台仅支持 ${TARGET_VERSION}`)
       return
     }
     await update($, state, s => {

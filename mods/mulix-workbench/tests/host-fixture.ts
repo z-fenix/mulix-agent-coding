@@ -22,7 +22,7 @@ export function installHost(on: On) {
   const messages: string[] = []
   let latest = freshState()
   let latestVersion = 0
-  let identity: MulixWorkbenchIdentity = { sessionId: 'native-1', startedAt: 1, root: 'C:/repo', version: '2.1.301' }
+  let identity: MulixWorkbenchIdentity = { sessionId: 'native-1', startedAt: 1, root: 'C:/repo', version: '2.1.302' }
   let usage: SessionUsage = { startedAt: 1, context: { window: 1000 }, rateLimits: [], cost: { usd: 0 } }
   let commands: CommandInfo[] = []
   let placed: UiOpenResult = { isPlaced: true }

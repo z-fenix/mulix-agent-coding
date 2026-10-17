@@ -7,13 +7,13 @@ import (
 	"time"
 )
 
-func TestRepositoryLock2301(t *testing.T) {
+func TestRepositoryLock2302(t *testing.T) {
 	lock, err := LoadEngineLock(filepath.Join("..", "..", "engine.lock"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if lock.CLIVersion != "2.1.301" {
-		t.Fatalf("want 2.1.301, got %q", lock.CLIVersion)
+	if lock.CLIVersion != "2.1.302" {
+		t.Fatalf("want 2.1.302, got %q", lock.CLIVersion)
 	}
 	if _, err := time.Parse("2006-01-02", lock.PinnedAt); err != nil {
 		t.Fatal(err)
@@ -27,7 +27,7 @@ func TestRepositoryLock2301(t *testing.T) {
 	if lock.Baseline.CacheHitRate != 0.953 {
 		t.Fatal("historical sample changed")
 	}
-	for _, part := range []string{"2026-10-10 真实冒烟实测", "历史参考，未作2.1.301缓存重测"} {
+	for _, part := range []string{"2026-10-10 真实冒烟实测", "历史参考，未作2.1.302缓存重测"} {
 		if !strings.Contains(lock.Baseline.Note, part) {
 			t.Fatalf("missing provenance %q", part)
 		}
