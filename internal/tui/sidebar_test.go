@@ -446,6 +446,78 @@ func TestEscapeRefocusSidebar(t *testing.T) {
 	}
 }
 
+// TestSidebarFocusInertWhenHidden 钉（评审 Important-1——焦点域随侧栏失效
+// 重置 + 路由双保险守卫）：F6 聚焦后 F3 关栏 → 焦点回主列、↑/↓/Enter 不再
+// 路由给不可见清单（↑/↓ 不动游标、Enter 不触发换绑）；聚焦态残值下宽度降到
+// <100（几何退化不渲染）同样失效——路由前置守卫兜底，不依赖关沿重置。
+func TestSidebarFocusInertWhenHidden(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	sw := &fakeSwapper{sink: m.sink}
+	m.swapper = sw
+	m.opts.ListSessions = func() []SessionSummary { return sidebarSessionsStub() }
+	m.refreshSidebarSessions()
+	m = update(t, m, tea.WindowSizeMsg{Width: 130, Height: 24})
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF6}) // 聚焦侧栏
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF3}) // 关栏——焦点失效重置
+	if m.focus != focusMain {
+		t.Fatal("closing the sidebar must reset focus to main")
+	}
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyUp})
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.sidebar.sel != 0 {
+		t.Fatalf("hidden-sidebar ↑/↓ must not move sel: %d", m.sidebar.sel)
+	}
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if len(sw.opens) != 0 {
+		t.Fatalf("hidden-sidebar Enter must not swap: %v", sw.opens)
+	}
+	// 宽度退化兜底：聚焦态残值 + W<100——路由前置守卫拦截（focus 不随 resize
+	// 重置，守卫按当前几何判定）。
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF6})         // 聚焦侧栏（栏开着）
+	m = update(t, m, tea.WindowSizeMsg{Width: 90, Height: 24}) // 宽度退化
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.sidebar.sel != 0 {
+		t.Fatalf("narrow resize with stale focus must not move sel: %d", m.sidebar.sel)
+	}
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if len(sw.opens) != 0 {
+		t.Fatalf("narrow resize with stale focus must not swap: %v", sw.opens)
+	}
+}
+
+// TestSidebarSwapGateRejectsFocusAndEnter 钉（评审 Important-2——新路由并入
+// swapping 忙门禁单飞不变量）：在途换绑窗口内 F6 不换焦、Enter 不触发第二笔
+// swapSession（两笔回执乱序可致 ctrl/selfID 绑到已收口会话）——留痕拒绝
+// （与 F3/F6 守卫同口径：静默会让人以为已聚焦/已换绑），拒绝保焦可重试。
+func TestSidebarSwapGateRejectsFocusAndEnter(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	sw := &fakeSwapper{sink: m.sink}
+	m.swapper = sw
+	m.opts.ListSessions = func() []SessionSummary { return sidebarSessionsStub() }
+	m.refreshSidebarSessions()
+	m = update(t, m, tea.WindowSizeMsg{Width: 130, Height: 24})
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF6}) // 聚焦侧栏
+	m.swapping = true                                  // 模拟在途换绑（生产：swapSession 置位，回执清除）
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if len(sw.opens) != 0 {
+		t.Fatalf("Enter during swap must not start a second swap: %v", sw.opens)
+	}
+	if m.focus != focusSidebar {
+		t.Fatal("refusal must keep the focus (user retries after swap settles)")
+	}
+	if !transcriptHas(t, m, "换绑进行中") {
+		t.Fatal("swap-window Enter must leave a trace line")
+	}
+	m.focus = focusMain
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF6})
+	if m.focus != focusMain {
+		t.Fatal("F6 during swap must not change focus")
+	}
+	if !transcriptHas(t, m, "换绑进行中") {
+		t.Fatal("swap-window F6 must leave a trace line")
+	}
+}
+
 // TestSidebarListWindow 钉（Task 11 deferred minor——清单溢出取景窗）：纯函数
 // 口径——n≤avail 全量；sel 居中锚定；两端截断收口；窗高下限 1（sel 行恒可见
 // ——无静默行丢失，环绕导航可达全部行）。

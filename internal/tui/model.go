@@ -780,12 +780,13 @@ func (m *tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m2, cmd
 		}
 	}
-	// 侧栏聚焦键路由（Task 13 最小焦点形）：focus==focusSidebar 时 ↑/↓/Enter
-	// 交侧栏（环绕移动/换绑），其余键照常落 composer——数字与文本键永不劫持
-	//（1–9 永远进输入）。补全菜单在场时其导航优先（上方分支——浮层由键入
-	// 触发即在场，Esc 关菜单后侧栏导航续用）；审批/agents/picker 独占态在更
-	// 上方分支先行消费，路由不与之争键。
-	if m.focus == focusSidebar {
+	// 侧栏聚焦键路由（Task 13 最小焦点形）：focus==focusSidebar 且侧栏可见
+	//（开 + 宽档——评审 Important-1 双保险：关沿重置为主，几何退化/残值兜底）
+	// 时 ↑/↓/Enter 交侧栏（环绕移动/换绑），其余键照常落 composer——数字与
+	// 文本键永不劫持（1–9 永远进输入）。补全菜单在场时其导航优先（上方分支
+	// ——浮层由键入触发即在场，Esc 关菜单后侧栏导航续用）；审批/agents/picker
+	// 独占态在更上方分支先行消费，路由不与之争键。
+	if m.focus == focusSidebar && m.sidebarOpen && m.width >= 100 {
 		switch msg.Code {
 		case tea.KeyUp:
 			m.moveSidebar(-1)

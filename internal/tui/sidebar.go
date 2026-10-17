@@ -87,12 +87,18 @@ func (m *tuiModel) moveSidebar(delta int) {
 }
 
 // handleSidebarEnter 聚焦侧栏 Enter：换绑选中项（与 /resume <engine-id> 同一
-// 接缝 swapSession——异步，swapping 忙门禁随置位接管）。fail-closed 守卫镜像
-// picker（resume_picker.go：越界防御 + 空 EngineID → appendLine 留痕拒绝，
-// 不调 swap——空链不得静默退化为 /new 语义）；拒绝保焦点保游标（用户可改选）。
-// 成功触发即游标复位 + 焦点回主列（触发时刻语义；换绑回执 swapDoneMsg 另行
-// 收口重绑与清单刷新）。
+// 接缝 swapSession——异步，swapping 忙门禁随置位接管）。在途换绑窗口拒绝第二
+// 笔（评审 Important-2——swapSession 并发违反单飞不变量，两笔回执乱序可致
+// ctrl/selfID 绑到已收口会话；留痕拒绝，与 cycleFocus 同口径）。fail-closed
+// 守卫镜像 picker（resume_picker.go：越界防御 + 空 EngineID → appendLine
+// 留痕拒绝，不调 swap——空链不得静默退化为 /new 语义）；拒绝保焦点保游标
+// （用户可改选）。成功触发即游标复位 + 焦点回主列（触发时刻语义；换绑回执
+// swapDoneMsg 另行收口重绑与清单刷新）。
 func (m *tuiModel) handleSidebarEnter() (tea.Model, tea.Cmd) {
+	if m.swapping {
+		m.appendLine("[换绑] 换绑进行中，稍候再试")
+		return m, nil
+	}
 	if m.sidebar.sel >= len(m.sidebar.sessions) || m.sidebar.sel < 0 {
 		return m, nil
 	}
@@ -123,6 +129,11 @@ func (m *tuiModel) toggleSidebar() tea.Cmd {
 	m.sidebarOpen = !m.sidebarOpen
 	if opening {
 		m.refreshSidebarSessions()
+	} else {
+		// 关沿焦点失效重置（评审 Important-1）：不可见清单不得持焦——否则
+		// focus==focusSidebar 残值仍把 ↑/↓/Enter 路由给看不见的列表（Enter
+		// 可在用户看不见时触发换绑）。宽度退化由路由前置守卫兜底。
+		m.focus = focusMain
 	}
 	m.composerState.ta.SetWidth(m.mainWidth())
 	return nil
@@ -132,7 +143,16 @@ func (m *tuiModel) toggleSidebar() tea.Cmd {
 // 见即不可聚焦——窄档 <100（几何退化不渲染）与未开启（F3 关态）都留痕拒绝
 // （与 F2/F3/F4 守卫同口径：静默会让人以为已聚焦）；已聚焦侧栏则回主列。
 // focusPanel 与聚焦可见性归 Task 17。
+// cycleFocus F6 聚焦轮换（Task 13 最小焦点形）：主列↔侧栏两态循环。在途换绑
+// 窗口冻结焦点操作（评审 Important-2——swapping 单飞不变量，留痕拒绝）；侧栏
+// 不可见即不可聚焦——窄档 <100（几何退化不渲染）与未开启（F3 关态）都留痕
+// 拒绝（与 F2/F3/F4 守卫同口径：静默会让人以为已聚焦）；已聚焦侧栏则回主列。
+// focusPanel 与聚焦可见性归 Task 17。
 func (m *tuiModel) cycleFocus() tea.Cmd {
+	if m.swapping {
+		m.appendLine("[换绑] 换绑进行中，稍候再试")
+		return nil
+	}
 	if m.focus == focusSidebar {
 		m.focus = focusMain
 		return nil
