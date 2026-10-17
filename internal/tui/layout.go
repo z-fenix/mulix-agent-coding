@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"regexp"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -84,7 +85,39 @@ func (m *tuiModel) frame() string {
 	m.scrollState.forceGotoBottom = false
 	// 可见窗口经 transcriptView 绘制（选区高亮内建）——viewport 只持滚动状态，
 	// 帧面按 h 行绘制（对照参考 renderTranscript；023 Story4 Task 21）。
-	return lipgloss.JoinHorizontal(lipgloss.Top, m.transcriptState.transcriptView(), m.scrollbarView()) + "\n" + bottom
+	// 满帧铺底（设计 §4.3）：出口统一收口——帧每行（转写视口 + 滚动条列 +
+	// 底部固定区）过 paintBG 整行铺 bg 槽；无色层原样返回，结构不变。
+	rendered := lipgloss.JoinHorizontal(lipgloss.Top, m.transcriptState.transcriptView(), m.scrollbarView()) + "\n" + bottom
+	return paintBG(rendered, m.width)
+}
+
+// sgrResetRe 整段重置型 SGR（参数空或全零——\x1b[m / \x1b[0m / \x1b[0;0m）：
+// 铺底重铺的锚点。非全零 SGR（如 38;5;N）只改属性不清底，无需重铺；组合
+// reset+属性 序（\x1b[0;38;5;Nm）不在本仓产出面（sgrWrap 与 lipgloss 均
+// 分序发出），出现时需回访。
+var sgrResetRe = regexp.MustCompile(`\x1b\[(0+(;0+)*)?m`)
+
+// paintBG 满帧铺底（设计 §4.3）：rendered 逐行右补空格到 width 显示宽
+// （padToWidth——ansi.StringWidth 计量，CJK 安全）并整行铺 bg 槽（lipgloss
+// Background+Width——styleFrame 由 refreshThemeStyles 按 activeTheme 重铸）；
+// bg 槽空（无色层）原样返回，不补空格不铺底。行内既有 SGR 的整段重置会把
+// 底色一并清掉——重置点即重铺 bg（SGR 叠加语义：fg 序不清底），否则样式段
+// 之后的正文落回终端默认底，「整行铺底」不成立。
+func paintBG(rendered string, width int) string {
+	bg := sgrBg(activeTheme.bgColor)
+	if bg == "" {
+		return rendered
+	}
+	seq := "\x1b[" + bg + "m"
+	lines := strings.Split(rendered, "\n")
+	for i, line := range lines {
+		p := padToWidth(line, width)
+		if strings.Contains(p, "\x1b[") {
+			p = sgrResetRe.ReplaceAllString(p, "$0"+seq)
+		}
+		lines[i] = styleFrame.Width(width).Render(p)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // scrollbarView 末列滚动条（023 D5；拖拽随 Task 21 落地——transcript.go

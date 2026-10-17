@@ -408,6 +408,9 @@ var (
 	styleStatus = lipgloss.NewStyle()                                                // 状态栏（dim 槽着色，refreshThemeStyles 重铸）
 	styleCard   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1) // 模态卡（accent 槽边框）
 	styleBadge  = lipgloss.NewStyle()                                                // 模式徽章 pill（accent 反白，025 FR-006）
+	// styleFrame 满帧铺底样式（设计 §4.3）：bg 槽整行填充——layout.go paintBG
+	// 消费；空槽（无色层）不设底，paintBG 原样返回。refreshThemeStyles 重铸。
+	styleFrame = lipgloss.NewStyle()
 )
 
 // applyTheme 换肤：activeTheme 换本体 + lipgloss 样式重铸（对照参考
@@ -437,6 +440,12 @@ func refreshThemeStyles() {
 		if string(activeTheme.bgColor) != "" {
 			styleBadge = styleBadge.Foreground(lipgloss.Color(string(activeTheme.bgColor)))
 		}
+	}
+	// 满帧铺底样式（设计 §4.3）：bg 槽整行填充（layout.go paintBG 出口消费）；
+	// 空槽（无色层）不设底——paintBG 原样返回，不铺底不补空格。
+	styleFrame = lipgloss.NewStyle()
+	if string(activeTheme.bgColor) != "" {
+		styleFrame = styleFrame.Background(lipgloss.Color(string(activeTheme.bgColor)))
 	}
 }
 
