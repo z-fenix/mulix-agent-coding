@@ -84,7 +84,7 @@ func (m *tuiModel) syncScrollModeAfterGesture() {
 // wheelScrollRows 滚轮单次滚动行数（对照参考 chat_tui.go:1113/1115 的 3 行）。
 const wheelScrollRows = 3
 
-// handleWheel 滚轮手势：模态独占态不泄漏（授权卡/agents 面板——与键位门禁同
+// handleWheel 滚轮手势：模态独占态不泄漏（授权卡/agents 页签——与键位门禁同
 // 语义，D10/D11 治理独占期交互冻结）；渲染态先试编辑器嵌套滚动（023 D12：
 // 编辑器内容超过 MaxHeight 行时 textarea 内建 viewport 可滚——把消息喂给它，
 // ScrollYOffset 前后差即消费凭据；未消费 = 未溢出或已到边，落转写视口续滚，

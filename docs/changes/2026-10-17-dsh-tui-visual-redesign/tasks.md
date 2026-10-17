@@ -368,11 +368,11 @@ func TestNoColorFrameStructure(t *testing.T) {
 - Consumes: Task 12 面板骨架；`doctorDoneMsg{lines []string}`（model.go）；/cache 面板内容生成（现 /cache 输出路径）。
 - Produces: model 增 `doctorLines []string`（doctorDoneMsg 到达时存储——转写 appendLine 照旧，双呈现）；doctor tab 渲染 doctorLines（空态「/doctor 命令运行」指引）；cache tab 渲染 /cache 同源内容（缓存投影摘要的常驻展示；空态指引）。/doctor、/cache 转写行为行**不变**。
 
-- [ ] **Step 1: Write the failing test** — doctorDoneMsg 后：转写行仍在（矩阵断言不动）+ doctor tab 含同 lines；cache tab 与 /cache 输出同源；空态文案。
-- [ ] **Step 2: verify RED**。Expected: FAIL。
-- [ ] **Step 3: Implement**。
-- [ ] **Step 4: verify GREEN**。Expected: PASS。
-- [ ] **Step 5: 门禁 + commit** — `feat(tui): doctor/cache 页签常驻化——转写双呈现`。
+- [X] **Step 1: Write the failing test** — doctorDoneMsg 后：转写行仍在（矩阵断言不动）+ doctor tab 含同 lines；cache tab 与 /cache 输出同源；空态文案。
+- [X] **Step 2: verify RED**。Expected: FAIL。
+- [X] **Step 3: Implement**。
+- [X] **Step 4: verify GREEN**。Expected: PASS。
+- [X] **Step 5: 门禁 + commit** — `feat(tui): doctor/cache 页签常驻化——转写双呈现`。
 
 ## Task 17: 焦点模型 F6 + 聚焦可见性
 
@@ -384,11 +384,11 @@ func TestNoColorFrameStructure(t *testing.T) {
 - Consumes: Task 11–16 侧栏/面板交互。
 - Produces: `type focusZone uint8` + `focusMain/focusSidebar/focusPanel`；`func (m *tuiModel) cycleFocus()`——主列→侧栏（开）→面板（开）→主列环绕，目标区未开跳过；聚焦区边框线色 accent（未聚焦 border）；状态栏行 2 尾部焦点名（「焦点 侧栏」caption 色，主列焦点省略）；Esc 阶梯扩展：审批独占（不变）→ 聚焦面板 agents/变更交互（Task 15/14 语义）→ 运行态阶梯（不变）→ 空闲：聚焦态先取焦 → 清空输入。**审批在场时 F2/F3/F4/F6/↑↓Enter 全部被独占分支拦截**（Review Focus 4）。
 
-- [ ] **Step 1: Write the failing test** — `TestFocusCycle`：F6 循环路径（面板关时跳过面板）；`TestApprovalInterceptsPanelKeys`：审批在场按 F2/F4/F6/↑，状态与审批态不变且无面板开合（治理矩阵逐字节）；Esc 取焦不关面板；状态栏焦点名。
-- [ ] **Step 2: verify RED** — `TestFocusCycle` 应红（F6 未实现）；**`TestApprovalInterceptsPanelKeys` 可能落地即绿**（审批分支在 handleKey 最前 model.go:709-711、handleApprovalKey 未映射键一律忽略 approval.go:34-48——本测试是回归守卫，按 Task 18 口径记台账「守卫型用例不硬造红」）。Expected: FAIL（至少 TestFocusCycle）。
-- [ ] **Step 3: Implement** — focusZone/cycleFocus/焦点可见性/Esc 取焦扩展；审批独占分支保持最前。
-- [ ] **Step 4: verify GREEN**（含全部键位/治理测试）。Expected: PASS。
-- [ ] **Step 5: 门禁 + commit** — `feat(tui): 焦点模型——F6 循环聚焦与可见性`。
+- [X] **Step 1: Write the failing test** — `TestFocusCycle`：F6 循环路径（面板关时跳过面板）；`TestApprovalInterceptsPanelKeys`：审批在场按 F2/F4/F6/↑，状态与审批态不变且无面板开合（治理矩阵逐字节）；Esc 取焦不关面板；状态栏焦点名。
+- [X] **Step 2: verify RED** — `TestFocusCycle` 应红（F6 未实现）；**`TestApprovalInterceptsPanelKeys` 可能落地即绿**（审批分支在 handleKey 最前 model.go:709-711、handleApprovalKey 未映射键一律忽略 approval.go:34-48——本测试是回归守卫，按 Task 18 口径记台账「守卫型用例不硬造红」）。Expected: FAIL（至少 TestFocusCycle）。
+- [X] **Step 3: Implement** — focusZone/cycleFocus/焦点可见性/Esc 取焦扩展；审批独占分支保持最前。
+- [X] **Step 4: verify GREEN**（含全部键位/治理测试）。Expected: PASS。
+- [X] **Step 5: 门禁 + commit** — `feat(tui): 焦点模型——F6 循环聚焦与可见性`。
 
 ## Task 18: 矩阵补全 + 全量门禁收口
 

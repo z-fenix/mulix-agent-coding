@@ -195,6 +195,7 @@ func TestModalOpenNoUnfollow(t *testing.T) {
 	// agents 页签交互态（Task 15 收编口径——直置交互三键：开合流程由既有
 	// agents 测试钉），交互期不翻模式且保持钉底；退出交互（Esc 同效）解冻。
 	m2 := newScrollTestModel(t)
+	m2.width = 140 // 交互态谓词宽度项（T17 可见性对账——窄端交互不可见不冻结）
 	m2.panel.tab = tabAgents
 	m2.focus = focusPanel
 	if !m2.modalOpen() {

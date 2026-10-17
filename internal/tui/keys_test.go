@@ -253,3 +253,76 @@ func TestSwapClearsCancelState(t *testing.T) {
 		t.Fatalf("stale pendingSubmit must not commit into the new session: %d", n)
 	}
 }
+
+// ---- 焦点模型 F6 + 聚焦可见性（2026-10-17-dsh-tui-visual-redesign Task 17）----
+//
+// TestFocusCycle 钉 F6 循环路径判别面——循环本体 T13/T14 最小焦点形已先行落
+// 地（台账 Ruling：焦点模型计划落 T17、最小形 T13/T14 先行），本测试为收口钉
+// （落地即绿——按 T18 守卫型口径记台账不硬造红，RED 面由聚焦可见性测试承担
+// ：TestStatusBarFocusName / TestPanelFocusEdge / TestSidebarFocusEdge /
+// TestSidebarWindowPositionHint）。
+
+// TestFocusCycle 钉（brief Step 1）：F6 循环 主列→侧栏→面板（开）→主列环绕；
+// 目标区未开跳过（面板关：侧栏 F6 直达主列，静默无留痕——跳过不是拒绝，轮换
+// 落点恒为可见区）；宽度不合格跳过（中档 <130 面板列不可见）。
+func TestFocusCycle(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m = update(t, m, tea.WindowSizeMsg{Width: 150, Height: 24})
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF6})
+	if m.focus != focusSidebar {
+		t.Fatalf("first F6 must focus the sidebar, got %d", m.focus)
+	}
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF6})
+	if m.focus != focusPanel {
+		t.Fatalf("second F6 must focus the panel (open at wide width), got %d", m.focus)
+	}
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF6})
+	if m.focus != focusMain {
+		t.Fatalf("third F6 must cycle back to main, got %d", m.focus)
+	}
+	// 面板关：侧栏 F6 跳过面板直达主列，静默（无守卫留痕）。
+	blocks := len(m.transcriptState.blocks)
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF2}) // 关面板
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF6})
+	if m.focus != focusSidebar {
+		t.Fatalf("F6 must focus the sidebar, got %d", m.focus)
+	}
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF6})
+	if m.focus != focusMain {
+		t.Fatalf("panel-closed cycle must skip straight to main, got %d", m.focus)
+	}
+	if len(m.transcriptState.blocks) != blocks {
+		t.Fatal("panel-closed skip must be silent (no guard trace)")
+	}
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF2}) // 重开面板
+	// 中档（<130 面板列不可见）：跳过面板档。
+	m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 24})
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF6})
+	if m.focus != focusSidebar {
+		t.Fatalf("mid-width F6 must focus the sidebar, got %d", m.focus)
+	}
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF6})
+	if m.focus != focusMain {
+		t.Fatalf("mid-width cycle must skip the invisible panel, got %d", m.focus)
+	}
+}
+
+// TestEscapeRefocusKeepsPanelOpen 钉（brief Step 1「Esc 取焦不关面板」）：聚焦
+// 面板时空闲 Esc = 取焦回主列（消费本次 Esc），面板开合/页签态保留——关闭归
+// F2（设计 §8 Esc 阶梯：取焦档只动焦点）。
+func TestEscapeRefocusKeepsPanelOpen(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m = update(t, m, tea.WindowSizeMsg{Width: 150, Height: 24})
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF6})
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF6})
+	if m.focus != focusPanel {
+		t.Fatalf("precondition: panel focused, got %d", m.focus)
+	}
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
+	if m.focus != focusMain {
+		t.Fatalf("Esc must refocus main, got %d", m.focus)
+	}
+	if !m.panel.open || m.panel.tab != tabChanges {
+		t.Fatalf("Esc must not close the panel: open=%v tab=%v", m.panel.open, m.panel.tab)
+	}
+}

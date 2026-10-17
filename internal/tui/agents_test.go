@@ -199,3 +199,22 @@ func TestTUIAgentsTabEmpty(t *testing.T) {
 		t.Fatal("esc must exit the interaction")
 	}
 }
+
+// ---- 交互态 Ctrl+C 逃生口补钉（Task 15 deferred minor——Task 17 闭环）----
+
+// TestAgentsTabCtrlCQuits 钉（Task 15 deferred minor「agents 交互态单按 Ctrl+C
+// 退出无测试钉」——Task 17 补钉）：agents 页签交互态单击 Ctrl+C 直接退出
+// （handleKey Ctrl+C 前置分支先于独占分支——独占态不可困死用户）；不走渲染
+// 态双击武装阶梯（武装按返回 nil 命令——cmd 非 nil 即退出路径）。
+func TestAgentsTabCtrlCQuits(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.width = 140 // 交互态谓词宽度项（T17 可见性对账）
+	m.panel.tab = tabAgents
+	m.focus = focusPanel // panel.open 缺省 true——交互态成立
+	if !m.agentsTabInteractive() {
+		t.Fatal("precondition: agents tab interactive")
+	}
+	if _, cmd := m.handleKey(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}); cmd == nil {
+		t.Fatal("single Ctrl+C in agents tab interaction must quit (escape hatch)")
+	}
+}

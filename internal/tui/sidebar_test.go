@@ -560,8 +560,9 @@ func TestSidebarListWindow(t *testing.T) {
 	}
 }
 
-// TestSidebarWindowScrolls 钉：窗随 sel 移动——sel=0 露前 7 行（尾 3 行不在
-// 视图）；↑ 环绕至末项后窗跟到尾部（首行离场）；sel 行「› 」恒在窗内。
+// TestSidebarWindowScrolls 钉：窗随 sel 移动——sel=0 露前 6 行（尾 4 行不在
+// 视图；窗高 = 10−4 chrome——Task 17 聚焦边框线入列 chrome 3→4）；↑ 环绕至
+// 末项后窗跟到尾部（首行离场）；sel 行「› 」恒在窗内。
 func TestSidebarWindowScrolls(t *testing.T) {
 	resetTheme(t)
 	applyTheme(defaultActiveTheme())
@@ -572,7 +573,7 @@ func TestSidebarWindowScrolls(t *testing.T) {
 	}
 	m.opts.ListSessions = func() []SessionSummary { return items }
 	m.refreshSidebarSessions()
-	m = update(t, m, tea.WindowSizeMsg{Width: 130, Height: 10}) // 窗高 = 10−3 chrome = 7
+	m = update(t, m, tea.WindowSizeMsg{Width: 130, Height: 10}) // 窗高 = 10−4 chrome = 6
 	v := m.sidebarView(16)
 	if !strings.Contains(v, "id-00000") || strings.Contains(v, "id-00008") {
 		t.Fatalf("window must show the first 7 of 10 rows at sel=0:\n%q", v)
@@ -585,5 +586,62 @@ func TestSidebarWindowScrolls(t *testing.T) {
 	}
 	if !strings.Contains(ansi.Strip(v), "›") {
 		t.Fatal("sel row must stay visible in the window")
+	}
+}
+
+// ---- 聚焦可见性 + 取景窗位置提示（2026-10-17-dsh-tui-visual-redesign Task 17）----
+
+// TestSidebarFocusEdge 钉（Task 17 聚焦可见性——设计 §8 Q8）：聚焦侧栏 → 边
+// 框线（「会话」目下、清单上）切 accent 槽（38;5;111）；未聚焦 → border 槽
+// （38;5;238）。
+func TestSidebarFocusEdge(t *testing.T) {
+	resetTheme(t)
+	applyTheme(defaultActiveTheme())
+	m, _, _ := newTestModel(t)
+	m.opts.ListSessions = func() []SessionSummary { return sidebarSessionsStub() }
+	m.refreshSidebarSessions()
+	m = update(t, m, tea.WindowSizeMsg{Width: 130, Height: 24})
+	if !strings.Contains(m.sidebarView(16), "\x1b[38;5;238m"+strings.Repeat("─", 16)+"\x1b[0m") {
+		t.Fatalf("unfocused sidebar must carry the border-slot edge line:\n%q", m.sidebarView(16))
+	}
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF6})
+	if m.focus != focusSidebar {
+		t.Fatalf("precondition: sidebar focused, got %d", m.focus)
+	}
+	if !strings.Contains(m.sidebarView(16), "\x1b[38;5;111m"+strings.Repeat("─", 16)+"\x1b[0m") {
+		t.Fatalf("focused sidebar edge must take the accent slot:\n%q", m.sidebarView(16))
+	}
+}
+
+// TestSidebarWindowPositionHint 钉（Task 13 deferred minor「取景窗无总量/位置
+// 提示」——Task 17 闭环）：清单溢出（n>窗高）时「会话」目行缀「<sel+1>/<n>」
+// 位置计数（dim 同染——取景窗只露窗内行，总量与游标位不可见；提示只报事
+// 实）；不溢出省略（裸「会话」目——既有帧面零扰动）。
+func TestSidebarWindowPositionHint(t *testing.T) {
+	resetTheme(t)
+	applyTheme(defaultActiveTheme())
+	m, _, _ := newTestModel(t)
+	items := make([]SessionSummary, 10)
+	for i := range items {
+		items[i] = SessionSummary{ID: fmt.Sprintf("id-%05d", i), EngineID: fmt.Sprintf("e-%d", i), Model: "m"}
+	}
+	m.opts.ListSessions = func() []SessionSummary { return items }
+	m.refreshSidebarSessions()
+	m = update(t, m, tea.WindowSizeMsg{Width: 130, Height: 10}) // 窗高 = 10−4 chrome = 6 < 10
+	if got := ansi.Strip(m.sidebarView(16)); !strings.Contains(got, "会话 1/10") {
+		t.Fatalf("overflowing window must show the position hint at sel=0:\n%s", got)
+	}
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF6})
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyUp}) // 环绕 → sel=9
+	if got := ansi.Strip(m.sidebarView(16)); !strings.Contains(got, "会话 10/10") {
+		t.Fatalf("hint must track the sel position:\n%s", got)
+	}
+	// 不溢出（窗高 20 ≥ 10）：裸「会话」目，无计数。
+	m2, _, _ := newTestModel(t)
+	m2.opts.ListSessions = func() []SessionSummary { return items }
+	m2.refreshSidebarSessions()
+	m2 = update(t, m2, tea.WindowSizeMsg{Width: 130, Height: 24})
+	if got := ansi.Strip(m2.sidebarView(16)); strings.Contains(got, "/10") || !strings.Contains(got, "会话") {
+		t.Fatalf("non-overflowing window must keep the bare label:\n%s", got)
 	}
 }

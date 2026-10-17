@@ -57,9 +57,30 @@ func (m *tuiModel) statusView() string {
 	if s.MeterReport.ColdTurns > 0 {
 		groups = append(groups, fmt.Sprintf("❄冷回合 %d", s.MeterReport.ColdTurns))
 	}
+	// 聚焦可见性（2026-10-17 换装设计 §8 Q8）：行 2 尾部追加当前焦点名（
+	// 「焦点 侧栏/面板」——caption 色，随行 2 dim 槽整行同染）；主列缺省与
+	// 不可见残焦省略（focusName）。
+	if name := m.focusName(); name != "" {
+		groups = append(groups, name)
+	}
 	// 行 2 数据带 caption 色（设计令牌表 caption/dim 同槽——dim；显式施色使
 	// 渲染点自持，不依赖调用方 styleStatus；空槽原样返回）。
 	return row1 + "\n" + sgrWrap(sgrFg(activeTheme.dimColor), strings.Join(groups, " · "))
+}
+
+// focusName 状态栏行 2 尾部焦点名（Task 17 聚焦可见性——设计 §8 Q8：行 2 尾
+// 部追加当前焦点名「焦点 侧栏」/「焦点 面板」）：聚焦区当前可见（几何判据与
+// 键路由守卫/交互态谓词同源——W≥100 侧栏、W≥130 面板 + 开态）时给出；主列缺
+// 省省略；不可见残焦（focusZone 不随 resize 重置——可见性以当前几何对账）省
+// 略——状态栏不撒谎。
+func (m *tuiModel) focusName() string {
+	switch {
+	case m.focus == focusSidebar && m.sidebarOpen && m.width >= 100:
+		return "焦点 侧栏"
+	case m.focus == focusPanel && m.panel.open && m.width >= 130:
+		return "焦点 面板"
+	}
+	return ""
 }
 
 // statusBadge 行 1 徽章渲染：交互态走 styleBadge（accent 底 + bg 槽 fg——

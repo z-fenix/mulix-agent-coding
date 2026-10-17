@@ -9,7 +9,7 @@ import (
 
 // ---- /resume 会话选择器（023 FR-009；设计 §7.5）----
 //
-// 列表态模态（与 /agents 面板同级互斥：composer 冻结、滚轮冻结；审批卡在
+// 列表态模态（与 /agents 页签同级互斥：composer 冻结、滚轮冻结；审批卡在
 // handleKey 前置分支优先——面板打开期间到账的审批先裁决）：↑/↓ 环绕选择、
 // Enter 关面板并经 SessionSwapper 换绑（与 /resume <engine-id> 同一接缝——
 // CloseCurrent → 排空 → Open 次序由 swapSession 钉死）、esc/q 关闭。数据源

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"charm.land/bubbletea/v2"
@@ -8,12 +9,14 @@ import (
 
 // ---- 侧栏（2026-10-17-dsh-tui-visual-redesign Task 11/13；设计 §6 侧栏/§7 符号）----
 //
-// 左栏会话清单：顶品牌行 ◆ mulix（accent）、「会话」目、会话行（当前会话
-// surface2 整行高亮 + fg-primary，sel 行「› 」指示 + accent，其余
-// fg-secondary，超宽行省略号截断）、底部 /new 提示；空清单给行动指引文案。
-// 数据源 Task 13 接线：Options.ListSessions 与 /resume 选择器同源——打开时刻
-// 快照（refreshSidebarSessions），溢出走取景窗（listWindow——Task 11 deferred
-// minor 闭环）。列合成与 F3 开合守卫见 sidebarColumn/toggleSidebar。
+// 左栏会话清单：顶品牌行 ◆ mulix（accent）、「会话」目（+ 溢出位置计数）、
+// 聚焦边框线（Task 17 聚焦可见性——focusSidebar 时 accent，未聚焦 border 槽）、
+// 会话行（当前会话 surface2 整行高亮 + fg-primary，sel 行「› 」指示 + accent，
+// 其余 fg-secondary，超宽行省略号截断）、底部 /new 提示；空清单给行动指引文
+// 案。数据源 Task 13 接线：Options.ListSessions 与 /resume 选择器同源——打开
+// 时刻快照（refreshSidebarSessions），溢出走取景窗（listWindow——Task 11
+// deferred minor 闭环；位置计数 Task 17 闭环）。列合成与 F3 开合守卫见
+// sidebarColumn/toggleSidebar。
 
 // sidebarState 侧栏状态：sel 选中游标（聚焦侧栏时 ↑/↓ 环绕——Task 13 接线）；
 // sessions 会话清单快照（Task 13 起打开时刷新、不随 Scan 变化——picker 同口径）。
@@ -22,12 +25,13 @@ type sidebarState struct {
 	sessions []SessionSummary
 }
 
-// sidebarChromeRows 侧栏固定 chrome 行数（品牌行 + 「会话」目 + 底部 /new 提示
-// ——取景窗之外的行预算）；sidebarSelMark sel 行指示（「› 」——设计 §7 符号
-// 表外新增，与 symFold ▸ 折叠标记不冲突；Task 11 deferred minor「sel 无可见
-// 游标」闭环）。
+// sidebarSelMark sel 行指示（「› 」——设计 §7 符号表外新增，与 symFold ▸
+// 折叠标记不冲突；Task 11 deferred minor「sel 无可见游标」闭环）。
 const (
-	sidebarChromeRows = 3
+	// sidebarChromeRows 侧栏固定 chrome 行数（品牌行 + 「会话」目 + 聚焦边框
+	// 线 + 底部 /new 提示——取景窗之外的行预算；边框线随 Task 17 聚焦可见性
+	// 入列，Task 11/13 口径 3 行升 4 行）。
+	sidebarChromeRows = 4
 	sidebarSelMark    = "› "
 )
 
@@ -175,23 +179,45 @@ func (m *tuiModel) cycleFocus() tea.Cmd {
 	return nil
 }
 
+// sidebarEdgeLine 侧栏聚焦边框线（Task 17 聚焦可见性——设计 §8 Q8：聚焦区边
+// 框线色切 accent、未聚焦 border 槽）：居「会话」目下、清单上，与面板分隔线
+// 同语言（panel.go panelView）。区域级判定（focusSidebar）——清单空态同样在
+// 场（结构行，无色层退平文「────」结构保留）。
+func (m *tuiModel) sidebarEdgeLine(width int) string {
+	slot := activeTheme.borderColor
+	if m.focus == focusSidebar {
+		slot = activeTheme.accentColor
+	}
+	return sgrWrap(sgrFg(slot), strings.Repeat("─", width))
+}
+
 // sidebarView 侧栏列视图（宽 w = columnWidths 的 sidebar 档，16）：品牌行 →
-// 「会话」目 →（空清单：指引文案）→ 取景窗内清单行 → 底部提示。行内容 =
-// sel 指示（sel 行「› 」、其余两空格）+ shortID(ID) + 工作区（数据源同谓词
-// ——新在前）；当前会话（selfID 匹配 SessionSummary.ID）整行 surface2 高亮 +
-// fg-primary（先截断再 padToWidth——底色覆盖整列宽），sel 行 accent（非
-// selfID 行），其余 fg-secondary；超宽行 clampWidth 省略号截断。窗 = 行预算
-// m.height−chrome（listWindow，sel 恒在窗内）。
+// 「会话」目（+ 位置提示）→ 聚焦边框线 →（空清单：指引文案）→ 取景窗内清单
+// 行 → 底部提示。行内容 = sel 指示（sel 行「› 」、其余两空格）+ shortID(ID)
+// + 工作区（数据源同谓词——新在前）；当前会话（selfID 匹配
+// SessionSummary.ID）整行 surface2 高亮 + fg-primary（先截断再 padToWidth
+// ——底色覆盖整列宽），sel 行 accent（非 selfID 行），其余 fg-secondary；
+// 超宽行 clampWidth 省略号截断。窗 = 行预算 m.height−chrome（listWindow，sel
+// 恒在窗内）。
 func (m *tuiModel) sidebarView(width int) string {
 	var b strings.Builder
 	b.WriteString(activeTheme.accent(symBrand+" mulix") + "\n")
-	b.WriteString(activeTheme.dim("会话") + "\n")
 	n := len(m.sidebar.sessions)
+	avail := max(m.height-sidebarChromeRows, 1)
+	// 「会话」目 + 位置提示（Task 13 deferred minor「取景窗无总量/位置提示」
+	// ——Task 17 闭环，形取「<sel+1>/<n>」）：清单溢出（n>窗高）时目行缀位置
+	// 计数（dim 同染——取景窗只露窗内行，总量与游标位不可见；提示只报事实：
+	// 游标第几项/共几项）；不溢出裸目（既有帧面零扰动）。
+	label := "会话"
+	if n > avail {
+		label = fmt.Sprintf("会话 %d/%d", min(m.sidebar.sel+1, n), n)
+	}
+	b.WriteString(activeTheme.dim(label) + "\n")
+	b.WriteString(m.sidebarEdgeLine(width) + "\n")
 	if n == 0 {
 		// 空态行动指引（spec User Story 4：给文案而非空白；/new 提示恒在底行）。
 		b.WriteString(activeTheme.dim("暂无历史会话") + "\n")
 	} else {
-		avail := m.height - sidebarChromeRows
 		lo, hi := listWindow(n, avail, m.sidebar.sel)
 		for i := lo; i < hi; i++ {
 			it := m.sidebar.sessions[i]

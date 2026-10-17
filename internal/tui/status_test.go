@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/bubbletea/v2"
+
 	"mulix/internal/control"
 	"mulix/internal/event"
 )
@@ -196,6 +198,7 @@ func TestStatusBarDress(t *testing.T) {
 // 退出交互回落「空闲」。
 func TestStatusModeAgentsTab(t *testing.T) {
 	m, _, _ := newTestModel(t)
+	m.width = 140 // 交互态谓词带宽度项（T17 可见性对账）——窄端交互不可见不算页签态
 	m.panel.tab = tabAgents
 	m.focus = focusPanel
 	if got := m.statusMode(); got != "agents 页签" {
@@ -209,5 +212,34 @@ func TestStatusModeAgentsTab(t *testing.T) {
 	m.focus = focusMain
 	if got := m.statusMode(); got != "空闲" {
 		t.Fatalf("statusMode after exit = %q, want 空闲", got)
+	}
+}
+
+// ---- 聚焦可见性（2026-10-17-dsh-tui-visual-redesign Task 17；设计 §8 Q8）----
+
+// TestStatusBarFocusName 钉（Task 17 聚焦可见性）：状态栏行 2 尾部追加当前焦
+// 点名——「焦点 侧栏」/「焦点 面板」（caption 色：随行 2 dim 槽整行同染）；
+// 主列焦点省略；焦点区不可见（窄化残焦——focusZone 不随 resize 重置）同样
+// 省略——状态栏不撒谎。
+func TestStatusBarFocusName(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m = update(t, m, tea.WindowSizeMsg{Width: 150, Height: 24})
+	if got := m.statusView(); strings.Contains(got, "焦点") {
+		t.Fatalf("main focus must omit the focus name:\n%s", got)
+	}
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF6})
+	row2 := strings.Split(m.statusView(), "\n")[1]
+	if !strings.Contains(row2, "焦点 侧栏") {
+		t.Fatalf("sidebar focus must append 「焦点 侧栏」 to row 2:\n%s", row2)
+	}
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF6})
+	row2 = strings.Split(m.statusView(), "\n")[1]
+	if !strings.HasPrefix(row2, "\x1b[38;5;244m") || !strings.Contains(row2, "焦点 面板") {
+		t.Fatalf("panel focus must append 「焦点 面板」 in the caption/dim slot:\n%s", row2)
+	}
+	// 不可见残焦：窄化（<130 面板列离场）后省略。
+	m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 24})
+	if got := m.statusView(); strings.Contains(got, "焦点") {
+		t.Fatalf("invisible panel focus must omit the name:\n%s", got)
 	}
 }

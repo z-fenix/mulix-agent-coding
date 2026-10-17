@@ -55,10 +55,12 @@ type panelState struct {
 // 门禁单源共用：handleKey 独占分支、Ctrl+C 逃生口、composerCursor、statusMode、
 // modalOpen（滚轮/手势/点选拖选）与 handlePaste——一谓词不两写）。范围与旧
 // /agents 模态一致：交互期 composer 冻结（键/粘贴不达编辑器、光标隐藏）、
-// 转写手势冻结。无宽度项：进入交互的 /agents 路径设 W<130 守卫（进不去），
-// 收窄后的残焦沿用旧模态全宽冻结语义（可见性对账归 Task 17）。
+// 转写手势冻结。宽度项（Task 17 可见性对账——T15 deferred minor「独占谓词无
+// 宽度项」归属收口）：W<130 面板列不可见时交互态不成立——收窄残焦不冻结
+// （composer/粘贴/手势解冻，Esc 阶梯取焦档自愈），重宽自动恢复；与侧栏/面板
+// 键路由守卫（focus+几何双保险）同判据，交互态可见性对账收口。
 func (m *tuiModel) agentsTabInteractive() bool {
-	return m.panel.open && m.focus == focusPanel && m.panel.tab == tabAgents
+	return m.panel.open && m.focus == focusPanel && m.panel.tab == tabAgents && m.width >= 130
 }
 
 // capturePendingAnchor 开合重排前的显式锚点捕获（评审 Issue 4）：同宽开合不
@@ -74,15 +76,26 @@ func (m *tuiModel) capturePendingAnchor() {
 	m.pendingAnchor = &a
 }
 
+// panelWidthGuard 面板宽度守卫（T12 deferred minor「togglePanel/cyclePanelTab
+// 守卫字面双写」——Task 17 收口单源）：W<130 窄/中档经 appendLine 留痕「面板
+// 需 ≥130 列」并返回 true（拒绝）。档位判定用 W 直接比较（Task 9 契约——
+// columnWidths 的 panel==0 亦可能来自 open=false，不是窄/中档判据）；提示走
+// appendLine 非 appendNotice，与侧栏守卫同口径。消费方 togglePanel /
+// cyclePanelTab / agentsCommand（同一字面三写收单源）。
+func (m *tuiModel) panelWidthGuard() bool {
+	if m.width >= 130 {
+		return false
+	}
+	m.appendLine("[面板] 面板需 ≥130 列")
+	return true
+}
+
 // togglePanel F2 开合（brief）：W<130 窄/中档不进入开态并经 appendLine 留痕
-// 「面板需 ≥130 列」（档位判定用 W 直接比较——Task 9 契约：columnWidths 的
-// panel==0 亦可能来自 open=false，不是窄/中档判据；提示走 appendLine 非
-// appendNotice，与 sidebar 守卫同口径）。开合生效时：重排前显式捕获阅读锚点
-// （评审 Issue 4——同宽开合不走 WindowSizeMsg，见 capturePendingAnchor），
-// composer 跟 mainWidth 重排（触发编辑器高度重算——Task 11 开合同步同款）。
+// （panelWidthGuard——字面单源）。开合生效时：重排前显式捕获阅读锚点（评审
+// Issue 4——同宽开合不走 WindowSizeMsg，见 capturePendingAnchor），composer
+// 跟 mainWidth 重排（触发编辑器高度重算——Task 11 开合同步同款）。
 func (m *tuiModel) togglePanel() tea.Cmd {
-	if m.width < 130 {
-		m.appendLine("[面板] 面板需 ≥130 列")
+	if m.panelWidthGuard() {
 		return nil
 	}
 	m.capturePendingAnchor()
@@ -96,13 +109,12 @@ func (m *tuiModel) togglePanel() tea.Cmd {
 	return nil
 }
 
-// cyclePanelTab F4 页签轮换（brief）：W<130 留痕（同 togglePanel 守卫——页签
-// 行不可见时轮换无意义，静默会让人以为已切换）；否则 tab 环绕
+// cyclePanelTab F4 页签轮换（brief）：W<130 留痕（panelWidthGuard 同守卫——
+// 页签行不可见时轮换无意义，静默会让人以为已切换）；否则 tab 环绕
 // tabChanges→tabAgents→tabDoctor→tabCache→tabChanges。页签轮换不改列几何，
 // 无需锚点/重排。
 func (m *tuiModel) cyclePanelTab() {
-	if m.width < 130 {
-		m.appendLine("[面板] 面板需 ≥130 列")
+	if m.panelWidthGuard() {
 		return
 	}
 	m.panel.tab = (m.panel.tab + 1) % panelTabCount
@@ -128,7 +140,15 @@ func (m *tuiModel) panelView(width int) string {
 		b.WriteString(activeTheme.dim(label))
 	}
 	b.WriteString("\n")
-	b.WriteString(sgrWrap(sgrFg(activeTheme.borderColor), strings.Repeat("─", width)))
+	// 分隔线（聚焦区边框线——Task 17 聚焦可见性，设计 §8 Q8：聚焦区边框线色
+	// 切 accent、未聚焦 border 槽）：聚焦面板时 accent，未聚焦 border 槽
+	//（Task 12 现状逐字节不变——TestPanelViewTabRow 钉点承此；无色层退平文
+	// 「────」结构保留）。
+	edge := activeTheme.borderColor
+	if m.focus == focusPanel {
+		edge = activeTheme.accentColor
+	}
+	b.WriteString(sgrWrap(sgrFg(edge), strings.Repeat("─", width)))
 	b.WriteString("\n")
 	switch m.panel.tab {
 	case tabChanges:

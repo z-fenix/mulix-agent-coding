@@ -86,7 +86,8 @@ type tuiModel struct {
 	// 收口时刷新，refreshSidebarSessions）。
 	sidebar sidebarState
 	// focus 键盘焦点域（Task 13 最小焦点形——focusZone 注释；F6 轮换见
-	// cycleFocus，Esc 取焦档见 keys.go handleEscapeKey；Task 17 扩展）。
+	// cycleFocus，Esc 取焦档见 keys.go handleEscapeKey；聚焦可见性见 status.go
+	// focusName 与 sidebar/panel 边框线——Task 17 收口）。
 	focus focusZone
 	// panel 面板状态（Task 12）：open 开合（newTuiModel 显式缺省 true）；tab
 	// 当前页签；sel 变更页签选中游标（Task 14）；agentsSel agents 页签选中游
@@ -169,12 +170,12 @@ type tuiModel struct {
 // styleStatus/styleCard 已随主题系统（Task 18）迁入 theme.go——包级样式由
 // activeTheme 派生（refreshThemeStyles 重铸），与包级主题单源同址。
 
-// focusZone 键盘焦点域（Task 13 最小焦点形——控制裁定，见台账 Ruling：焦点
-// 模型计划落 Task 17，但侧栏 ↑/↓/Enter 需「聚焦」语义先成立，故本任务落最
-// 小两态；Task 14 扩展 focusPanel 第三档——变更页签 ↑/↓/Enter 键路由所需，
-// 聚焦可见性（聚焦区 accent 边框 + 状态栏焦点名）与审批拦截钉面仍归 Task 17
-// 扩展）。零值 focusMain 即缺省焦点（Go 零值语义恰为所愿——与 panelState.open
-// 的显式置位不同，无需构造补偿）。
+// focusZone 键盘焦点域（Task 13 最小焦点形起步——控制裁定，见台账 Ruling：
+// 焦点模型计划落 Task 17，但侧栏 ↑/↓/Enter 需「聚焦」语义先成立，故先落最
+// 小两态；Task 14 扩展 focusPanel 第三档——变更页签 ↑/↓/Enter 键路由所需；
+// Task 17 收口全模型：聚焦可见性（聚焦区边框线 accent + 状态栏行 2 焦点名）
+// 与审批拦截钉面落地，F6 三区环绕）。零值 focusMain 即缺省焦点（Go 零值语义
+// 恰为所愿——与 panelState.open 的显式置位不同，无需构造补偿）。
 type focusZone uint8
 
 const (
@@ -351,7 +352,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case agentsCancelDoneMsg:
-		// /agents 面板取消回执（异步）：失败留痕；成功状态由列表刷新呈现
+		// /agents 页签取消回执（异步）：失败留痕；成功状态由列表刷新呈现
 		//（mgr.List() 以 cancelled 终态渲染）。
 		if msg.err != nil {
 			m.appendLine("[agents] 取消失败: " + msg.err.Error())
@@ -1020,7 +1021,7 @@ func (m *tuiModel) themeCommand(fields []string) tea.Cmd {
 	return nil
 }
 
-// ---- /agents 面板页签（M12/T12.4 → Task 15 收编：子代理列表视图 + c 取消）----
+// ---- /agents 页签（M12/T12.4 → Task 15 收编：子代理列表视图 + c 取消）----
 
 // agentsCommand /agents 命令（Task 15 收编——旧 openAgentsPanel 平移）：子代
 // 理未接线 → 留痕拒绝（旧文案优先级保持——接线检查先于宽度守卫）；W<130 →
@@ -1039,8 +1040,7 @@ func (m *tuiModel) agentsCommand() tea.Cmd {
 		m.appendLine("[agents] 子代理未启用（会话未接线子代理工厂）")
 		return nil
 	}
-	if m.width < 130 {
-		m.appendLine("[面板] 面板需 ≥130 列")
+	if m.panelWidthGuard() {
 		return nil
 	}
 	if m.panel.open && m.panel.tab == tabAgents {

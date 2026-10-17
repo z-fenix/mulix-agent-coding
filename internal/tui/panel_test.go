@@ -544,3 +544,33 @@ func TestCacheTabSameSource(t *testing.T) {
 		t.Fatalf("empty cache tab must show guidance, not a zero-value shell:\n%q", v)
 	}
 }
+
+// ---- 聚焦可见性（2026-10-17-dsh-tui-visual-redesign Task 17；设计 §8 Q8）----
+
+// TestPanelFocusEdge 钉（Task 17 聚焦可见性）：聚焦面板 → 分隔线（聚焦区边框
+// 线）切 accent 槽（38;5;111）；未聚焦 → border 槽（38;5;238——Task 12 现状
+// 逐字节不变，TestPanelViewTabRow 承此）。
+func TestPanelFocusEdge(t *testing.T) {
+	resetTheme(t)
+	applyTheme(defaultActiveTheme())
+	m, _, _ := newTestModel(t)
+	m = update(t, m, tea.WindowSizeMsg{Width: 150, Height: 24})
+	m.panel.tab = tabChanges
+	sep := "\x1b[38;5;238m" + strings.Repeat("─", 32) + "\x1b[0m"
+	if !strings.Contains(m.panelView(32), sep) {
+		t.Fatalf("unfocused panel must keep the border-slot separator:\n%q", m.panelView(32))
+	}
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF6}) // → 侧栏
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF6}) // → 面板
+	if m.focus != focusPanel {
+		t.Fatalf("precondition: panel focused, got %d", m.focus)
+	}
+	focused := "\x1b[38;5;111m" + strings.Repeat("─", 32) + "\x1b[0m"
+	v := m.panelView(32)
+	if !strings.Contains(v, focused) {
+		t.Fatalf("focused panel separator must take the accent slot:\n%q", v)
+	}
+	if strings.Contains(v, sep) {
+		t.Fatalf("unfocused separator must not linger while focused:\n%q", v)
+	}
+}

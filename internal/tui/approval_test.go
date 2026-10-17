@@ -257,3 +257,64 @@ func TestApprovalCardDress(t *testing.T) {
 		t.Fatalf("keymap line missing:\n%s", card)
 	}
 }
+
+// ---- 审批独占态拦截面板/侧栏键（2026-10-17-dsh-tui-visual-redesign Task 17；
+// Review Focus 4——治理矩阵逐字节）----
+
+// TestApprovalInterceptsPanelKeys 钉（Task 17 Review Focus 4）：审批卡在场时
+// F2/F3/F4/F6/↑/↓ 一律被独占分支拦截——面板/侧栏零开合、游标零位移、焦点零
+// 变化、审批卡原样（不结算、不触控制面、不触发换绑）；Enter 沿治理矩阵在独
+// 占分支内映射「允许一次」（绝不达面板/侧栏路由——预览不开、换绑不触发）。
+// 守卫型用例（审批分支在 handleKey 最前、handleApprovalKey 未映射键一律忽略）
+// 可能落地即绿——按 Task 18 口径记台账，不硬造红。
+func TestApprovalInterceptsPanelKeys(t *testing.T) {
+	m, stub, _ := newTestModel(t)
+	sw := &fakeSwapper{sink: m.sink}
+	m.swapper = sw
+	m.opts.ListSessions = func() []SessionSummary { return sidebarSessionsStub() }
+	m.refreshSidebarSessions()
+	m = update(t, m, tea.WindowSizeMsg{Width: 150, Height: 24})
+	m.panel.sel = 1                                    // 面板游标置位（↑/↓ 泄漏即位移）
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF6}) // 聚焦侧栏（审批在场不得重路由）
+	if m.focus != focusSidebar {
+		t.Fatalf("precondition: sidebar focused, got %d", m.focus)
+	}
+	m = update(t, m, tuiEvent{ev: event.ApprovalRequestEvent{ToolUseID: "t17", Tool: "Bash"}})
+	if m.approval == nil {
+		t.Fatal("precondition: approval card present")
+	}
+	for _, k := range []rune{tea.KeyF2, tea.KeyF3, tea.KeyF4, tea.KeyF6, tea.KeyUp, tea.KeyDown} {
+		m = update(t, m, tea.KeyPressMsg{Code: k})
+		if m.approval == nil || m.approval.toolUseID != "t17" {
+			t.Fatalf("key %v must not resolve the approval card", k)
+		}
+		if !m.panel.open || !m.sidebarOpen {
+			t.Fatalf("key %v must not toggle panel/sidebar (panel=%v sidebar=%v)", k, m.panel.open, m.sidebarOpen)
+		}
+		if m.focus != focusSidebar {
+			t.Fatalf("key %v must not move focus, got %d", k, m.focus)
+		}
+		if m.sidebar.sel != 0 {
+			t.Fatalf("key %v leaked into sidebar nav: sel=%d", k, m.sidebar.sel)
+		}
+		if m.panel.sel != 1 || m.panel.tab != tabChanges || m.panel.previewPath != "" {
+			t.Fatalf("key %v leaked into panel state: sel=%d tab=%v preview=%q",
+				k, m.panel.sel, m.panel.tab, m.panel.previewPath)
+		}
+	}
+	if len(stub.approves)+len(stub.sessionGrants) != 0 {
+		t.Fatalf("panel keys must not reach the controller: %v %v", stub.approves, stub.sessionGrants)
+	}
+	if len(sw.opens) != 0 {
+		t.Fatalf("panel keys must not start a swap: %v", sw.opens)
+	}
+	// Enter：治理矩阵逐字节——独占分支内映射「允许一次」，不达面板/侧栏路由。
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if len(stub.approves) != 1 || stub.approves[0] != [3]string{"t17", "true", "user"} {
+		t.Fatalf("Enter must resolve via the governance matrix: %v", stub.approves)
+	}
+	if m.panel.previewPath != "" || len(sw.opens) != 0 {
+		t.Fatalf("Enter must not leak into panel preview or swap routing: preview=%q opens=%v",
+			m.panel.previewPath, sw.opens)
+	}
+}
