@@ -326,3 +326,33 @@ func TestEventChannelBackpressure(t *testing.T) {
 		t.Fatal("publisher must finish after drain")
 	}
 }
+
+// TestSidebarEnterSwapsSession pins（Task 13——侧栏聚焦 Enter 走 /resume 同一
+// 换绑接缝）：选中项 EngineID 为 swapSession 实参（sw.opens 记录）；触发即游
+// 标复位 + 焦点回主列（换绑异步——回执 swapDoneMsg 重绑 ctrl/selfID 由既有
+// 路径收口）。
+func TestSidebarEnterSwapsSession(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	newCtrl := &stubController{}
+	sw := &fakeSwapper{sink: m.sink, ctrl: newCtrl, id: "s-res-2"}
+	m.swapper = sw
+	m.selfID = "sess-cur"
+	m.opts.ListSessions = func() []SessionSummary { return sidebarSessionsStub() }
+	m.refreshSidebarSessions()
+	m = update(t, m, tea.WindowSizeMsg{Width: 130, Height: 24}) // 宽档（F6 守卫放行）
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyF6})
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyDown}) // sel → 1（e-2）
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if len(sw.opens) != 1 || sw.opens[0] != "e-2" {
+		t.Fatalf("sidebar Enter must swap to the selected EngineID: %v", sw.opens)
+	}
+	if m.sidebar.sel != 0 {
+		t.Fatalf("sel must reset after swap trigger: %d", m.sidebar.sel)
+	}
+	if m.focus != focusMain {
+		t.Fatal("focus must return to main after swap trigger")
+	}
+	if m.selfID != "s-res-2" {
+		t.Fatalf("swap receipt must rebind selfID: %q", m.selfID)
+	}
+}

@@ -308,7 +308,7 @@ func TestNoColorFrameStructure(t *testing.T) {
 - [X] **Step 2: verify RED**。Expected: FAIL。
 - [X] **Step 3: Implement**。
 - [X] **Step 4: verify GREEN**。Expected: PASS。
-- [ ] **Step 5: 门禁 + commit** — `feat(tui): 右栏面板骨架——页签与开合守卫`。
+- [X] **Step 5: 门禁 + commit** — `feat(tui): 右栏面板骨架——页签与开合守卫`。
 
 ## Task 13: 侧栏会话清单接线 + 聚焦恢复
 
@@ -320,11 +320,11 @@ func TestNoColorFrameStructure(t *testing.T) {
 - Consumes: Task 11 sidebarState；`Options.ListSessions() []SessionSummary`（swapper.go:39 类型）；`swapSession(resumeID string)`（model.go:1012）。
 - Produces: sidebarState 增 `sessions []SessionSummary`（打开时刷新快照，同 picker 口径：打开时刻快照不随 Scan 变化）；聚焦侧栏时 ↑/↓ 环绕移动 sel、Enter 调 `swapSession(items[sel].EngineID)`——**镜像 picker 的空 EngineID fail-closed 守卫**（resume_picker.go:69-74 同款：EngineID 为空 → appendLine 留痕拒绝，不调 swap）；当前会话（selfID 匹配 SessionSummary.ID）行高亮。测试经 newTestModel 注入桩 ListSessions（现构造器不设该回调——测试内显式赋值 m.opts.ListSessions）。
 
-- [ ] **Step 1: Write the failing test** — 桩 ListSessions 3 项：清单渲染同谓词输出；↑/↓ 移动 sel；Enter 触发 swapSession 桩记录实参 = 选中项 EngineID；当前会话高亮。
-- [ ] **Step 2: verify RED**。Expected: FAIL。
-- [ ] **Step 3: Implement**。
-- [ ] **Step 4: verify GREEN**。Expected: PASS。
-- [ ] **Step 5: 门禁 + commit** — `feat(tui): 侧栏会话清单——与 resume 同源、聚焦恢复`。
+- [X] **Step 1: Write the failing test** — 桩 ListSessions 3 项：清单渲染同谓词输出；↑/↓ 移动 sel；Enter 触发 swapSession 桩记录实参 = 选中项 EngineID；当前会话高亮。
+- [X] **Step 2: verify RED**。Expected: FAIL。
+- [X] **Step 3: Implement**。
+- [X] **Step 4: verify GREEN**。Expected: PASS。
+- [X] **Step 5: 门禁 + commit** — `feat(tui): 侧栏会话清单——与 resume 同源、聚焦恢复`。
 
 ## Task 14: 变更聚合 + 变更 tab
 

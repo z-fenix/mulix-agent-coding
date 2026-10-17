@@ -28,9 +28,11 @@ type Options struct {
 	// Sink 是事件汇（组合根创建并已绑定初始会话；必须与 Run 的 events 参数
 	// 同源）。换绑时模型以它供给 SessionSwapper.Open——新会话事件续流同一通道。
 	Sink *Sink
-	// ListSessions 是 /resume 选择器的数据源回调（023 FR-009；组合根注入：
-	// sessionx.ScanSessions 摘要投影 SessionSummary，新在前；nil = 提示未注入，
-	// 防御面不进面板态）。空表视为无可续链会话（留痕）。
+	// ListSessions 是 /resume 选择器与侧栏清单的共享数据源回调（023 FR-009；
+	// 组合根注入：sessionx.ScanSessions 摘要投影 SessionSummary，新在前；
+	// nil = 选择器留痕不进面板态、侧栏空态文案——两消费方各自防御）。空表视为
+	// 无可续链会话（选择器留痕；侧栏空态指引）。快照口径：选择器开面板时取、
+	// 侧栏打开沿/构造/换绑收口时取（refreshSidebarSessions——不随 Scan 变化）。
 	ListSessions func() []SessionSummary
 }
 
@@ -80,9 +82,13 @@ type tuiModel struct {
 	// 守卫见 sidebar.go；面板开合与页签见 panel.go（Task 12——Task 11 的平铺
 	// panelOpen 已收编 panelState.open，单源无双源）。
 	sidebarOpen bool
-	// sidebar 侧栏状态（Task 11）：sel 选中游标（Task 13 接线 ↑/↓）；sessions
-	// 清单快照（本任务测试桩——Task 13 接 Options.ListSessions 打开时快照）。
+	// sidebar 侧栏状态（Task 11）：sel 选中游标（聚焦侧栏时 ↑/↓ 环绕移动）；
+	// sessions 清单快照（Task 13 接 Options.ListSessions——打开沿/构造/换绑
+	// 收口时刷新，refreshSidebarSessions）。
 	sidebar sidebarState
+	// focus 键盘焦点域（Task 13 最小焦点形——focusZone 注释；F6 轮换见
+	// cycleFocus，Esc 取焦档见 keys.go handleEscapeKey；Task 17 扩展）。
+	focus focusZone
 	// panel 面板状态（Task 12）：open 开合（newTuiModel 显式缺省 true）；focus
 	// 聚焦（Task 15/17 接线）；tab 当前页签；sel 页签内选中游标（Task 14/15）；
 	// previewPath diff 预览路径与 scroll 预览滚动（Task 14）。
@@ -154,6 +160,18 @@ type tuiModel struct {
 // styleStatus/styleCard 已随主题系统（Task 18）迁入 theme.go——包级样式由
 // activeTheme 派生（refreshThemeStyles 重铸），与包级主题单源同址。
 
+// focusZone 键盘焦点域（Task 13 最小焦点形——控制裁定，见台账 Ruling：焦点
+// 模型计划落 Task 17，但侧栏 ↑/↓/Enter 需「聚焦」语义先成立，故本任务落最
+// 小两态；focusPanel、聚焦可见性（聚焦区 accent 边框 + 状态栏焦点名）与审批
+// 拦截钉面归 Task 17 扩展）。零值 focusMain 即缺省焦点（Go 零值语义恰为所
+// 愿——与 panelState.open 的显式置位不同，无需构造补偿）。
+type focusZone uint8
+
+const (
+	focusMain    focusZone = iota // 主列（composer/转写——缺省）
+	focusSidebar                  // 侧栏（清单 ↑/↓/Enter 接线，Task 13）
+)
+
 // ---- 关注点子结构（D4 骨架）----
 //
 // 根模型按渲染关注点的拆分容器：transcriptState 已落位（transcript.go）、
@@ -175,7 +193,7 @@ type themeState struct {
 }
 
 func newTuiModel(o Options, ctrl SessionController, events <-chan tuiEvent, sessionID string) *tuiModel {
-	return &tuiModel{
+	m := &tuiModel{
 		opts:   o,
 		ctrl:   ctrl,
 		events: events,
@@ -193,6 +211,10 @@ func newTuiModel(o Options, ctrl SessionController, events <-chan tuiEvent, sess
 		composerState:   newComposer(),
 		themeState:      themeState{name: activeTheme.name}, // 主题镜像（Task 18，本体驻 theme.go）
 	}
+	// 侧栏清单构造时快照（Task 13）：缺省开态（sidebarOpen=true）的「打开
+	// 时刻」即构造时刻——回调未注入保持空态文案，注入则首扫（一次性，非逐帧）。
+	m.refreshSidebarSessions()
+	return m
 }
 
 // maxEventDrain 封顶一次 Update 内合并消费的事件数（含首条；对照参考
@@ -292,6 +314,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.ctrl = msg.ctrl // Critical-A：换绑后控制面必须指向新控制器
 		m.selfID = msg.id
+		m.refreshSidebarSessions() // 侧栏清单快照刷新（Task 13——换绑收口即新「打开时刻」，sel 随刷新复位）
 		m.statusState.snapshot = control.Snapshot{}
 		m.approval = nil // 旧会话的审批卡作废（对旧桥的裁决路径已不存在）
 		// 旧会话的流式答案缓冲一并作废：换绑排空丢弃旧残响（不经 handleEvent），
@@ -757,6 +780,23 @@ func (m *tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m2, cmd
 		}
 	}
+	// 侧栏聚焦键路由（Task 13 最小焦点形）：focus==focusSidebar 时 ↑/↓/Enter
+	// 交侧栏（环绕移动/换绑），其余键照常落 composer——数字与文本键永不劫持
+	//（1–9 永远进输入）。补全菜单在场时其导航优先（上方分支——浮层由键入
+	// 触发即在场，Esc 关菜单后侧栏导航续用）；审批/agents/picker 独占态在更
+	// 上方分支先行消费，路由不与之争键。
+	if m.focus == focusSidebar {
+		switch msg.Code {
+		case tea.KeyUp:
+			m.moveSidebar(-1)
+			return m, nil
+		case tea.KeyDown:
+			m.moveSidebar(+1)
+			return m, nil
+		case tea.KeyEnter:
+			return m.handleSidebarEnter()
+		}
+	}
 	// 转写滚动手势（023 D5）：审批/agents 独占态在上方分支拦截——治理独占期
 	// 按键不泄漏（D10/D11；对照参考 chat_tui.go:1316-1333 在任意状态可滚动，
 	// 本仓治理独占语义优先）。PgUp/PgDn/Ctrl+Home/Ctrl+End 均非文本键。
@@ -795,6 +835,10 @@ func (m *tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// F4 面板页签轮换（Task 12——同 <130 守卫；环绕顺序见 panel.go）
 		m.cyclePanelTab()
 		return m, nil
+	case msg.Code == tea.KeyF6:
+		// F6 聚焦轮换（Task 13 最小焦点形——主列↔侧栏；守卫见 cycleFocus，
+		// focusPanel 与聚焦可见性归 Task 17）
+		return m, m.cycleFocus()
 	}
 	// 编辑器键位（023 D12/FR-007，textarea 配置见 composer.go）：裸 Enter 提交
 	//（忙门禁在 submit 内、清空之前——忙期按键不吞文本）；Alt+Enter / Ctrl+J /
