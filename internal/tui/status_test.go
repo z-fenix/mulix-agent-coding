@@ -107,6 +107,22 @@ func TestStatusBarTwoRows(t *testing.T) {
 	}
 
 	// 无冷回合 → 冷回合标注整体省略。
+	// 027 FR-003：引擎就绪徽章三态。
+	m4, _, _ := newTestModel(t)
+	m4.statusState.snapshot.Ready = "NOT_READY"
+	m4.statusState.snapshot.Running = false
+	if r1 := strings.Split(m4.statusView(), "\n")[0]; !strings.Contains(r1, "引擎就绪中") {
+		t.Fatalf("NOT_READY badge missing: %q", r1)
+	}
+	m4.statusState.snapshot.Ready = "FAILED"
+	if r1 := strings.Split(m4.statusView(), "\n")[0]; !strings.Contains(r1, "引擎异常") {
+		t.Fatalf("FAILED badge missing: %q", r1)
+	}
+	m4.statusState.snapshot.Ready = "READY"
+	m4.statusState.snapshot.Running = true
+	if r1 := strings.Split(m4.statusView(), "\n")[0]; !strings.Contains(r1, "运行中") {
+		t.Fatalf("READY+running must show running mode: %q", r1)
+	}
 	m3, _, _ := newTestModel(t)
 	m3 = update(t, m3, statusTick{})
 	m3.statusState.snapshot.MeterReport.ColdTurns = 0

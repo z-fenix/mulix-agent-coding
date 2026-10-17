@@ -192,16 +192,17 @@ func TestStartRequiresUserSettingSource(t *testing.T) {
 	}
 }
 
-// TestStartRefusesVersionMismatch pins FR-003：版本不匹配默认拒绝启动（命名测试）。
+// TestStartRefusesVersionMismatch pins FR-003（027：拒绝时点=init 事件到达，
+// Start 非阻塞——拒绝以合成 exit 事件呈现，事件流随之关闭）。
 func TestStartRefusesVersionMismatch(t *testing.T) {
 	h := newTestHost(t, "fake-drift.json", func(c *BootConfig, o *ClaudeHostOptions) {
 		c.AllowEngineDrift = false
 	})
-	err := h.Start(context.Background(), h.cfg)
-	if err == nil || !strings.Contains(err.Error(), "drift") {
-		t.Fatalf("version mismatch must refuse start, got %v", err)
+	if err := h.Start(context.Background(), h.cfg); err != nil {
+		t.Fatalf("start must be non-blocking: %v", err)
 	}
-	// 拒绝后不得留僵尸进程（Start 失败路径必须清理）
+	waitExit(t, h.Events(), "refused: engine: version drift: lock 2.1.291, actual 9.9.9 (refusing; allow with --allow-engine-drift)")
+	// 拒绝后不得留僵尸进程（Close 幂等收口）
 	if err := h.Close(context.Background()); err != nil {
 		t.Fatalf("close after refused start: %v", err)
 	}
@@ -305,16 +306,17 @@ func waitExit(t *testing.T, ch <-chan Event, wantReason string) {
 	}
 }
 
-// TestStartProvisionalWithoutInit pins（终评协议适配 Critical-1）：真实
-// claude 2.1.291 的 init 在首条 user message 之后才发出——spawn 窗口内无
-// init 且进程存活 → Start 临时放行（provisional）；首个 init 随首回合到达
-// 后照常校验/验收（Info 填充、事件直通）。
-func TestStartProvisionalWithoutInit(t *testing.T) {
-	h := newTestHost(t, "fake-lateinit.json", func(c *BootConfig, o *ClaudeHostOptions) {
-		o.HandshakeTimeout = 500 * time.Millisecond // 窗口快速过期
-	})
+// TestStartReturnsImmediatelyWithoutInit pins（027 FR-001）：真实 claude 的
+// init 在首条 user message 之后才发出——Start 不得等待：spawn + 泵就绪即
+// 返回（≤2s），Info 先空；首条消息触发 init → 校验 → 事件直通。
+func TestStartReturnsImmediatelyWithoutInit(t *testing.T) {
+	h := newTestHost(t, "fake-lateinit.json", nil)
+	begin := time.Now()
 	if err := h.Start(context.Background(), h.cfg); err != nil {
-		t.Fatalf("provisional start must succeed: %v", err)
+		t.Fatalf("non-blocking start must succeed: %v", err)
+	}
+	if el := time.Since(begin); el > 2*time.Second {
+		t.Fatalf("start must return immediately (spawn+泵), took %s", el)
 	}
 	if info := h.Info(); info.SessionID != "" || info.CLIVersion != "" {
 		t.Fatalf("info must be empty before init, got %+v", info)
@@ -341,11 +343,9 @@ func TestStartProvisionalWithoutInit(t *testing.T) {
 // init 校验失败（版本漂移且未放行）→ 终止引擎 + 以拒绝原因合成 exit 事件
 // （fail-closed：SC-005 的拒绝语义在新协议下前移为「首轮拒绝」）。
 func TestDeferredDriftRefusal(t *testing.T) {
-	h := newTestHost(t, "fake-lateindrift.json", func(c *BootConfig, o *ClaudeHostOptions) {
-		o.HandshakeTimeout = 500 * time.Millisecond
-	})
+	h := newTestHost(t, "fake-lateindrift.json", nil)
 	if err := h.Start(context.Background(), h.cfg); err != nil {
-		t.Fatalf("provisional start must succeed: %v", err)
+		t.Fatalf("non-blocking start must succeed: %v", err)
 	}
 	if err := h.Send(context.Background(), UserMessage{Text: "hello"}); err != nil {
 		t.Fatalf("send: %v", err) // 消息已写——拒绝发生在 init 校验点
@@ -472,13 +472,25 @@ func TestRespondControlEnvelope(t *testing.T) {
 	}
 }
 
-// TestMalformedStdoutFailsPump pins：stdout 非法行 → 泵失败（fail-closed），
-// Start 握手报错、进程被清理。
+// TestMalformedStdoutFailsPump pins：stdout 非法行 → 泵失败（fail-closed）——
+// 027 非阻塞 Start 下经 exit 事件呈现真实原因（评审 Issue 1：pre-init 失败
+// 路径必须补事件），事件流随之关闭。
 func TestMalformedStdoutFailsPump(t *testing.T) {
 	h := newTestHost(t, "fake-garbage.json", nil)
-	err := h.Start(context.Background(), h.cfg)
-	if err == nil {
-		t.Fatal("garbage stdout must fail handshake")
+	if err := h.Start(context.Background(), h.cfg); err != nil {
+		t.Fatalf("non-blocking start must succeed: %v", err)
+	}
+	for {
+		ev, ok := <-h.Events()
+		if !ok {
+			t.Fatal("exit event expected before channel close")
+		}
+		if ev.Kind == KindExit {
+			if ev.Exit == nil || !strings.Contains(ev.Exit.Reason, "corrupt") {
+				t.Fatalf("exit reason must carry stream-corrupt cause: %+v", ev)
+			}
+			break
+		}
 	}
 	if err := h.Close(context.Background()); err != nil {
 		t.Fatalf("close after pump failure: %v", err)

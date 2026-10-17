@@ -194,8 +194,16 @@ type Controller struct {
 	instrWatch       *InstructionWatcher
 
 	pumpDone chan struct{} // 泵退出信号（Close 等待）
-	initSeen chan struct{} // 首个 init 消费完成（NewSession 等待）
-	initOnce sync.Once
+	// 引擎就绪态（027 FR-002/004）：NOT_READY（spawn 后 init 未到）→ READY
+	//（init 到达——对账在引擎 route 完成，control 见 init 即 READY）→ FAILED
+	//（refused exit / pre-init 秒退 / 兜底超时）。快照供 TUI 徽章消费。
+	readyState string
+	// 兜底（Ruling-3 修订）：首次 Submit 起算 60s（对齐 SDK initialize 预算
+	// ——query.py:302-304「MCP 服务器可能需要时间启动」）；NOT_READY 下触发
+	// → FAILED + fail-closed 终止。fallbackAfter 可注入（测试快进）。
+	fallbackBudget time.Duration
+	fallbackAfter  func(time.Duration) <-chan time.Time
+	fallbackArmed  bool
 	// resume 延迟留痕（终评协议适配）：真实引擎 init 在首条消息后到达——
 	// start() 的 initSeen 等待带宽限放行，resume 链日志改由 onInit 首次
 	// 消费时补发（resumeLogged 防重）。
@@ -239,10 +247,11 @@ func NewController(opts Options) (*Controller, error) {
 		resolved:  map[string]gateRuling{},
 		inflight:  map[string]chan struct{}{},
 
-		governedTools: map[string]governedTool{},
-		pumpDone:      make(chan struct{}),
-		initSeen:      make(chan struct{}),
-		now:           time.Now,
+		governedTools:  map[string]governedTool{},
+		pumpDone:       make(chan struct{}),
+		readyState:     readyNotReady,
+		fallbackBudget: 60 * time.Second,
+		fallbackAfter:  time.After, now: time.Now,
 	}
 	mountHookConsumers(c)
 	return c, nil
@@ -418,34 +427,15 @@ func (c *Controller) start(ctx context.Context, boot engine.BootConfig) error {
 	}
 	go c.pump(host)
 
-	// init 等待（终评协议适配）：真实 claude 2.1.291 的 init 在首条 user
-	// message 之后才发出（实测：stdin 开 20s 无 init；消息后 1.1s 到达）——
-	// 「NewSession 等 init ← Submit 等 NewSession ← 引擎等首条消息」是三方
-	// 死锁。故 initSeen 等待只保留 pumpDone 快速失败与宽限窗：宽限内 init
-	// 未到（fake 引擎/即时协议不会走到这）→ 临时放行，Submit 得以发生；
-	// init 随首回合到达后 onInit 照常回填 meta 并补发 resume 链日志。
-	const initGrace = 2 * time.Second
-	select {
-	case <-c.initSeen: // 首个 init 已消费（TurnStarted 的 engine id 可靠）
-		if boot.ResumeEngineSessionID != "" {
-			c.logResumeChain(boot.ResumeEngineSessionID, mirrorEngineID, metaErr)
-		}
-	case <-c.pumpDone: // 引擎在 init 前就退出——快速失败，不等 ctx 超时
-		return errors.New("control: engine exited before init")
-	case <-time.After(initGrace):
-		if boot.ResumeEngineSessionID != "" {
-			// resume 链校验语义移到 onInit 首次消费（引擎上报后以引擎为权威）。
-			// 锁保护（终评审 Important-2）：pump goroutine 的 onInit 在锁下读
-			// 这三个字段——start goroutine 的写入必须同样持锁。
-			c.mu.Lock()
-			c.resumeRequested = boot.ResumeEngineSessionID
-			c.resumeMirrorID = mirrorEngineID
-			c.resumeMetaErr = metaErr
-			c.mu.Unlock()
-		}
-	case <-ctx.Done():
-		return fmt.Errorf("control: waiting init: %w", ctx.Err())
-	}
+	// 027 FR-001：init 等待退役——Start 立即返回（spawn 即句柄），init 事件
+	// 由泵流式消化（onInit：meta 回填 + resume 链补发 + READY 迁移）。resume
+	// 链字段在此无条件暂存，onInit 首次消费时补发（锁保护：pump goroutine 的
+	// onInit 在锁下读，start goroutine 的写入必须同样持锁——终评审 Important-2）。
+	c.mu.Lock()
+	c.resumeRequested = boot.ResumeEngineSessionID
+	c.resumeMirrorID = mirrorEngineID
+	c.resumeMetaErr = metaErr
+	c.mu.Unlock()
 	// 指令文件快照 + 变更轮询（M15/FR-109 前半）：启动成功（含 init 宽限
 	// 放行）才装载与起 watcher——启动失败路径不起（无 goroutine 泄漏）。
 	// 快照绝不改 Boot 面（SC-003：system prompt/mcp-config 字节与 P1 一致）。
@@ -932,7 +922,28 @@ func (c *Controller) submit(ctx context.Context, msg engine.UserMessage) error {
 	c.turn++
 	turn := c.turn
 	host := c.host
-	c.mu.Unlock()
+	armFallback := false
+	if !c.fallbackArmed { // 兜底武装（027 Ruling-3 修订）：首次 Submit 起算
+		c.fallbackArmed = true
+		armFallback = true
+	}
+	budget := c.fallbackBudget
+	after := c.fallbackAfter
+	c.mu.Unlock() // 无条件解锁（027 修复：解锁在 arm 块内会漏掉第二次+ Submit）
+	if armFallback {
+		go func() {
+			<-after(budget)
+			c.mu.Lock()
+			failed := c.readyState == readyNotReady
+			if failed {
+				c.readyState = readyFailed
+			}
+			c.mu.Unlock()
+			if failed { // fail-closed：60s 无 init 终止会话（损坏 CLI 不悬挂）
+				c.Close(context.Background())
+			}
+		}()
+	}
 
 	c.publish(event.TurnStartedEvent{
 		Seq:             c.nextSeq(),
@@ -1046,6 +1057,13 @@ func (c *Controller) Subagent() *subagent.Manager {
 // lastReport 快照），不得直接调 Meter.Report()。
 func (c *Controller) Meter() *cache.Meter { return c.opts.Meter }
 
+// 引擎就绪态取值（027 FR-002/004）。
+const (
+	readyNotReady = "NOT_READY"
+	readyOK       = "READY"
+	readyFailed   = "FAILED"
+)
+
 // Snapshot 是状态栏快照（TUI 数据源）。
 type Snapshot struct {
 	SessionID       string          // mulix 会话 id
@@ -1057,6 +1075,7 @@ type Snapshot struct {
 	MeterReport     cache.Report    // 记账汇总（泵侧快照，不触碰 Meter 内部）
 	TurnTokens      cache.TurnUsage // 最近回合用量（泵侧快照——状态栏「本回合 tokens」）
 	Dir             string          // 会话镜像目录
+	Ready           string          // 引擎就绪态（027：NOT_READY/READY/FAILED）
 }
 
 // Snapshot 返回当前状态快照（锁内纯内存读取，无磁盘 I/O、无 Meter 访问）。
@@ -1073,6 +1092,7 @@ func (c *Controller) Snapshot() Snapshot {
 		MeterReport:     c.lastReport,
 		TurnTokens:      c.lastTurnTokens,
 		Dir:             c.opts.Store.Dir(),
+		Ready:           c.readyState,
 	}
 }
 
@@ -1278,9 +1298,17 @@ func (c *Controller) onInit(host engine.Host, ev engine.Event) {
 		if requested != "" && !logged {
 			c.logResumeChain(requested, mirrorID, metaErr)
 		}
-		c.initOnce.Do(func() { close(c.initSeen) })
+		c.mu.Lock()
+		c.readyState = readyOK
+		c.mu.Unlock()
 		return
 	}
+	// 非 first 的 init（重复/异 ID）同样视为已就绪（引擎活着即可提交）。
+	c.mu.Lock()
+	if c.readyState == readyNotReady {
+		c.readyState = readyOK
+	}
+	c.mu.Unlock()
 	if !sameID {
 		c.publish(event.NoticeEvent{Seq: c.nextSeq(), Level: "warning", IsMeta: true,
 			Content: fmt.Sprintf("引擎 session id 变化: %s → %s", c.EngineSessionID(), ev.SessionID)})
@@ -1526,6 +1554,9 @@ func (c *Controller) writeCacheProjection() {
 // running=false/engineDead → close(ch)。
 func (c *Controller) onExit(ev engine.Event) {
 	c.mu.Lock()
+	if c.readyState == readyNotReady {
+		c.readyState = readyFailed // pre-READY 引擎退出（秒退/refused）→ FAILED
+	}
 	turn := c.turn
 	var ch chan struct{}
 	if c.running {

@@ -226,6 +226,7 @@ func TestSubmitHappyTurnEventOrder(t *testing.T) {
 	if err := c.NewSession(context.Background()); err != nil {
 		t.Fatalf("new session: %v", err)
 	}
+	waitReady(t, c) // 027：等泵消费合成 init（镜像 engine id 确定性）
 	if err := c.Submit(context.Background(), "hi"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -275,6 +276,7 @@ func TestSubmitErrTurnRunning(t *testing.T) {
 	if err := c.NewSession(context.Background()); err != nil {
 		t.Fatalf("new session: %v", err)
 	}
+	waitReady(t, c) // 027：等泵消费合成 init（镜像 engine id 确定性）
 	errCh := make(chan error, 1)
 	go func() { errCh <- c.Submit(context.Background(), "first") }()
 	select {
@@ -300,6 +302,7 @@ func TestCacheProjectionWritten(t *testing.T) {
 	if err := c.NewSession(context.Background()); err != nil {
 		t.Fatalf("new session: %v", err)
 	}
+	waitReady(t, c) // 027：等泵消费合成 init（镜像 engine id 确定性）
 	if err := c.Submit(context.Background(), "t1"); err != nil {
 		t.Fatalf("submit 1: %v", err)
 	}
@@ -337,6 +340,7 @@ func TestInitReEmitIdempotent(t *testing.T) {
 	if err := c.NewSession(context.Background()); err != nil {
 		t.Fatalf("new session: %v", err)
 	}
+	waitReady(t, c) // 027：等泵消费合成 init（镜像 engine id 确定性）
 	if err := c.Submit(context.Background(), "t1"); err != nil {
 		t.Fatalf("submit 1: %v", err)
 	}
@@ -377,6 +381,7 @@ func TestCancelInterrupts(t *testing.T) {
 	if err := c.NewSession(context.Background()); err != nil {
 		t.Fatalf("new session: %v", err)
 	}
+	waitReady(t, c) // 027：等泵消费合成 init（镜像 engine id 确定性）
 	if err := c.Submit(context.Background(), "hi"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -396,6 +401,7 @@ func TestSnapshot(t *testing.T) {
 	if err := c.NewSession(context.Background()); err != nil {
 		t.Fatalf("new session: %v", err)
 	}
+	waitReady(t, c) // 027：等泵消费合成 init（镜像 engine id 确定性）
 	if err := c.Submit(context.Background(), "hi"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -426,6 +432,7 @@ func TestTraceAndExitMapped(t *testing.T) {
 	if err := c.NewSession(context.Background()); err != nil {
 		t.Fatalf("new session: %v", err)
 	}
+	waitReady(t, c) // 027：等泵消费合成 init（镜像 engine id 确定性）
 	if err := c.Submit(context.Background(), "hi"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -510,6 +517,7 @@ func TestLateResultIgnored(t *testing.T) {
 	if err := c.NewSession(context.Background()); err != nil {
 		t.Fatalf("new session: %v", err)
 	}
+	waitReady(t, c) // 027：等泵消费合成 init（镜像 engine id 确定性）
 	if err := c.Submit(context.Background(), "hi"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}

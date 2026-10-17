@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -22,7 +21,6 @@ import (
 // ClaudeHostOptions 是 NewClaudeHost 参数。
 type ClaudeHostOptions struct {
 	LockPath          string        // engine.lock 路径（必填；Start 校验）
-	HandshakeTimeout  time.Duration // init 握手超时（默认 30s）
 	GracefulCloseWait time.Duration // Close 无 ctx deadline 时的优雅窗口（默认 3s）
 	StderrRingSize    int           // stderr 环形缓冲行数（默认 256）
 }
@@ -52,19 +50,13 @@ type ClaudeHost struct {
 	infoMu sync.RWMutex
 	info   EngineInfo
 
-	startOnce   sync.Once
-	startErr    error
-	startDone   chan struct{}
 	ready       bool // init 握手完成（routeMu 保护）
 	pending     []Event
 	routeMu     sync.Mutex
 	exited      chan struct{} // monitor Wait 完成后关闭
 	killed      bool          // 由 Close 强杀置位（exit 事件 reason）
 	monitorOnce sync.Once
-	// provisional：真实引擎 init 后置协议适配（终评 Critical-1）——Start 在
-	// 握手窗口内无 init 时临时放行；首个 init 到达时照常校验。
-	provisional bool
-	// exitClosed：eventsOut 已被 provisional 拒绝路径关闭（deliver 跳过，
+	// exitClosed：eventsOut 已被对账拒绝路径关闭（deliver 跳过，
 	// 防止 route 循环残余事件 send-on-closed panic）。
 	exitClosed bool
 
@@ -74,9 +66,6 @@ type ClaudeHost struct {
 
 // NewClaudeHost 构造宿主（Start 时才 spawn）。
 func NewClaudeHost(opts ClaudeHostOptions) *ClaudeHost {
-	if opts.HandshakeTimeout <= 0 {
-		opts.HandshakeTimeout = 30 * time.Second
-	}
 	if opts.GracefulCloseWait <= 0 {
 		opts.GracefulCloseWait = 3 * time.Second
 	}
@@ -85,7 +74,6 @@ func NewClaudeHost(opts ClaudeHostOptions) *ClaudeHost {
 	}
 	return &ClaudeHost{
 		opts:       opts,
-		startDone:  make(chan struct{}),
 		done:       make(chan struct{}),
 		exited:     make(chan struct{}),
 		routeDone:  make(chan struct{}),
@@ -223,70 +211,12 @@ func (h *ClaudeHost) Start(ctx context.Context, cfg BootConfig) error {
 	// 进程监视：stdout/stderr 汇合后 Wait；退出 → exit 事件 → 关闭 eventsOut。
 	go h.monitor()
 
-	// 握手等待（有界）。timeout 非正数（调用方已取消/到期 deadline）→
-	// 不进定时分支（终评审 Minor-6：time.After(负数) 立即触发与 ctx.Done
-	// 竞争 select 随机性——不得在取消的 ctx 上临时放行）。
-	timeout := h.opts.HandshakeTimeout
-	if dl, ok := ctx.Deadline(); ok {
-		if d := time.Until(dl); d < timeout {
-			timeout = d
-		}
-	}
-	if ctx.Err() != nil || timeout <= 0 {
-		// deadline 与 Err() 之间过期的窗口（终复审 N1）：Err 为 nil 时用
-		// 泛化消息，避免 %w 渲染 %!w(<nil>)。
-		startFail := fmt.Errorf("engine: start cancelled: %w", ctx.Err())
-		if ctx.Err() == nil {
-			startFail = errors.New("engine: handshake deadline already expired")
-		}
-		startErr := h.signalStart(startFail)
-		h.killTree()
-		return startErr
-	}
-	select {
-	case <-h.startDone:
-		if h.startErr != nil {
-			h.killTree()
-			return h.startErr
-		}
-		return nil
-	case <-time.After(timeout):
-		// 协议适配（终评 Critical-1 实测）：真实 claude 2.1.291 的 init 在
-		// 首条 user message 之后才发出——窗口内无 init 且进程仍存活 → 临时
-		// 放行（provisional start）；首个 init 到达时照常校验（失败 → 终止
-		// 引擎 + 拒绝原因合成 exit 事件，fail-closed 保留）。
-		select {
-		case <-h.exited:
-			// 进程在窗口内退出——按启动失败收口。startErr 必须经 startDone
-			// 快照读取（P1 复审 N2：monitor 先 close(exited)（Wait 返回）后
-			// 才 signalStart，字段直读是未同步读、且可能抢在写入前读到 nil
-			// 把失败启动放行）：等收口完成再读——写 startErr → close(startDone)
-			// → receive → read 建立 happens-before。ready 已立时 startDone 已由
-			// acceptHandshake 关闭（此处不卡死）；!ready 时 monitor 必然
-			// signalStart「exited during handshake」（route 的 pump 错误路径同）。
-			<-h.startDone
-			h.killTree()
-			return h.startErr
-		case <-h.startDone:
-			// init 与窗口到期同时就绪（终评审 Minor-5：select 随机性不得
-			// 吞掉窗口内 init 的校验结果）——按 startDone 结果收口：拒绝
-			// → 杀引擎；放行（init 刚好校验通过）→ 正常返回（route 已就绪）。
-			if h.startErr != nil {
-				h.killTree()
-			}
-			return h.startErr
-		default:
-		}
-		h.routeMu.Lock()
-		h.provisional = true
-		h.routeMu.Unlock()
-		h.signalStart(nil)
-		return nil
-	case <-ctx.Done():
-		startErr := h.signalStart(fmt.Errorf("engine: start cancelled: %w", ctx.Err()))
-		h.killTree()
-		return startErr
-	}
+	// Start 立即返回（027 FR-001，对齐 claude-agent-sdk 启动语义）：spawn +
+	// 泵 + monitor 就绪即句柄；init 事件由 route 流式消化（对账在 init 到达时
+	// 执行——实测 CLI 的 init 在首条 user message 之后才发出，等待它只会黑屏）。
+	// 引擎秒退/流损坏/对账失败均以 exit 事件呈现（route 与 monitor 的失败路径
+	// 补事件，原因不丢失）。
+	return nil
 }
 
 // route 把泵事件投递到 eventsOut（握手前 stash；init 完成校验与留痕）。
@@ -308,27 +238,20 @@ func (h *ClaudeHost) route(pumpCh <-chan Event, pumpDone <-chan error) {
 		}
 		// init：校验 → 接受（置 ready）→ 按序 flush
 		if err := h.validateHandshake(ev); err != nil {
-			h.signalStart(err)
-			// provisional start（Start 已返回）下的校验失败：Start 的错误
-			// 通道无人等待——终止引擎并以拒绝原因合成 exit 事件（先于
-			// monitor 的 killed exit 投递；monitorOnce 保证 close 互斥）。
-			h.routeMu.Lock()
-			prov := h.provisional
-			if prov {
-				h.killed = true
-			}
-			h.routeMu.Unlock()
-			if prov {
-				h.killTree()
-				h.monitorOnce.Do(func() {
-					h.deliver(Event{Kind: KindExit, Exit: &ExitInfo{Code: -1,
-						Reason: "refused: " + err.Error()}})
-					h.routeMu.Lock()
-					h.exitClosed = true
-					h.routeMu.Unlock()
-					close(h.eventsOut)
-				})
-			}
+			// 对账失败（027：时点=init 事件到达——首条 user message 触发）：
+			// 终止引擎并以拒绝原因合成 exit 事件（fail-closed 保留——从启动
+			// 阻塞拒绝变为秒级拒绝；monitorOnce 保证与 monitor 的 killed
+			// exit 投递/close 互斥）。
+			h.killed = true
+			h.killTree()
+			h.monitorOnce.Do(func() {
+				h.deliver(Event{Kind: KindExit, Exit: &ExitInfo{Code: -1,
+					Reason: "refused: " + err.Error()}})
+				h.routeMu.Lock()
+				h.exitClosed = true
+				h.routeMu.Unlock()
+				close(h.eventsOut)
+			})
 			continue
 		}
 		flush := h.acceptHandshake(ev)
@@ -340,7 +263,7 @@ func (h *ClaudeHost) route(pumpCh <-chan Event, pumpDone <-chan error) {
 	// stdout EOF / 泵失败：pumpDone 在 pumpCh 关闭前必有值（泵先发后关）
 	pumpErr := <-pumpDone
 	h.routeMu.Lock()
-	ready := h.ready
+	ready := h.ready // ready 仍供 ready 分支判定（流损坏收尾 vs pre-init 呈现）
 	h.routeMu.Unlock()
 	switch {
 	case pumpErr != nil && ready:
@@ -348,7 +271,10 @@ func (h *ClaudeHost) route(pumpCh <-chan Event, pumpDone <-chan error) {
 		h.deliver(Event{Kind: KindExit, Exit: &ExitInfo{Code: -1, Reason: pumpErr.Error()}})
 		h.finishEvents()
 	case pumpErr != nil && !ready:
-		h.signalStart(pumpErr)
+		// pre-init 秒退/流损坏（027 评审 Issue 1）：经事件流呈现真实原因
+		//（非阻塞 Start 下 signalStart 无消费方——原因不得丢失）。
+		h.deliver(Event{Kind: KindExit, Exit: &ExitInfo{Code: -1, Reason: pumpErr.Error()}})
+		h.finishEvents()
 	}
 }
 
@@ -401,12 +327,11 @@ func (h *ClaudeHost) acceptHandshake(ev Event) []Event {
 	h.pending = nil
 	h.ready = true
 	h.routeMu.Unlock()
-	h.signalStart(nil)
 	return flush
 }
 
-// deliver 投递事件（Close 后丢弃；eventsOut 关闭后跳过——provisional 拒绝
-// 路径关闭事件流后，route 循环里残余的 pump 事件安全丢弃）。
+// deliver 投递事件（Close 后丢弃；eventsOut 关闭后跳过——对账拒绝路径
+// 关闭事件流后，route 循环里残余的 pump 事件安全丢弃）。
 func (h *ClaudeHost) deliver(ev Event) {
 	h.routeMu.Lock()
 	closed := h.exitClosed
@@ -435,7 +360,6 @@ func (h *ClaudeHost) monitor() {
 		code = h.cmd.ProcessState.ExitCode()
 	}
 	h.routeMu.Lock()
-	ready := h.ready
 	killed := h.killed
 	h.routeMu.Unlock()
 	switch {
@@ -446,21 +370,18 @@ func (h *ClaudeHost) monitor() {
 	}
 	h.monitorOnce.Do(func() {
 		exitEv := Event{Kind: KindExit, Exit: &ExitInfo{Code: code, Reason: reason}}
-		if !ready {
-			h.signalStart(fmt.Errorf("engine: exited during handshake (code %d, reason %s)", code, reason))
-		} else {
-			// 先非阻塞投递（此刻 done 尚未关闭——markDone 只在 Close 观测到
-			// exited 之后发生）：缓冲有位时事件必达，消除「Close 抢先 markDone
-			// → deliver 走 done 分支丢事件」的竞态窗口；缓冲满时走下方
-			// done-guarded 重试（Close 后允许丢弃——契约已文档化）。
-			select {
-			case h.eventsOut <- exitEv:
-				exitEv.Exit = nil // 已投递
-			default:
-			}
-			if exitEv.Exit != nil {
-				h.deliver(exitEv)
-			}
+		// 先非阻塞投递（此刻 done 尚未关闭——markDone 只在 Close 观测到
+		// exited 之后发生）：缓冲有位时事件必达，消除「Close 抢先 markDone
+		// → deliver 走 done 分支丢事件」的竞态窗口；缓冲满时走下方
+		// done-guarded 重试（Close 后允许丢弃——契约已文档化）。
+		// 027：!ready 分支的 signalStart 退役——秒退也经 exit 事件呈现。
+		select {
+		case h.eventsOut <- exitEv:
+			exitEv.Exit = nil // 已投递
+		default:
+		}
+		if exitEv.Exit != nil {
+			h.deliver(exitEv)
 		}
 		close(h.eventsOut)
 	})
@@ -598,18 +519,6 @@ func (h *ClaudeHost) killTree() {
 		return
 	}
 	_ = h.cmd.Process.Kill()
-}
-
-// signalStart 收口启动结果（Once 单次：写 startErr 后关 startDone）。返回
-// 收口后的 startErr 快照：Once.Do 返回即 f 完成后（Go 内存模型——f 的完成
-// happens-before 任何 Do 的返回），调用方由此同步读取，替代跨 goroutine
-// 竞态的字段直读（P1 复审 N2）。
-func (h *ClaudeHost) signalStart(err error) error {
-	h.startOnce.Do(func() {
-		h.startErr = err
-		close(h.startDone)
-	})
-	return h.startErr
 }
 
 func (h *ClaudeHost) markDone() {
