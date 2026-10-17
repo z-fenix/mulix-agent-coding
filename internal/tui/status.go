@@ -37,7 +37,9 @@ func (m *tuiModel) statusView() string {
 	if s.Model != "" {
 		right = sgrWrap(sgrFg(activeTheme.fgSecondaryColor), "模型 "+s.Model)
 	}
-	row1 := joinStatusSides(m.statusBadge(m.statusMode()), right, m.width)
+	// 行 1 左右合成宽收口主列（Task 10 评审 Issue 7——窄档 == m.width 不变；
+	// 宽/中档贴主列行尾，不越列撑破帧宽）。
+	row1 := joinStatusSides(m.statusBadge(m.statusMode()), right, m.mainWidth())
 	// 行 2（025 FR-006）：缓存命中率（本次 = TurnTokens.CacheRead/(Input+Write
 	// +Read)，与 Meter.Hit 同式 cache/meter.go:145-146；平均 = SessionHit）+
 	// 费用；上下文/压缩/余额段无数据源省略（D7）。

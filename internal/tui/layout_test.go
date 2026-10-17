@@ -1,11 +1,15 @@
 package tui
 
 import (
+	"encoding/json"
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // ---- 帧布局（FR-001：alt-screen 全接管——转写视口 + 底部固定区）----
@@ -288,5 +292,134 @@ func TestColumnWidthsThresholds(t *testing.T) {
 					tt.wantSide, tt.wantMain, tt.wantPanel)
 			}
 		})
+	}
+}
+
+// ---- frame 三列合成（2026-10-17-dsh-tui-visual-redesign Task 10）----
+
+// TestFrameThreeTierComposition 钉（Task 10 Step 1）两档构成：
+//
+//   - W=150 全开（侧栏/面板开合字段 Task 11/12 落地前恒 true 接线——设计裁定
+//     默认三栏常开）：三列 JoinHorizontal——首行 16 列侧栏列区（列 0–15 空白）、
+//     转写内容自主列（列 16）起、滚动条列在列 117（主列 101+1 收口凭据）、
+//     32 列面板列区（列 118–149 空白）；帧宽断言：每行显示宽 ≤150
+//     （ansi.StringWidth——底部区未收口主列即超宽破版 / paintBG 折行漂高）。
+//   - W=80 窄档与单列基线逐行一致：基线 = 旧单列构成公式（转写‖滚动条 +
+//     底部区 + 铺底）对同输入孪生模型的重建。无色层（NO_COLOR）跑——有色层
+//     paintBG 会把各行归一填充到帧宽，构成偏差（如误走 JoinVertical 的行填
+//     充）被掩掉；无色层下填充差逐字节可见。视口喂给/钉底状态机由 frame 统
+//     一收敛（基线孪生同点收敛后重建）——构成钉点归本测试，状态机钉点归
+//     TestFrameLayout / 锚点矩阵。窄档不变量属负空间守卫：实现落地前基线与
+//     现状构成天然一致（起始即绿，与 TestNoColorFrameStructure 同形态）。
+func TestFrameThreeTierComposition(t *testing.T) {
+	resetTheme(t)
+	applyTheme(defaultActiveTheme()) // 钉确定性 256 层（有色层段 bg 非空）
+
+	// ---- W=150 全开：三列构成 + 帧宽断言 ----
+	m, _, _ := newTestModel(t)
+	m = update(t, m, tea.WindowSizeMsg{Width: 150, Height: 24}) // composer SetWidth 经 mainWidth 接线
+	const seeds = 30
+	for i := range seeds {
+		m.appendLine(fmt.Sprintf("第%02d行", i))
+	}
+	wantTop := seeds - (24 - lipgloss.Height(m.bottomView())) // 尾随钉底：yoff = total − vpH
+	wantFirst := fmt.Sprintf("第%02d行", wantTop)
+	lines := strings.Split(m.frame(), "\n")
+	if len(lines) != 24 {
+		t.Fatalf("帧高漂移：%d != 24（alt-screen 满屏）", len(lines))
+	}
+	for i, line := range lines {
+		if w := ansi.StringWidth(line); w > 150 {
+			t.Fatalf("行 %d 显示宽 %d > 150（三列构成超宽破版）", i, w)
+		}
+	}
+	// 列位断言（显示列——ansi.Cut 按格切，Strip 后比内容）
+	first := ansi.Strip(lines[0])
+	if side := ansi.Cut(first, 0, 16); strings.TrimSpace(side) != "" {
+		t.Fatalf("首行列 0–15 非空白（16 列侧栏列区缺失）：%q", side)
+	}
+	if got := ansi.Cut(first, 16, 150); !strings.HasPrefix(got, wantFirst) {
+		t.Fatalf("首行转写内容未自主列（列 16）起：want %q, got %q", wantFirst, got)
+	}
+	if sb := ansi.Cut(first, 117, 118); strings.TrimSpace(sb) == "" {
+		t.Fatalf("首行列 117 非滚动条列（主列宽 101+1 收口凭据）：%q", sb)
+	}
+	if panel := ansi.Cut(first, 118, 150); strings.TrimSpace(panel) != "" {
+		t.Fatalf("首行列 118–149 非空白（32 列面板列区缺失）：%q", panel)
+	}
+
+	// ---- W=80 窄档与单列基线逐行一致（无色层）----
+	t.Setenv("NO_COLOR", "1")
+	resetTheme(t)
+	th, ok := themeByName("ember")
+	if !ok {
+		t.Fatal("ember must resolve under NO_COLOR")
+	}
+	applyTheme(th)
+
+	build := func() *tuiModel {
+		n, _, _ := newTestModel(t)
+		n = update(t, n, tea.WindowSizeMsg{Width: 80, Height: 24})
+		for i := range seeds {
+			n.appendLine(fmt.Sprintf("第%02d行", i))
+		}
+		return n
+	}
+	got := build().frame()
+	base := build()
+	base.frame() // 视口喂给/钉底状态机与被测帧同收敛点（帧内副作用幂等）
+	want := lipgloss.JoinHorizontal(lipgloss.Top,
+		base.transcriptState.transcriptView(), base.scrollbarView()) + "\n" + base.bottomView()
+	want = paintBG(want, 80)
+	if got != want {
+		gotLines, wantLines := strings.Split(got, "\n"), strings.Split(want, "\n")
+		div := -1
+		for i := 0; i < len(gotLines) && i < len(wantLines); i++ {
+			if gotLines[i] != wantLines[i] {
+				div = i
+				break
+			}
+		}
+		t.Fatalf("窄档（W=80）与单列基线不一致：got %d 行 / want %d 行 / 首个分歧行 %d\ngot:  %q\nwant: %q",
+			len(gotLines), len(wantLines), div, got, want)
+	}
+}
+
+// TestBottomZoneCollarWidth 钉（评审 Issue 7——底部区宽度收口主列）：宽档
+// W=150（main = 102 = 150−16−32，几何钉于 TestColumnWidthsThresholds）下底部
+// 区消费点收口主列宽——composer 编辑器宽（resize 分支接线）、状态行 1 左右
+// 合成宽、授权卡内容宽（长参数摘要按 mainWidth−4 折行，卡总宽含 styleCard
+// 横向装饰 4 = mainWidth）。补全菜单无宽度消费点（渲染行内容有界；加截断会
+// 改窄档字节——窄档等价性禁改），无断言面（Ruling/报告记）。
+func TestBottomZoneCollarWidth(t *testing.T) {
+	resetTheme(t)
+	applyTheme(defaultActiveTheme())
+	m, _, _ := newTestModel(t)
+	m = update(t, m, tea.WindowSizeMsg{Width: 150, Height: 24})
+	m = update(t, m, statusTick{}) // 快照入模（行 1 右组「模型 …」数据源——D7）
+	const main = 102               // 宽档 150 全开让位：150−16−32
+
+	// composer：编辑器宽收口主列——ta.Width() = SetWidth 实参（mainWidth）减
+	// 提示符预留（bubbles SetWidth 语义：内容宽 = 配置宽 − promptWidth；Base
+	// 无边框无水平装饰，dressStyles 清零后预留恰为 composerPromptWidth）。
+	if got := m.composerState.ta.Width(); got != main-composerPromptWidth {
+		t.Fatalf("composer content width = %d, want %d（mainWidth %d − 提示符预留 %d）",
+			got, main-composerPromptWidth, main, composerPromptWidth)
+	}
+	// 状态行 1：左右合成贴主列行尾（右组收口在列 mainWidth）
+	row1 := strings.Split(m.statusView(), "\n")[0]
+	if got := ansi.StringWidth(ansi.Strip(row1)); got != main {
+		t.Fatalf("status row1 width = %d, want %d", got, main)
+	}
+	// 授权卡：20 键长参数摘要按 mainWidth−4 折行（首行恰满宽）→ 卡总宽
+	// = mainWidth；未收口时按 m.width−4 折行 → 卡 150 超主列（撑破帧宽形态）。
+	var parts []string
+	for i := range 20 {
+		parts = append(parts, fmt.Sprintf(`"k%02d":"xxxxxxxxxx"`, i))
+	}
+	m.approval = &approvalCard{toolUseID: "t-12345678", tool: "Bash",
+		input: json.RawMessage("{" + strings.Join(parts, ",") + "}")}
+	if got := lipgloss.Width(styleCard.Render(m.approvalCardView())); got != main {
+		t.Fatalf("approval card width = %d, want %d（mainWidth）", got, main)
 	}
 }

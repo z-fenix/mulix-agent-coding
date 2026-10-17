@@ -9,12 +9,14 @@ import (
 
 // ---- 帧合成（FR-001：alt-screen 全接管布局）----
 //
-// 帧 = 转写视口（高 = H − 底部固定区行数；末列滚动条）+ 底部固定区。底部固定
-// 区自上而下：模态面板（/agents，有则）→ 授权卡/编辑器（互斥）→ 状态行。
-// 模态面板渲染沿用迁移前形态（023 Task 2 逐字节迁移件）；授权卡键位与参数
-// 摘要见 approval.go（023 D11）。本文件负责把它们与视口合成满屏帧；末列滚动
-// 条拖拽与选区高亮随 Task 21 落地（023 Story4——transcript.go transcriptView
-// 绘制可见窗口）。
+// 帧 = 主列（转写视口，高 = H − 底部固定区行数、末列滚动条；+ 底部固定区）
+// ‖ 侧栏列 ‖ 面板列三列 JoinHorizontal（列和 = W；窄档 <100 几何退化单列）。
+// 底部固定区自上而下：模态面板（/agents，有则）→ 授权卡/编辑器（互斥）→
+// 状态行，宽度收口主列（mainWidth——评审 Issue 7）。模态面板渲染沿用迁移前
+// 形态（023 Task 2 逐字节迁移件）；授权卡键位与参数摘要见 approval.go（023
+// D11）。本文件负责把它们与视口合成满屏帧；侧栏/面板视图 Task 11/12 落地
+// （当前恒空白列占位）；末列滚动条拖拽与选区高亮随 Task 21 落地（023
+// Story4——transcript.go transcriptView 绘制可见窗口）。
 
 // transcriptContentWidth 转写内容宽度：末列保留给滚动条（对照参考
 // chat_tui.go:693-698 transcriptContentWidth），下限 1。换行缓存与 viewport
@@ -60,12 +62,15 @@ func (m *tuiModel) bottomView() string {
 	return b.String()
 }
 
-// frame 帧合成：转写视口（高 = H − 底部固定区行数，下限 1；末列滚动条）+
-// 底部固定区。视口按当前宽高同步（增量换行缓存，Task 5 起）；钉底由尾随
-// 状态机裁决（023 D5）：跟随态下内容喂给或高度变化（模态开合收窄视口——
-// #6430 的 height-only 场景）都钉底；上翻锁定下 offset 不动；forceGotoBottom
-// 单帧豁免置底并恢复跟随（对照参考 chat_tui.go:989-1012 的 postUpdate 钉底）。
-// 帧总行数恰为 H（alt-screen 满屏接管）。
+// frame 帧合成（Task 10 三列化）：主列 = 转写视口（高 = H − 底部固定区行数，
+// 下限 1；末列滚动条）+ 底部固定区，宽/中档与侧栏列/面板列 JoinHorizontal 三
+// 列合成（列和 = W），窄档（<100）几何退化 (0,W,0)——走单列现路径与三列前逐
+// 字节等价（TestFrameThreeTierComposition W=80 段钉）。视口按当前宽高同步（增
+// 量换行缓存，Task 5 起）；钉底由尾随状态机裁决（023 D5）：跟随态下内容喂给
+// 或高度变化（模态开合收窄视口——#6430 的 height-only 场景）都钉底；上翻锁定
+// 下 offset 不动；forceGotoBottom 单帧豁免置底并恢复跟随（对照参考
+// chat_tui.go:989-1012 的 postUpdate 钉底）。帧总行数恰为 H（alt-screen 满屏
+// 接管）。侧栏/面板开合的重排与锚点显式捕获归 Task 12（评审 Issue 4）。
 func (m *tuiModel) frame() string {
 	bottom := m.bottomView()
 	vpH := m.height - lipgloss.Height(bottom)
@@ -73,7 +78,10 @@ func (m *tuiModel) frame() string {
 		vpH = 1
 	}
 	prevH := m.transcriptState.vp.Height()
-	fed := m.transcriptState.syncViewport(transcriptContentWidth(m.width), vpH)
+	// 三档列宽几何（Task 9）：开合字段 m.sidebarOpen/m.panelOpen 随 Task 11/12
+	// 落地，此前按设计裁定以恒 true 接线（默认三栏常开）——窄档由几何退化兜住。
+	sidebarW, mainW, panelW := columnWidths(m.width, true, true)
+	fed := m.transcriptState.syncViewport(transcriptContentWidth(mainW), vpH)
 	// 阅读锚点恢复（024 FR-001）：新宽重排完成后按块对位置回顶行，一次性
 	// 消费；尾随态不恢复（钉底接管，锚点作废）。
 	if m.pendingAnchor != nil {
@@ -89,10 +97,45 @@ func (m *tuiModel) frame() string {
 	m.scrollState.forceGotoBottom = false
 	// 可见窗口经 transcriptView 绘制（选区高亮内建）——viewport 只持滚动状态，
 	// 帧面按 h 行绘制（对照参考 renderTranscript；023 Story4 Task 21）。
-	// 满帧铺底（设计 §4.3）：出口统一收口——帧每行（转写视口 + 滚动条列 +
-	// 底部固定区）过 paintBG 整行铺 bg 槽；无色层原样返回，结构不变。
-	rendered := lipgloss.JoinHorizontal(lipgloss.Top, m.transcriptState.transcriptView(), m.scrollbarView()) + "\n" + bottom
+	main := lipgloss.JoinHorizontal(lipgloss.Top, m.transcriptState.transcriptView(), m.scrollbarView())
+	var rendered string
+	if sidebarW == 0 && panelW == 0 {
+		// 窄档现路径（零改写）：单列构成与三列化前逐字节一致（等价性钉点）。
+		rendered = main + "\n" + bottom
+	} else {
+		// 宽/中档三列合成：主列 = JoinVertical(转写‖滚动条, 底部区)——底部区
+		// 四消费点已收口 mainWidth（评审 Issue 7），短行右补不撑破帧宽；侧栏/
+		// 面板列恒空白（视图 Task 11/12 落地），高随主列（不足由 JoinHorizontal
+		// 底部补空行，铺底归帧出口 paintBG）。
+		mainCol := lipgloss.JoinVertical(lipgloss.Left, main, bottom)
+		var cols []string
+		if sidebarW > 0 {
+			cols = append(cols, blankColumn(sidebarW, m.height))
+		}
+		cols = append(cols, mainCol)
+		if panelW > 0 {
+			cols = append(cols, blankColumn(panelW, m.height))
+		}
+		rendered = lipgloss.JoinHorizontal(lipgloss.Top, cols...)
+	}
+	// 满帧铺底（设计 §4.3）：出口统一收口——帧每行过 paintBG 整行铺 bg 槽
+	// （三列列和 = m.width，帧宽不变）；无色层原样返回，结构不变。
 	return paintBG(rendered, m.width)
+}
+
+// blankColumn 恒空白列（Task 10 过渡形态——侧栏/面板视图 Task 11/12 落地）：
+// 宽 w 全空格 × h 行，三列 JoinHorizontal 的列位占位，保证主列列位与帧宽
+// （列和 = W）正确。w≤0 防御性返回空串（调用方已按档位让位过滤）。
+func blankColumn(w, h int) string {
+	if w <= 0 {
+		return ""
+	}
+	blank := strings.Repeat(" ", w)
+	rows := make([]string, max(h, 1))
+	for i := range rows {
+		rows[i] = blank
+	}
+	return strings.Join(rows, "\n")
 }
 
 // sgrResetRe 整段重置型 SGR（参数空或全零——\x1b[m / \x1b[0m / \x1b[0;0m）：

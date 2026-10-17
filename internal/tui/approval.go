@@ -69,7 +69,10 @@ func (m *tuiModel) resolve(toolUseID string, allow, session bool) {
 // 提示行键名走键帽样式（设计 §6 授权卡——styleKeycap；键位与文本语义逐字节
 // 不变，仅样式——TestApprovalCardDress 钉剥 SGR 后与现值全等）。
 func (m *tuiModel) approvalCardView() string {
-	w := m.width - 4 // styleCard 横向装饰：RoundedBorder 左右各 1 + Padding(0,1) 左右各 1
+	// 卡片内容宽收口主列（Task 10 评审 Issue 7）：styleCard 横向装饰（Rounded
+	// Border 左右各 1 + Padding(0,1) 左右各 1）+4 = 卡总宽 = mainWidth——窄档
+	// == m.width-4 行为不变。
+	w := m.mainWidth() - 4
 	if w < 16 {
 		w = 16
 	}

@@ -227,7 +227,11 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.width, m.height = msg.Width, msg.Height
-		m.composerState.ta.SetWidth(msg.Width) // 重排触发编辑器高度重算
+		// 底部区宽度收口主列（评审 Issue 7）：composer 跟 mainWidth 重排（触发
+		// 编辑器高度重算）——窄档 mainWidth == m.width 行为不变；开合变更时的
+		// 同步随 Task 11/12 开关接线落地（同宽开合不走 WindowSizeMsg——评审
+		// Issue 4 的锚点显式捕获同处接线，Task 12）。
+		m.composerState.ta.SetWidth(m.mainWidth())
 		return m, nil
 	case statusTick:
 		if m.ctrl != nil {
@@ -369,13 +373,27 @@ func (m *tuiModel) drainEvents(first tuiEvent) {
 	m.finalize()
 }
 
+// mainWidth 主列宽（Task 10 三列合成——底部区宽度收口，评审 Issue 7）：
+// columnWidths 的 main 档。底部区消费点（composer SetWidth / statusView 左右
+// 合成 / approvalCardView 内容宽 / completeMenuView 同理——无宽度消费点）与
+// 转写视口换行宽（finalize 同源）一律收口此宽，防 JoinVertical 撑破帧宽。
+// 窄档 <100 恒等于 m.width（单列等价）；宽/中档随侧栏/面板让位收窄。开合
+// 字段 m.sidebarOpen/m.panelOpen 随 Task 11/12 落地，此前恒 true 接线（与
+// frame 同一设计裁定：默认三栏常开）。
+func (m *tuiModel) mainWidth() int {
+	_, main, _ := columnWidths(m.width, true, true)
+	return main
+}
+
 // finalize 一批合并消费的统一收口：换行缓存 sync（增量——只重排后缀块，
 // 宽度变更内部自动全量重建），行列表有变才克隆喂给 viewport；钉底由尾随
 // 状态机裁决（023 D5）——仅跟随态（或单帧 forceGotoBottom，经
 // shouldFollowTail）GotoBottom，上翻锁定下视口不动——一次 re-wrap 覆盖整批
 // 而不是每事件一次（对照参考 chat_tui.go:989-1012 的 sync+feed+钉底收口）。
+// 换行宽与 frame 视口同源（transcriptContentWidth(mainWidth)）——宽档两处
+// 不一致会令换行缓存逐批次全量重建（149↔101 抖动），增量缓存失效。
 func (m *tuiModel) finalize() {
-	if m.transcriptState.syncWrappedLines(transcriptContentWidth(m.width), false) {
+	if m.transcriptState.syncWrappedLines(transcriptContentWidth(m.mainWidth()), false) {
 		m.transcriptState.feedViewportContent()
 		if m.shouldFollowTail() {
 			m.transcriptState.vp.GotoBottom()
