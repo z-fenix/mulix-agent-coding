@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"mulix/internal/event"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // ---- Task 20（023 D9/FR-005）：diff 卡 ----
@@ -29,7 +31,9 @@ func TestDiffFromEditInput(t *testing.T) {
 	if d.path != "src/main.go" || d.verb != "改" || d.before != "old line" || d.after != "new line" {
 		t.Fatalf("diffInput = %+v", d)
 	}
-	rendered := strings.Join(renderDiff(d, 80, activeTheme), "\n")
+	// 内容断言剥 SGR（Task 6 换装后标记与代码段被行内回铺 SGR 分隔——内容
+	// 连续性按剥离文本判定；SGR 形态钉点归 TestDiffRowBGSlots/TestDiffHeaderCounts）。
+	rendered := ansi.Strip(strings.Join(renderDiff(d, 80, activeTheme), "\n"))
 	for _, want := range []string{"- old line", "+ new line", "1"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("Edit diff render %q missing %q", rendered, want)
@@ -49,7 +53,7 @@ func TestDiffFromEditInput(t *testing.T) {
 	if card.state != toolRunning {
 		t.Fatalf("card must still be running, state = %d", card.state)
 	}
-	body := strings.Join(card.render(80), "\n")
+	body := ansi.Strip(strings.Join(card.render(80), "\n"))
 	if !strings.Contains(body, "✎") || !strings.Contains(body, "- old line") || !strings.Contains(body, "+ new line") {
 		t.Fatalf("running card must render the diff view:\n%s", body)
 	}
@@ -61,7 +65,7 @@ func TestDiffFromEditInput(t *testing.T) {
 	if card.state != toolDone {
 		t.Fatalf("result must close the card as today, state = %d", card.state)
 	}
-	body = strings.Join(card.render(80), "\n")
+	body = ansi.Strip(strings.Join(card.render(80), "\n"))
 	for _, want := range []string{"- old line", "+ new line", "⎿", "applied"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("closed card must keep diff rows and the output tail:\n%s", body)
@@ -73,7 +77,7 @@ func TestDiffFromEditInput(t *testing.T) {
 	if !ok || w.before != "" || w.after != "one\ntwo\n" || w.verb != "写" {
 		t.Fatalf("Write diffInput = %+v ok=%v", w, ok)
 	}
-	wr := strings.Join(renderDiff(w, 80, activeTheme), "\n")
+	wr := ansi.Strip(strings.Join(renderDiff(w, 80, activeTheme), "\n"))
 	if !strings.Contains(wr, "+ one") || !strings.Contains(wr, "+ two") {
 		t.Fatalf("Write diff render:\n%s", wr)
 	}
@@ -109,26 +113,30 @@ func TestDiffHeaderCounts(t *testing.T) {
 	if !strings.Contains(head, "a.go") || !strings.Contains(head, "✎") {
 		t.Fatalf("header %q must carry ✎ and path", head)
 	}
-	// 行级色分：增行整行绿、删行整行红、上下文行不着槽色（扫描体行——跳过头行）。
+	// 行级色分（Task 6 换装后）：增/删行 = diff bg 槽整行 + marker 前景
+	// （gutter/标记段），上下文行不沾 diff 槽色（扫描体行——跳过头行；定位
+	// 按剥离文本——标记与代码段被行内回铺 SGR 分隔，变量留原行供 SGR 断言）。
 	var addRow, delRow, ctxRow string
 	for _, l := range lines[1:] {
 		switch {
-		case strings.Contains(l, "+ c") && addRow == "":
+		case strings.Contains(ansi.Strip(l), "+ c") && addRow == "":
 			addRow = l
-		case strings.Contains(l, "- b") && delRow == "":
+		case strings.Contains(ansi.Strip(l), "- b") && delRow == "":
 			delRow = l
 		case strings.Contains(l, "a") && ctxRow == "":
 			ctxRow = l
 		}
 	}
-	if !strings.HasPrefix(addRow, "\x1b[38;5;114m") {
-		t.Fatalf("added row must lead with green SGR: %q", addRow)
+	if !strings.HasPrefix(addRow, "\x1b[48;5;22m\x1b[38;5;114m") {
+		t.Fatalf("added row must lead with diffAddedBG band + marker fg: %q", addRow)
 	}
-	if !strings.HasPrefix(delRow, "\x1b[38;5;203m") {
-		t.Fatalf("deleted row must lead with red SGR: %q", delRow)
+	if !strings.HasPrefix(delRow, "\x1b[48;5;52m\x1b[38;5;203m") {
+		t.Fatalf("deleted row must lead with diffDeletedBG band + marker fg: %q", delRow)
 	}
-	if strings.Contains(ctxRow, "\x1b[38;5;114m") || strings.Contains(ctxRow, "\x1b[38;5;203m") {
-		t.Fatalf("context row must not take add/del slots: %q", ctxRow)
+	for _, bad := range []string{"48;5;22", "48;5;52", "38;5;114", "38;5;203"} {
+		if strings.Contains(ctxRow, bad) {
+			t.Fatalf("context row must not take diff slots (%s): %q", bad, ctxRow)
+		}
 	}
 
 	// 纯新增：零删侧省略（不出 -0）。
@@ -184,5 +192,73 @@ func TestDiffFallback(t *testing.T) {
 	}
 	if !strings.Contains(body, "⎿") || !strings.Contains(body, "ok") {
 		t.Fatalf("degraded card must render the ordinary tail:\n%s", body)
+	}
+}
+
+// ---- Task 6（2026-10-17-dsh-tui-visual-redesign）：diff 卡 bg 槽消费 ----
+
+// TestDiffRowBGSlots 钉点（Task 6 Step 1）：diff 增/删行换装 dsh diff 令牌——
+// 整行铺 bg 槽（暗板 added 22 / deleted 52）+ gutter/标记段 marker 前景
+// （114/203）；marker 段收口的重置点回铺 bg（fenceBG 同法，帧出口 paintBG 的
+// 三元序 reset→帧底→diff 底同构——TestFenceBGSurvivesFramePaint 钉点），代码
+// 段无独立前景（默认前景压色带）；上下文行不沾 diff 槽色；hunk 间 ⋮ 分隔 dim
+// 不变；NO_COLOR 退避平文（TestNoColorFallback 口径：Setenv + 重建主题）。
+func TestDiffRowBGSlots(t *testing.T) {
+	resetTheme(t)
+	applyTheme(defaultActiveTheme()) // 钉确定性 256 层（防前序测试主题泄漏）
+	d := diffInput{path: "a.go", verb: "改",
+		before: "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\nm\nn\n",
+		after:  "a\nX\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\nm\nZ\n"}
+	lines := renderDiff(d, 80, activeTheme)
+	joined := strings.Join(lines, "\n")
+	// 增/删行整行钉字面（gw=2——行号上限 14；marker 段 reset 后回铺 bg、代码
+	// 段无独立前景）：加行 22/114、删行 52/203；两 hunk 同构（14 行侧行同钉）。
+	wantAdd := "\x1b[48;5;22m\x1b[38;5;114m   2 + \x1b[0m\x1b[48;5;22mX\x1b[0m"
+	wantDel := "\x1b[48;5;52m\x1b[38;5;203m   2 - \x1b[0m\x1b[48;5;52mb\x1b[0m"
+	wantAdd2 := "\x1b[48;5;22m\x1b[38;5;114m  14 + \x1b[0m\x1b[48;5;22mZ\x1b[0m"
+	wantDel2 := "\x1b[48;5;52m\x1b[38;5;203m  14 - \x1b[0m\x1b[48;5;52mn\x1b[0m"
+	for _, want := range []string{wantAdd, wantDel, wantAdd2, wantDel2} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("diff rows must be the band+marker composite:\nwant %q\ngot:\n%s", want, joined)
+		}
+	}
+	// hunk 间 ⋮ 分隔 dim 不变（且恰一处——双 hunk 的形状守卫）。
+	sep := "  \x1b[38;5;244m⋮\x1b[0m"
+	if n := strings.Count(joined, sep); n != 1 {
+		t.Fatalf("hunk separator must be exactly one dim ⋮ row, got %d:\n%s", n, joined)
+	}
+	// 上下文行不沾 diff 槽色（dim 行号 + chroma/平文——行 "c" 为 hunk1 上下文）。
+	var ctxRow string
+	for _, l := range lines[1:] {
+		if strings.Contains(l, "c") && ctxRow == "" {
+			ctxRow = l
+		}
+	}
+	if ctxRow == "" {
+		t.Fatalf("context row missing:\n%s", joined)
+	}
+	for _, bad := range []string{"48;5;22", "48;5;52", "38;5;114", "38;5;203"} {
+		if strings.Contains(ctxRow, bad) {
+			t.Fatalf("context row must not take diff slots (%s): %q", bad, ctxRow)
+		}
+	}
+
+	// NO_COLOR：槽位全空 → 增/删行退避平文（TestNoColorFallback 口径：只禁
+	// 色不禁装饰——断言无前景/背景色 SGR，bold 等装饰属性不在禁列），内容原样。
+	t.Setenv("NO_COLOR", "1")
+	resetTheme(t)
+	th, ok := themeByName("ember")
+	if !ok {
+		t.Fatal("ember must resolve under NO_COLOR")
+	}
+	applyTheme(th)
+	plain := strings.Join(renderDiff(d, 80, activeTheme), "\n")
+	for _, bad := range []string{"\x1b[38;2;", "\x1b[38;5;", "\x1b[48;2;", "\x1b[48;5;"} {
+		if strings.Contains(plain, bad) {
+			t.Fatalf("no-color tier must render the diff without color SGR (%s):\n%q", bad, plain)
+		}
+	}
+	if !strings.Contains(plain, "+ X") || !strings.Contains(plain, "- b") {
+		t.Fatalf("content must survive the degrade:\n%q", plain)
 	}
 }

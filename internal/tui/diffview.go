@@ -21,9 +21,12 @@ import (
 //     ToolUseRequestedEvent.Input 结构化字段提取 old/new 对经 go-udiff 现算。
 //     行号为片段内相对行号（Input 不含文件全文与行偏移，无法换算绝对行号）。
 //  2. 增删行色——参考暗绿/暗红背景条（硬编码 256 bg + reset 后重铺 bg）；
-//     本仓用 T18 预留 green/red 前景槽整行着色（D8 主题无 bg 槽位；NO_COLOR
-//     槽空自动退避为平文）。chroma 语法着色落上下文行——+/- 行整行槽色与
-//     chroma 的 \x1b[0m reset 互踩（参考靠重铺 bg 合成，本仓无 bg 可铺）。
+//     本仓换装 dsh diff 令牌（2026-10-17 重设计 Task 6）：整行铺 diff bg 预留
+//     槽 + gutter/标记段 marker 前景（diffRow——槽值经 sgrBg/sgrFg 参数化，
+//     真彩层喂 hex 同源）；marker 段收口的重置点回铺 bg（fenceBG 同法，帧出
+//     口 paintBG 三元序同构）。chroma 语法着色仍落上下文行——+/- 行整行槽色
+//     与 chroma 的 \x1b[0m reset 互踩的现状约束不变（参考靠重铺 bg 合成的是
+//     chroma 段，本仓 +/- 行不喂 chroma）。
 //  3. 折叠——参考 diffFoldLimit + /diff-fold；本仓渲染全量，折叠上限随
 //     Ctrl+B 展开面在 Task 21 接管（brief）。
 //  4. green 槽方法落本文件——theme.go 归属 T18/T19 文件清单，本任务不触
@@ -108,11 +111,12 @@ func diffFromInput(tool string, input json.RawMessage) (diffInput, bool) {
 }
 
 // renderDiff diff 视图按宽渲染（块内挂载于工具卡头行之后）：✎ 动词 <path>
-// +A -B 头 + 行号 hunk 体（增行绿槽/删行红槽整行、上下文行 dim 行号 + chroma
-// 代码着色——按 path 选 lexer；neutral 主题契约/无色层退避为平文，对照
-// chromaFence 门控同法）。hunk 间 dim ⋮ 分隔（对照参考 diffBody）。行号取
-// hunk FromLine/ToLine（片段内相对行号，见文件头注记 1）。全量渲染无折叠
-// （Ctrl+B 展开面随 Task 21）。宽度 <=0 取 80（对照 toolCard.render）。
+// +A -B 头 + 行号 hunk 体（增/删行 diff bg 槽整行 + marker 前景 gutter/标记
+// 段——diffRow；上下文行 dim 行号 + chroma 代码着色——按 path 选 lexer；
+// neutral 主题契约/无色层退避为平文，对照 chromaFence 门控同法）。hunk 间
+// dim ⋮ 分隔（对照参考 diffBody）。行号取 hunk FromLine/ToLine（片段内相对
+// 行号，见文件头注记 1）。全量渲染无折叠（Ctrl+B 展开面随 Task 21）。宽度
+// <=0 取 80（对照 toolCard.render）。
 func renderDiff(d diffInput, width int, th theme) []string {
 	if width <= 0 {
 		width = 80
@@ -147,10 +151,12 @@ func renderDiff(d diffInput, width int, th theme) []string {
 			code := expandTabs(strings.TrimRight(l.Content, "\n"))
 			switch l.Kind {
 			case udiff.Insert:
-				out = append(out, th.green("  "+lpad(strconv.Itoa(newNo), gw)+" + "+clampWidth(code, avail)))
+				out = append(out, th.diffRow(th.diffAddedBGColor, th.diffAddedMarkerColor,
+					"  "+lpad(strconv.Itoa(newNo), gw)+" + ", clampWidth(code, avail)))
 				newNo++
 			case udiff.Delete:
-				out = append(out, th.red("  "+lpad(strconv.Itoa(oldNo), gw)+" - "+clampWidth(code, avail)))
+				out = append(out, th.diffRow(th.diffDeletedBGColor, th.diffDeletedMarkerColor,
+					"  "+lpad(strconv.Itoa(oldNo), gw)+" - ", clampWidth(code, avail)))
 				oldNo++
 			default:
 				out = append(out, "  "+th.dim(lpad(strconv.Itoa(newNo), gw))+"   "+diffCode(d.path, code, &th, avail))
@@ -270,6 +276,28 @@ func expandTabs(s string) string {
 	return b.String()
 }
 
-// green 绿槽包裹（T18 预留槽的首个消费点——diff 增行；theme.go 归属
-// T18/T19 文件清单，方法随 diff 卡任务落地，其余槽方法同构）。
+// green 绿槽包裹（T18 预留槽——theme.go 归属 T18/T19 文件清单，方法随 diff
+// 卡任务落地，其余槽方法同构）。diff 体行已换装 diffRow（Task 6）；本方法现
+// 消费点为 diff 头行 +A/-B 计数。
 func (t *theme) green(s string) string { return sgrWrap(sgrFg(t.greenColor), s) }
+
+// diffRow diff 增/删行换装（dsh diff 令牌——设计 §4 令牌映射表，重设计
+// Task 6）：整行铺 diff bg 槽（暗绿/暗红背景条——对照参考「暗底背景条」口
+// 径），gutter/标记段喂 marker 前景（行号与 +/- 标记同色），代码段经重置点
+// 回铺 bg 落回默认前景压在色带上（fenceBG 同法：重置点即重铺；帧出口
+// paintBG 在该重置点插帧底、diff 底后写生效——三元序由 layout_test.go
+// TestFenceBGSurvivesFramePaint 钉死，本行产出同构）。gutter 须无内嵌 SGR
+// （renderDiff 侧为纯文本拼接）。bg/marker 槽空（无色层/中性缺省）退避：
+// bg 空时 marker 前景只上 gutter 段（双空在此原样返回——现状平文契约），
+// marker 空时 bg 照铺整行（真实主题两槽同 tier 同步解析，单侧空为理论分支）。
+func (t *theme) diffRow(bg, marker themeColor, gutter, code string) string {
+	b, f := sgrBg(bg), sgrFg(marker)
+	if b == "" {
+		return sgrWrap(f, gutter) + code
+	}
+	if f == "" {
+		return sgrWrap(b, gutter+code)
+	}
+	band := "\x1b[" + b + "m"
+	return band + sgrWrap(f, gutter) + band + code + "\x1b[0m"
+}
