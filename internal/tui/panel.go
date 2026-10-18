@@ -119,6 +119,9 @@ func (m *tuiModel) cyclePanelTab() {
 		return
 	}
 	m.panel.tab = (m.panel.tab + 1) % panelTabCount
+	// minors 清理（Final deferred）：跨页签 scroll 渍留清零——doctor 滚到 N 切回
+	// 变更页签不应从预览中部取窗（渲染钳位兜底仍在，此处为语义归位）。
+	m.panel.scroll = 0
 }
 
 // panelView 面板列视图（宽 w = columnWidths 的 panel 档，32）：页签行 →
