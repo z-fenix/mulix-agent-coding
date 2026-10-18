@@ -427,3 +427,9 @@
 .diff-row--context .diff-text {
   color: var(--fg-secondary);
 }
+
+/* ---- task-12：在场待审请求的留痕行标注（ApprovalBar 拦截中的视觉同源）---- */
+.transcript-entry--approval-active .system-line {
+  border-left: 2px solid var(--warn);
+  padding-left: 6px;
+}

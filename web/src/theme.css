@@ -292,6 +292,12 @@ button:disabled {
   white-space: nowrap;
 }
 
+.session-time {
+  color: var(--fg-tertiary);
+  flex: none;
+  font-size: 11px;
+}
+
 .sidebar-empty {
   color: var(--fg-tertiary);
   margin: 8px 0;
@@ -363,6 +369,19 @@ button:disabled {
   background: var(--surface2);
   padding: 12px 16px;
   display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* task-12：行内提示（409「回合未结束」/ 只读提示）——warn 槽，提交重试即清。 */
+.composer-notice {
+  margin: 0;
+  color: var(--warn);
+  font-size: 12px;
+}
+
+.composer-row {
+  display: flex;
   gap: 8px;
 }
 
@@ -388,4 +407,137 @@ button:disabled {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--surface1);
+}
+
+/* ---- 交互面（task-12）：状态条 / 审批拦截条 / 键帽 ---- */
+
+/* 键帽（TUI styleKeycap 对应物：审批 y/a/n 提示）。 */
+kbd {
+  font-family: 'IBM Plex Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 11px;
+  color: var(--fg-secondary);
+  background: var(--surface1);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+/* 状态条：Snapshot 轮询投影 + 警告/错误/只读横幅。 */
+.statusbar {
+  display: flex;
+  flex-direction: column;
+}
+
+.statusbar-info {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 6px 16px;
+  font-size: 12px;
+  color: var(--fg-tertiary);
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+}
+
+.statusbar-ready--ok {
+  color: var(--success);
+}
+
+.statusbar-ready--warn {
+  color: var(--warn);
+}
+
+.statusbar-ready--err {
+  color: var(--err);
+  font-weight: 600;
+}
+
+.statusbar-readonly {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 16px;
+  color: var(--warn);
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+}
+
+.statusbar-takeover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.statusbar-error {
+  color: var(--err);
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+  padding: 8px 16px;
+}
+
+.statusbar-warnings {
+  color: var(--warn);
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+  padding: 8px 16px;
+}
+
+.statusbar-warnings p {
+  margin: 2px 0;
+}
+
+/* 审批独占拦截条：warn 槽描边 + surface3 抬升，滑入动效不做（prefers-
+   reduced-motion 无需降级的零动效选择）。 */
+.approval-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 12px 16px 0;
+  padding: 10px 14px;
+  background: var(--surface3);
+  border: 1px solid var(--warn);
+  border-left-width: 3px;
+  border-radius: 6px;
+}
+
+.approval-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.approval-title {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.approval-countdown {
+  font-family: 'IBM Plex Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 12px;
+  color: var(--warn);
+  flex: none;
+}
+
+.approval-arg {
+  margin: 0;
+  color: var(--fg-secondary);
+  font-size: 12px;
+  font-family: 'IBM Plex Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  word-break: break-all;
+}
+
+.approval-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.approval-allow {
+  border-color: var(--success);
+}
+
+.approval-deny {
+  border-color: var(--err);
+  color: var(--err);
 }

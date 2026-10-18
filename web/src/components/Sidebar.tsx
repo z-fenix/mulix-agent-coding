@@ -1,7 +1,9 @@
-// Sidebar.tsx——侧栏（task-10 布局壳）：工作区选择 + 新建会话 + 会话列表。
-// 新建/选择经回调上抛（App 装配）；列表来自 GET /api/sessions（open=true =
-// 本进程在册，open=false = 磁盘镜像投影）。本任务为最小态，审批/续链等
-// 交互随后续任务接管。
+// Sidebar.tsx——侧栏（task-12 交互面改造）：工作区选择（WorkspacePicker）+
+// 新建会话 + 会话列表（SessionListView）。新建/选择经回调上抛（App 装配
+// createSession / openSession takeover=false）；列表来自 GET /api/sessions。
+// 未选工作区时新建禁用（提交门禁在 App 的 composer disabled，FR-011）。
+import SessionListView from './SessionListView'
+import WorkspacePicker from './WorkspacePicker'
 import type { SessionEntry } from '../types'
 
 export interface SidebarProps {
@@ -32,21 +34,7 @@ export default function Sidebar({
         <label className="sidebar-label" htmlFor="workspace-picker">
           工作区
         </label>
-        <select
-          id="workspace-picker"
-          className="workspace-picker"
-          value={workspace}
-          onChange={(e) => onWorkspaceChange(e.target.value)}
-        >
-          <option value="" disabled>
-            选择工作区…
-          </option>
-          {workspaces.map((ws) => (
-            <option key={ws} value={ws}>
-              {ws}
-            </option>
-          ))}
-        </select>
+        <WorkspacePicker workspaces={workspaces} value={workspace} onChange={onWorkspaceChange} />
         <button
           type="button"
           className="new-session"
@@ -57,26 +45,7 @@ export default function Sidebar({
           新建会话
         </button>
       </div>
-      <ul className="session-list" aria-label="会话列表">
-        {sessions.map((s) => (
-          <li key={s.id}>
-            <button
-              type="button"
-              className={`session-item${s.id === activeId ? ' session-item--active' : ''}`}
-              aria-current={s.id === activeId || undefined}
-              onClick={() => onSelect(s.id)}
-            >
-              <span className="session-id" title={s.id}>
-                {s.id.slice(0, 8)}
-              </span>
-              <span className={`session-status session-status--${s.status}`}>{s.status}</span>
-              <span className="session-ws" title={s.workspace}>
-                {s.workspace}
-              </span>
-            </button>
-          </li>
-        ))}
-      </ul>
+      <SessionListView sessions={sessions} activeId={activeId} onSelect={onSelect} />
       {sessions.length === 0 && <p className="sidebar-empty">暂无会话</p>}
       {scanWarnings.length > 0 && (
         <div className="sidebar-warnings" role="status">

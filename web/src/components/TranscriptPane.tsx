@@ -1,7 +1,9 @@
-// TranscriptPane.tsx——转录面真实渲染（task-11）：WireFrame[] 经 reduceTranscript
-// 归约为语义条目（reducer.ts），按条目种类分发组件——markdown 正文（DOMPurify
-// 消毒）、工具卡、思考折叠块、委派卡、系统行。审批呈两态留痕行（交互式
-// ApprovalBar 属 Task 12）。空态「选择或新建会话」。
+// TranscriptPane.tsx——转录面真实渲染（task-11；task-12 小改）：WireFrame[] 经
+// reduceTranscript 归约为语义条目（reducer.ts），按条目种类分发组件——markdown
+// 正文（DOMPurify 消毒）、工具卡、思考折叠块、委派卡、系统行。task-12 增
+// activeApprovalId：交互式 ApprovalBar 在场的请求在转录留痕行上标注
+// （transcript-entry--approval-active），留痕与拦截条视觉同源。空态「选择或
+// 新建会话」。
 import { useMemo } from 'react'
 import {
   receiptLine,
@@ -22,9 +24,11 @@ import type { WireFrame } from '../types'
 export interface TranscriptPaneProps {
   frames: WireFrame[]
   emptyHint?: string
+  // 在场待审请求的 tool_use_id（ApprovalBar 消费中；无 = 无待审）。
+  activeApprovalId?: string
 }
 
-export default function TranscriptPane({ frames, emptyHint = '选择或新建会话' }: TranscriptPaneProps) {
+export default function TranscriptPane({ frames, emptyHint = '选择或新建会话', activeApprovalId }: TranscriptPaneProps) {
   const entries = useMemo(() => reduceTranscript(frames), [frames])
   if (frames.length === 0) {
     return (
@@ -36,11 +40,19 @@ export default function TranscriptPane({ frames, emptyHint = '选择或新建会
   return (
     <div className="transcript">
       <ol className="transcript-list">
-        {entries.map((entry) => (
-          <li key={`${entry.kind}:${entry.seq}`} className="transcript-entry" data-kind={entry.kind}>
-            {renderEntry(entry)}
-          </li>
-        ))}
+        {entries.map((entry) => {
+          const active =
+            entry.kind === 'approval' && !entry.resolved && entry.toolUseId === activeApprovalId
+          return (
+            <li
+              key={`${entry.kind}:${entry.seq}`}
+              className={`transcript-entry${active ? ' transcript-entry--approval-active' : ''}`}
+              data-kind={entry.kind}
+            >
+              {renderEntry(entry)}
+            </li>
+          )
+        })}
       </ol>
     </div>
   )
