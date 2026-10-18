@@ -140,7 +140,7 @@
 ### Session 2026-10-18
 
 - Q: 同一会话被多个浏览器标签页同时打开时，交互权怎么处理？ → A: 后开者只读跟随；仅先建立的连接持有提交/审批交互权。
-- Q: 审批请求无人应答时怎么收口？ → A: 交互端在线即等待（不设人为超时），交互端全部断开即按 fail-closed 拒绝。<!-- The clarify phase's guard checks for this exact "## Clarifications"
+- Q: 审批请求无人应答时怎么收口？ → A: 交互端在线即等待，交互端全部断开即按 fail-closed 拒绝。（该条「不设人为超时」的语义已被下一条 2026-10-18 裁定修订：审批等待受既有 120s 治理窗口约束。）<!-- The clarify phase's guard checks for this exact "## Clarifications"
      heading. Record each question and its answer here as the clarify
      phase resolves NEEDS CLARIFICATION markers above, or set
      clarify_skipped=true in state and explain why here instead. -->
