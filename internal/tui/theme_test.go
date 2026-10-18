@@ -305,6 +305,9 @@ func TestDSHLightSlots(t *testing.T) {
 	assertSlot(t, th.diffDeletedBGColor, "224")     // #FCE6E2
 	assertSlot(t, th.diffAddedMarkerColor, "28")    // #01A241
 	assertSlot(t, th.diffDeletedMarkerColor, "124") // #BA2723
+	assertSlot(t, th.greenColor, "35")              // green-500 #22C55E（FR-003 状态语义色——T2 遗留补钉）
+	assertSlot(t, th.yellowColor, "172")            // amber-500 #DD8629
+	assertSlot(t, th.redColor, "196")               // red-600 #EC1313
 	assertSlot(t, th.accentColor, "173")            // graphite-light accent 不变
 }
 
@@ -317,5 +320,101 @@ func TestSgrBg(t *testing.T) {
 	}
 	if got := sgrBg(""); got != "" {
 		t.Fatalf("空槽: %q", got)
+	}
+}
+
+// ---- 渲染点暗/亮双主题矩阵（终审 Finding 3——SC-003 light 渲染点钉点补全）----
+//
+// SC-003 要求暗/亮两模式每渲染点槽位断言；此前 light 侧只有槽位表钉
+// （TestDSHLightSlots）无渲染点 SGR 钉。本矩阵把高频渲染点的暗色钉参数化为
+// dark/light 双跑（themeByName("deepseek")/("deepseek-light")——256 手选值是
+// 钉点口径，真彩 hex 不钉，既有纪律）：横幅/助手头行 accent、工具卡三态符号
+// ●✓✗ 着色、状态栏徽章（accent 底 + bg 槽 fg；NOT_READY amber / FAILED red
+// 语义底）、焦点名 caption、diff 头计数 green/red、滚动条 thumb/track。
+func TestDSHRenderPointThemeMatrix(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	t.Setenv("COLORTERM", "") // 钉 256 层——手选值断言
+	for _, tt := range []struct {
+		name    string
+		preset  string
+		accent  string // 横幅/助手头行/工具运行 ●/徽章底/滚动条 thumb
+		dim     string // 焦点名 caption/滚动条 track
+		green   string // 工具完成 ✓/diff 头 +A
+		red     string // 工具失败 ✗/diff 头 -B
+		amber   string // NOT_READY 徽章底
+		badgeFg string // 徽章 fg = bg 槽（TestStatusBarDress 不变量）
+	}{
+		{"deepseek", "deepseek", "111", "244", "114", "203", "214", "234"},
+		{"deepseek-light", "deepseek-light", "69", "246", "35", "196", "172", "231"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			th, ok := themeByName(tt.preset)
+			if !ok {
+				t.Fatalf("preset %s must resolve", tt.preset)
+			}
+			resetTheme(t)
+			applyTheme(th)
+			// 横幅 + 助手头行：accent 槽（TestChromeBannerBG/TestChromeTurnHeader
+			// dark 侧同渲染点）。
+			bannerLine := bannerBlock{model: "claude-x"}.render(80)[0]
+			if !strings.Contains(bannerLine, "\x1b[38;5;"+tt.accent+"m◆") {
+				t.Fatalf("banner accent %s:\n%q", tt.accent, bannerLine)
+			}
+			headerLine := assistantHeaderBlock{}.render(80)[0]
+			if !strings.Contains(headerLine, "\x1b[38;5;"+tt.accent+"m◆ mulix") {
+				t.Fatalf("assistant header accent %s:\n%q", tt.accent, headerLine)
+			}
+			// 工具卡三态符号 ●✓✗ 着色（TestToolCardLifecycle/TestToolCardFailure
+			// dark 侧同渲染点）。
+			run := (&toolCard{tool: "Bash", arg: "x", state: toolRunning}).render(80)[0]
+			if !strings.Contains(run, "\x1b[38;5;"+tt.accent+"m●\x1b[0m") {
+				t.Fatalf("running ● must take accent %s:\n%q", tt.accent, run)
+			}
+			done := (&toolCard{tool: "Bash", arg: "x", state: toolDone, outputTail: []string{"ok"}}).render(80)[0]
+			if !strings.Contains(done, "\x1b[38;5;"+tt.green+"m✓\x1b[0m") {
+				t.Fatalf("done ✓ must take green %s:\n%q", tt.green, done)
+			}
+			fail := (&toolCard{tool: "Bash", arg: "x", state: toolFailed, failedDetail: "boom"}).render(80)[0]
+			if !strings.Contains(fail, "\x1b[38;5;"+tt.red+"m✗\x1b[0m") {
+				t.Fatalf("failed ✗ must take red %s:\n%q", tt.red, fail)
+			}
+			// diff 头计数 green/red（TestDiffHeaderCounts dark 侧同渲染点）。
+			head := renderDiff(diffInput{path: "a.go", verb: "改", before: "a\nb\n", after: "a\nc\nd\n"}, 80, activeTheme)[0]
+			if !strings.Contains(head, "\x1b[38;5;"+tt.green+"m+2") || !strings.Contains(head, "\x1b[38;5;"+tt.red+"m-1") {
+				t.Fatalf("diff head counts must take green %s / red %s:\n%q", tt.green, tt.red, head)
+			}
+			// 滚动条 thumb(accent)/track(dim)（TestScrollbarDefaultAccent dark 侧
+			// 同渲染点）。
+			m, _, _ := newTestModel(t)
+			m.transcriptState.vp.SetHeight(10)
+			m.transcriptState.wrappedLines = make([]string, 50)
+			if sb := m.scrollbarView(); !strings.Contains(sb, "\x1b[38;5;"+tt.accent+"m█") ||
+				!strings.Contains(sb, "\x1b[38;5;"+tt.dim+"m│") {
+				t.Fatalf("scrollbar thumb accent %s / track dim %s:\n%q", tt.accent, tt.dim, sb)
+			}
+			// 状态栏徽章（accent 底 + bg 槽 fg）+ 焦点名 caption（
+			// TestStatusBarDress/TestStatusBarFocusName dark 侧同渲染点）。
+			m = update(t, m, statusTick{})
+			r1 := strings.Split(m.statusView(), "\n")[0]
+			if !strings.Contains(r1, "48;5;"+tt.accent) || !strings.Contains(r1, "38;5;"+tt.badgeFg) {
+				t.Fatalf("badge must take accent bg %s / bg-slot fg %s:\n%q", tt.accent, tt.badgeFg, r1)
+			}
+			m.width = 150
+			m.focus = focusPanel
+			row2 := strings.Split(m.statusView(), "\n")[1]
+			if !strings.HasPrefix(row2, "\x1b[38;5;"+tt.dim+"m") || !strings.Contains(row2, "焦点 面板") {
+				t.Fatalf("focus name must take the caption/dim slot %s:\n%q", tt.dim, row2)
+			}
+			// 语义徽章：NOT_READY amber / FAILED red 底（FR-003 状态语义色）。
+			m2, _, _ := newTestModel(t)
+			m2.statusState.snapshot.Ready = "NOT_READY"
+			if r1 := strings.Split(m2.statusView(), "\n")[0]; !strings.Contains(r1, "48;5;"+tt.amber) {
+				t.Fatalf("NOT_READY badge must take amber %s:\n%q", tt.amber, r1)
+			}
+			m2.statusState.snapshot.Ready = "FAILED"
+			if r1 := strings.Split(m2.statusView(), "\n")[0]; !strings.Contains(r1, "48;5;"+tt.red) {
+				t.Fatalf("FAILED badge must take red %s:\n%q", tt.red, r1)
+			}
+		})
 	}
 }
