@@ -1,6 +1,7 @@
 // serve_test.go——HTTP 面钉子(2026-10-18-web-ui-mvp Task 3):GET /api/healthz
 // → 200 {"ok":true};GET / → 嵌入 dist 的占位 index.html。经 newMux +
-// httptest 验证,不真听端口。
+// httptest 验证,不真听端口。(Task 7 起 newMux 携带 hostManager + Options——
+// 本文件只消费健康探针与静态面,传空 Options 不触会话路由。)
 package serve
 
 import (
@@ -10,11 +11,14 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(newMux())
+	mgr := newHostManager(time.Hour)
+	t.Cleanup(mgr.Close)
+	srv := httptest.NewServer(newMux(mgr, Options{}))
 	t.Cleanup(srv.Close)
 	return srv
 }
