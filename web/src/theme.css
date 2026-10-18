@@ -1,0 +1,176 @@
+/*
+ * theme.css——视觉令牌与应用壳基础样式（design §8.1，与 internal/tui/theme.go
+ * 槽位一一映射）。默认（无 data-theme / :root）= deepseek dark 出厂缺省。
+ * 10 预设块 = 5 accent 预设 × dark/light，经 <html data-theme="deepseek-dark">
+ * 等切换；预设名与 tui accentPresets 对齐（deepseek/graphite/ember/aurora/midnight），
+ * accent 十六进制值与 TUI FR-002 手选值同源。
+ */
+
+/* ---- 暗底基础（deepseek dark 为出厂缺省形态）---- */
+:root,
+[data-theme='deepseek-dark'],
+[data-theme='graphite-dark'],
+[data-theme='ember-dark'],
+[data-theme='aurora-dark'],
+[data-theme='midnight-dark'] {
+  color-scheme: dark;
+
+  --surface1: #14171c; /* 页面底（dark 基 ~#14171c 家族） */
+  --surface2: #1b202a; /* 面板/侧栏/顶栏 */
+  --surface3: #232a36; /* 悬浮层/输入框/内嵌卡片 */
+  --border: #2c3542;
+  --fg: #e7eaf0;
+  --fg-secondary: #a9b2c3;
+  --fg-tertiary: #7d8799;
+  --code-block: #0f1216;
+  --diff-added-bg: #10291d;
+  --diff-added-marker: #34b374;
+  --diff-deleted-bg: #2c1518;
+  --diff-deleted-marker: #e0564f;
+  --err: #ff6b5e;
+  --warn: #e5a23c;
+  --success: #3ecf8e;
+  --info: #6cb2ff;
+}
+
+/* ---- 亮底基础（白基 + bluish 表面层级，对齐 TUI lightSlots 派生口径）---- */
+[data-theme='deepseek-light'],
+[data-theme='graphite-light'],
+[data-theme='ember-light'],
+[data-theme='aurora-light'],
+[data-theme='midnight-light'] {
+  color-scheme: light;
+
+  --surface1: #f5f6f8; /* 页面底（light 基 ~#f5f6f8 家族） */
+  --surface2: #ffffff;
+  --surface3: #eceef3;
+  --border: #d9dee6;
+  --fg: #1d222d;
+  --fg-secondary: #4d5665;
+  --fg-tertiary: #616b7d;
+  --code-block: #eef0f4;
+  --diff-added-bg: #e0f4e8;
+  --diff-added-marker: #1d7f4f;
+  --diff-deleted-bg: #fbe9e7;
+  --diff-deleted-marker: #c2413b;
+  --err: #c2413b;
+  --warn: #96660a;
+  --success: #1d7f4f;
+  --info: #2563c9;
+}
+
+/* ---- 强调色：5 预设 × dark/light 共 10 块（:root 即 deepseek-dark）---- */
+:root,
+[data-theme='deepseek-dark'] {
+  --accent: #7AAAFF;
+}
+[data-theme='deepseek-light'] {
+  --accent: #4176E6;
+}
+[data-theme='graphite-dark'] {
+  --accent: #d97757;
+}
+[data-theme='graphite-light'] {
+  --accent: #c2613f;
+}
+[data-theme='ember-dark'] {
+  --accent: #f06d38;
+}
+[data-theme='ember-light'] {
+  --accent: #bd5d4d;
+}
+[data-theme='aurora-dark'] {
+  --accent: #34c3a6;
+}
+[data-theme='aurora-light'] {
+  --accent: #2f8a76;
+}
+[data-theme='midnight-dark'] {
+  --accent: #b18cff;
+}
+[data-theme='midnight-light'] {
+  --accent: #7d63c8;
+}
+
+/* ---- 应用壳基础（design §8.2 安静 chrome；transcript/工具卡随后续任务扩展）---- */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--surface1);
+  color: var(--fg);
+  font-family:
+    'IBM Plex Sans',
+    'PingFang SC',
+    'Microsoft YaHei',
+    'Noto Sans SC',
+    system-ui,
+    sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+code,
+pre {
+  font-family: 'IBM Plex Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+}
+
+a {
+  color: var(--accent);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+}
+
+.app-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--fg);
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+  flex: none;
+}
+
+.status-dot--up {
+  background: var(--success);
+}
+
+.status-dot--down {
+  background: var(--err);
+}
+
+.status-dot--checking {
+  background: var(--fg-tertiary);
+}
