@@ -269,7 +269,9 @@ func (c *toolCard) header(width int) string {
 		glyph, status = failLine(symFail), failLine(" 失败")
 	case toolDone:
 		glyph, status = greenLine(symDone), dimLine(" 完成")
-	default: // toolRunning
+	case toolRunning:
+		// minors 清理（T4 deferred）：显式 case——未来新增第 4 态时不再静默
+		// 归入运行态（漏 case 即编译期 vet 提示，而非观感误归）。
 		status = dimLine(" 运行中")
 	}
 	head := glyph + " " + bold(verb)
