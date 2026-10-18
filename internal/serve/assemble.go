@@ -230,6 +230,9 @@ func assembleReal(ctx context.Context, h *sessionHost) (*control.Controller, *co
 	mulixmemory.RegisterConditional(nil, h.Workspace, cfg.Tools.MemorySearch)
 	// mulix_usage 跨进程权威口径(T26 接线,cli openSession setUsageSource
 	// 同语义):ReadUsageReport 含 resume 续号的完整历史。
+	// ⚠️ 终审 M3 前置条件:SetSource 是进程级全局,今日 inert 仅因 mulix_usage
+	// 在自 spawn 的 mcp serve 子进程内执行——若工具面改为进程内直调,多会话
+	// 并发装配会互相覆写记账源(跨会话记账串账),届时必须改为 per-session 注入。
 	mulixusage.SetSource(func() (cache.Report, error) {
 		return cache.ReadUsageReport(usageRoot, h.ID)
 	})
