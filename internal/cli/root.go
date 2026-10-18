@@ -12,6 +12,7 @@
 //   - mulix instructions 指令文件快照（P2 M15：FR-109 来源文件与内容摘要）
 //   - mulix lint layers 分层检查门禁（P2 M17：design 002 §6——导入矩阵 /
 //     注入点唯一 / 文件职责棘轮；违规 exit 1）
+//   - mulix web 本地 Web UI 服务（浏览器操作会话；默认 127.0.0.1:3180）
 package cli
 
 import (
@@ -49,6 +50,11 @@ type Options struct {
 	HostFactory func(boot engine.BootConfig) (engine.Host, error)
 	// RunTUI 注入交互前端（Task 28；nil = 骨架桩提示）。
 	RunTUI func(ctx context.Context, o Options, resumeID string) error
+	// RunWeb 注入 web UI 前端（2026-10-18-web-ui-mvp Task 8；nil = 生产
+	// serve 接线 runWebServe）。port 由命令层解析（config [web].port 默认、
+	// flag 覆盖）；bind 经私有字段 webBind 随副本传递（签名只携带
+	// port/noOpen——allowEngineDrift 指针传递同款惯例）。
+	RunWeb func(ctx context.Context, o Options, port int, noOpen bool) error
 	// Config 注入生效配置（测试；nil = 分层加载默认）。
 	Config *config.Config
 	// doctorProbes 注入 doctor 探针（nil = 生产实探针；测试注入假探针保证
@@ -63,6 +69,11 @@ type Options struct {
 
 	// allowEngineDrift 指向根命令解析出的 flag 值（run 会话构造读取）。
 	allowEngineDrift *bool
+
+	// webBind 是 web 命令解析出的监听地址（--bind 显式值或 config
+	// [web].bind；命令层解析后随 Options 副本传入 RunWeb——RunWeb 签名
+	// 只携带 port/noOpen）。零值由生产 runWebServe 兜底回环。
+	webBind string
 }
 
 func (o Options) driftAllowed() bool {
@@ -147,7 +158,56 @@ func NewRootCommand(opts Options) *cobra.Command {
 	root.AddCommand(newForkCommand(&opts))
 	root.AddCommand(newSearchCommand(&opts))
 	root.AddCommand(newEventsCommand(&opts))
+	root.AddCommand(newWebCommand(&opts))
 	return root
+}
+
+// newWebCommand 是 web UI 服务命令（2026-10-18-web-ui-mvp Task 8）：拉起
+// internal/serve HTTP/SSE 服务，启动横幅打印 URL 并（默认）用系统浏览器
+// 打开；SIGINT/SIGTERM 优雅关停（生产 runWebServe 内 NotifyContext）。
+// 端口/地址默认取 config [web] 节，flag 显式指定优先——用 Changed 判别而
+// 非把 config 值写进 cobra 缺省（命令构造不做 IO，配置迟加载），内置默认
+// 3180/127.0.0.1 仅作 help 展示与 config 缺项兜底。
+func newWebCommand(opts *Options) *cobra.Command {
+	var port int
+	var bind string
+	var noOpen bool
+	cmd := &cobra.Command{
+		Use:   "web",
+		Short: "以本地 Web UI 服务运行（浏览器操作会话；默认 127.0.0.1:3180）",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			o := *opts
+			cfg, err := effectiveConfig(o)
+			if err != nil {
+				return err
+			}
+			p := port
+			if !cmd.Flags().Lookup("port").Changed {
+				p = cfg.Web.Port
+			}
+			if p == 0 {
+				p = 3180 // serve.Run 同款零值兜底（注入 config 缺 port 时）
+			}
+			b := bind
+			if !cmd.Flags().Lookup("bind").Changed {
+				b = cfg.Web.Bind
+			}
+			if b == "" {
+				b = "127.0.0.1"
+			}
+			o.webBind = b
+			_, _ = fmt.Fprintf(o.stdout(), "mulix web 监听 http://%s:%d\n", b, p)
+			runWeb := o.RunWeb
+			if runWeb == nil {
+				runWeb = runWebServe // 生产 serve 接线；测试注入替身
+			}
+			return runWeb(context.Background(), o, p, noOpen)
+		},
+	}
+	cmd.Flags().IntVar(&port, "port", 3180, "监听端口（默认取 [web].port，内置 3180）")
+	cmd.Flags().StringVar(&bind, "bind", "127.0.0.1", "监听地址（默认取 [web].bind，内置 127.0.0.1）")
+	cmd.Flags().BoolVar(&noOpen, "no-open", false, "不自动打开系统浏览器")
+	return cmd
 }
 
 // newEventsCommand 是外部观察面(018 FR-103):读 endpoint 握手文件→订阅
