@@ -238,21 +238,22 @@ func scrollbarCell(row, total, height, thumbStart, thumbSize int) string {
 // 130−16−32=82、100 侧开 100−16=84）。消费方守卫判定用 W 直接比较（<100
 // 侧栏守卫、<130 面板守卫），不用 sidebar==0（open=false 同样得 0）。
 func columnWidths(termW int, sidebarOpen, panelOpen bool) (sidebar, main, panel int) {
+	// minors 清理（T9 deferred）：mutate-then-single-return 统一——各档只改
+	// sidebar/panel，main 恒 = W−sidebar−panel 单点收口（窄档双零即原样）。
 	sidebar, main, panel = 0, termW, 0
-	if termW >= 130 {
+	switch {
+	case termW >= 130:
 		if sidebarOpen {
 			sidebar = 16
 		}
 		if panelOpen {
 			panel = 32
 		}
-		return sidebar, termW - sidebar - panel, panel
-	}
-	if termW >= 100 {
+	case termW >= 100:
 		if sidebarOpen {
 			sidebar = 16
 		}
-		return sidebar, termW - sidebar, 0
 	}
+	main = termW - sidebar - panel
 	return sidebar, main, panel
 }
