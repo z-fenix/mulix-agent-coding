@@ -1,6 +1,8 @@
-// stream.test.ts——openSessionStream 四行为（task-10-brief Step 1）：
-// 1) (kind,seq) 幂等去重；2) 先对账后订阅，序 = 镜像序；3) 断连指数退避重连
-// 且重连重新对账（去重保证无重复）；4) warnings 头帧 → onWarnings。
+// stream.test.ts——openSessionStream 行为（task-10-brief Step 1 + 终审修复轮）：
+// 1) (kind,seq) 幂等去重；2) 订阅先行、open 后对账（评审 I2：先订阅后对账，
+// 流开与对账之间的发布由实时通路送达，重叠帧被去重吸收——不重不漏）；3) 断连
+// 指数退避重连且重连重新对账；4) warnings 头帧 → onWarnings；5) 每次流建立
+// （含重连）重申交互权（评审 C1）；6) SSE 订阅地址携带每标签页身份（评审 I1）。
 // 附加：close() 后不再重连不再对账（重连定时器泄漏防护）。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { openSessionStream } from './stream'
@@ -8,7 +10,7 @@ import type { WireFrame, WarningsFrame } from './types'
 
 const id = 's1'
 
-// ---- 假 EventSource（记录实例；emit 派发 onmessage；fail 派发 onerror）----
+// ---- 假 EventSource（记录实例；open 派发 onopen；emit 派发 onmessage；fail 派发 onerror）----
 class FakeEventSource {
   static instances: FakeEventSource[] = []
   url: string
@@ -20,8 +22,8 @@ class FakeEventSource {
     this.url = url
     FakeEventSource.instances.push(this)
   }
-  // open 模拟连接就绪(真实 EventSource 在收到 200 + text/event-stream 头后
-  // 触发 onopen——服务端此时已 Subscribe,I2 修复后握手行先于订阅就绪语义)。
+  // open 模拟连接就绪（真实 EventSource 收到 200 + text/event-stream 头后触发
+  // onopen；I2 修复后服务端 Subscribe 先于握手行，onopen 即「订阅已就绪」）。
   open() {
     this.readyState = 1
     this.onopen?.({ type: 'open' })
@@ -55,12 +57,14 @@ function ndjson(lines: unknown[]): string {
   return lines.map((l) => JSON.stringify(l)).join('\n') + '\n'
 }
 
-// fetch 桩：/events → 指定 NDJSON；/open（C1 重申交互权）→ interactive 应答；
-// 其余 URL 一律拒绝（意外调用显形）。
-function stubFetch(replay: unknown[]) {
+// fetch 桩：/events → 指定 NDJSON（onFetch 回调在对账响应返回前触发——模拟
+// 「流已订阅、快照在途」窗口内的实时发布）；/open（C1 重申交互权）→
+// interactive 应答；其余 URL 一律拒绝（意外调用显形）。
+function stubFetch(replay: unknown[], onFetch?: () => void) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input)
     if (url.endsWith(`/api/sessions/${id}/events`)) {
+      onFetch?.()
       return { ok: true, status: 200, text: async () => ndjson(replay) }
     }
     if (url.endsWith(`/api/sessions/${id}/open`)) {
@@ -75,6 +79,11 @@ function stubFetch(replay: unknown[]) {
 // openCalls 统计 fetch 桩收到的 POST /open 次数（C1 重申交互权的断言面）。
 function openCalls(fetchMock: ReturnType<typeof stubFetch>) {
   return fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/open'))
+}
+
+// eventsCalls 统计 GET /events 对账次数。
+function eventsCalls(fetchMock: ReturnType<typeof stubFetch>) {
+  return fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/events'))
 }
 
 describe('openSessionStream', () => {
@@ -103,14 +112,16 @@ describe('openSessionStream', () => {
       onWarnings: () => {},
     })
     await vi.waitFor(() => expect(FakeEventSource.instances.length).toBe(1))
+    FakeEventSource.instances[0].open()
+    await vi.waitFor(() => expect(events.length).toBe(2))
     expect(events).toEqual(['turn_started:1', 'assistant_text:2'])
     // live 通道重放同帧：仍只收一次
     FakeEventSource.instances[0].emit(frame('assistant_text', 2))
     expect(events).toEqual(['turn_started:1', 'assistant_text:2'])
   })
 
-  it('replays then subscribes live：对账 3 事件后 live 1 事件，序 = 镜像序', async () => {
-    stubFetch([
+  it('subscribes first then reconciles：订阅先行，open 后对账（评审 I2）', async () => {
+    const fetchMock = stubFetch([
       warningsFrame,
       frame('turn_started', 1),
       frame('assistant_text', 2, { turn: 1, text: 'a' }),
@@ -121,16 +132,57 @@ describe('openSessionStream', () => {
       onEvent: (f) => events.push(`${f.kind}:${f.ev.seq}`),
       onWarnings: () => {},
     })
-    await vi.waitFor(() => expect(FakeEventSource.instances.length).toBe(1))
-    // 订阅地址携带每标签页身份 ?client=（I1：EventSource 无法设头，后开者
-    // 只读跟随的裁定通道）
-    expect(FakeEventSource.instances[0].url).toBe(`/api/sessions/${id}/stream?client=${sessionStorage.getItem('mulix_client')}`)
+    // 订阅同步建立（旧序「先对账后订阅」期间事件有丢失窗；新序先占住流）
+    expect(FakeEventSource.instances.length).toBe(1)
+    expect(eventsCalls(fetchMock).length).toBe(0) // open 前不对账
+    FakeEventSource.instances[0].open()
+    await vi.waitFor(() => expect(events.length).toBe(3))
     expect(events).toEqual(['turn_started:1', 'assistant_text:2', 'tool_result:3'])
+    // live 通道续帧照常交付
     FakeEventSource.instances[0].emit(frame('assistant_text', 4, { turn: 1, text: 'b' }))
     expect(events).toEqual(['turn_started:1', 'assistant_text:2', 'tool_result:3', 'assistant_text:4'])
   })
 
-  it('per-tab identity token：SSE 订阅跨重连复用同一令牌（I1）', async () => {
+  it('gap-free：流开与对账之间的帧经实时通路送达恰一次（评审 I2）', async () => {
+    // 修复前（先对账后订阅）：对账在途窗口内的实时发布在订阅前无通道可走
+    // ——丢失且 (kind,seq) 去重集无法察觉缺口。修复后（先订阅后对账）：
+    // 流一开服务端即 Subscribe，窗口内发布进缓冲通道，恰达一次。
+    const midFrame = frame('tool_result', 3, { turn: 1, tool_use_id: 't1', content: 'x', is_error: false })
+    // 快照不含该帧（发布落在快照读取之后）
+    stubFetch([warningsFrame, frame('turn_started', 1), frame('assistant_text', 2)], () => {
+      FakeEventSource.instances[0].emit(midFrame)
+    })
+    const events: string[] = []
+    openSessionStream(id, {
+      onEvent: (f) => events.push(`${f.kind}:${f.ev.seq}`),
+      onWarnings: () => {},
+    })
+    FakeEventSource.instances[0].open()
+    await vi.waitFor(() => expect(events.length).toBe(3))
+    expect(events.filter((e) => e === 'tool_result:3').length).toBe(1) // 恰一次
+    expect(events.filter((e) => e === 'turn_started:1').length).toBe(1)
+    expect(events.filter((e) => e === 'assistant_text:2').length).toBe(1)
+  })
+
+  it('gap-free：对账与实时的重叠帧被去重恰一次（评审 I2）', async () => {
+    // 同帧既在快照又经实时通道（发布落在快照读取之前、送达期间）：去重集
+    // 吸收重叠，只渲染一次。
+    const midFrame = frame('tool_result', 3, { turn: 1, tool_use_id: 't1', content: 'x', is_error: false })
+    stubFetch([warningsFrame, frame('turn_started', 1), midFrame], () => {
+      FakeEventSource.instances[0].emit(midFrame)
+    })
+    const events: string[] = []
+    openSessionStream(id, {
+      onEvent: (f) => events.push(`${f.kind}:${f.ev.seq}`),
+      onWarnings: () => {},
+    })
+    FakeEventSource.instances[0].open()
+    await vi.waitFor(() => expect(events.length).toBe(2))
+    expect(events.filter((e) => e === 'tool_result:3').length).toBe(1)
+    expect(events.filter((e) => e === 'turn_started:1').length).toBe(1)
+  })
+
+  it('per-tab identity token：SSE 订阅跨重连复用同一令牌（评审 I1）', async () => {
     vi.useFakeTimers()
     stubFetch([warningsFrame, frame('turn_started', 1)])
     openSessionStream(id, {
@@ -163,6 +215,7 @@ describe('openSessionStream', () => {
       onEvent: (f) => events.push(`${f.kind}:${f.ev.seq}`),
       onWarnings: () => {},
     })
+    FakeEventSource.instances[0].open()
     await flushAsync()
     expect(FakeEventSource.instances.length).toBe(1)
     expect(events.length).toBe(3)
@@ -170,11 +223,14 @@ describe('openSessionStream', () => {
     FakeEventSource.instances[0].fail()
     await vi.advanceTimersByTimeAsync(400)
     expect(FakeEventSource.instances.length).toBe(1)
-    // 退避到期：重新对账 + 新订阅；重放帧全部被去重
+    // 退避到期：新订阅（订阅先行）+ open 后重新对账；重放帧全部被去重
     await vi.advanceTimersByTimeAsync(200)
     await flushAsync()
     expect(FakeEventSource.instances.length).toBe(2)
-    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(eventsCalls(fetchMock).length).toBe(1) // 新连接 open 前不对账
+    FakeEventSource.instances[1].open()
+    await flushAsync()
+    expect(eventsCalls(fetchMock).length).toBe(2)
     expect(events.length).toBe(3)
     // 新连接上新帧照常交付
     FakeEventSource.instances[1].emit(frame('assistant_text', 4, { turn: 1, text: 'b' }))
@@ -188,6 +244,7 @@ describe('openSessionStream', () => {
       onEvent: () => {},
       onWarnings: (w) => warnings.push(w),
     })
+    FakeEventSource.instances[0].open()
     await vi.waitFor(() => expect(warnings.length).toBe(1))
     expect(warnings[0]).toEqual(['损坏段隔离: 1 行'])
   })
@@ -200,6 +257,7 @@ describe('openSessionStream', () => {
       onEvent: (f) => events.push(f.kind),
       onWarnings: () => {},
     })
+    FakeEventSource.instances[0].open()
     await flushAsync()
     expect(FakeEventSource.instances.length).toBe(1)
     expect(events).toEqual(['turn_started'])
@@ -220,6 +278,7 @@ describe('openSessionStream', () => {
       onEvent: () => {},
       onWarnings: () => {},
     })
+    FakeEventSource.instances[0].open()
     await flushAsync()
     expect(FakeEventSource.instances.length).toBe(1)
     stream.close()
@@ -227,13 +286,14 @@ describe('openSessionStream', () => {
     await vi.advanceTimersByTimeAsync(10_000)
     await flushAsync()
     expect(FakeEventSource.instances.length).toBe(1)
-    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(eventsCalls(fetchMock).length).toBe(1)
+    expect(openCalls(fetchMock).length).toBe(1)
   })
 
   it('re-claims interactive on every stream open（评审 C1：宽限内重连重申交互权）', async () => {
     // 失败链(修复前):审批挂起 → SSE 闪断 → 服务端 release 进入 10s 宽限 →
     // EventSource 重连只做对账+订阅,从不重 claim → 宽限到点 CancelAll(
-    // interactive_offline)拒绝在审请求,尽管客户端已回来。修复:每次流建立
+    // interactive_offline) 拒绝在审请求,尽管客户端已回来。修复:每次流建立
     // (含重连)的 onopen 都重申交互权——服务端 claim 同 client 幂等,且取消
     // 宽限离线计时(host.go claim 语义)。
     vi.useFakeTimers()
@@ -242,8 +302,6 @@ describe('openSessionStream', () => {
       onEvent: () => {},
       onWarnings: () => {},
     })
-    await flushAsync()
-    expect(FakeEventSource.instances.length).toBe(1)
     FakeEventSource.instances[0].open()
     await flushAsync()
     expect(openCalls(fetchMock).length).toBe(1) // 首次流建立即重申

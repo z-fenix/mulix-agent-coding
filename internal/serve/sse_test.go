@@ -85,7 +85,9 @@ func startSSE(t *testing.T, rawURL, cookieVal string) *sseStream {
 	return s
 }
 
-// waitConnected 等订阅就绪(服务端已 Subscribe,后续 submit 事件必达)。
+// waitConnected 等订阅就绪(评审 I2 修复后:`: connected` 在 Subscribe 之后
+// flush——握手行到达即订阅在册,后续 submit 事件必达;旧序的「flush 先于
+// Subscribe」丢失窗由该顺序钉死)。
 func (s *sseStream) waitConnected(t *testing.T, timeout time.Duration) {
 	t.Helper()
 	select {

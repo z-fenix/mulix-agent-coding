@@ -60,6 +60,16 @@ func (a *webAPI) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	clientID := clientIDOf(r)
+	// 订阅先于握手行(评审 I2):`: connected` 承诺「订阅已就绪」——通道就位
+	// 后才 flush 握手,连接到订阅之间的发布不再有丢失窗(缓冲通道在 flush 前
+	// 积累,与客户端对账的重叠帧由 (kind,seq) 去重吸收)。
+	ch, unsub := h.sink.Subscribe()
+	defer func() {
+		unsub()
+		if clientID != "" {
+			h.release(clientID) // 非持有者 no-op;持有者进入宽限
+		}
+	}()
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
@@ -68,13 +78,6 @@ func (a *webAPI) handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 	flusher.Flush()
 
-	ch, unsub := h.sink.Subscribe()
-	defer func() {
-		unsub()
-		if clientID != "" {
-			h.release(clientID) // 非持有者 no-op;持有者进入宽限
-		}
-	}()
 	hb := time.NewTicker(sseHeartbeat)
 	defer hb.Stop()
 	for {
