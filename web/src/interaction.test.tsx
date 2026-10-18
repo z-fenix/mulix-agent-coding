@@ -132,6 +132,13 @@ describe('交互面（task-12）', () => {
     const bar = screen.getByRole('alertdialog')
     expect(bar.textContent).toContain('Bash')
     expect(bar.textContent).toContain('go test ./...')
+    // a11y：模态语义 + 焦点陷阱（末按钮 Tab → 首按钮）
+    expect(bar.getAttribute('aria-modal')).toBe('true')
+    const barButtons = bar.querySelectorAll<HTMLButtonElement>('.approval-actions button')
+    expect(barButtons.length).toBe(3)
+    barButtons[barButtons.length - 1].focus()
+    fireEvent.keyDown(bar, { key: 'Tab' })
+    expect(document.activeElement).toBe(barButtons[0])
     // 独占语义：composer 冻结（发送禁用）
     expect(btn('发送').disabled).toBe(true)
     // 点击 允许一次 → api 收 allow → 卡即清（TUI resolve 同语义）
@@ -153,10 +160,33 @@ describe('交互面（task-12）', () => {
     fireEvent.keyDown(window, { key: 'n' })
     await act(async () => {})
     expect(sendApproval).toHaveBeenLastCalledWith(SID, 'tu-3', 'deny')
-    // 无点击的服务端裁决（如超时）：approval_resolved 到达即清除
+    // 无点击的服务端裁决（如超时）：approval_resolved 到达即清除；焦点恢复到 composer
     pushFrame({ kind: 'approval_request', ev: { seq: 5, turn: 1, tool_use_id: 'tu-4', tool: 'Bash', input: { command: 'ls' }, timeout: 30 } })
     expect(screen.getByRole('alertdialog')).toBeTruthy()
     pushFrame({ kind: 'approval_resolved', ev: { seq: 6, tool_use_id: 'tu-4', decision: 'deny', source: 'timeout', resolved_by: 'timeout' } })
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect((document.activeElement as HTMLElement | null)?.className).toContain('composer-input')
+  })
+
+  it('审批 POST 失败：拦截条保留、行内错误、按钮恢复可重试；成功后清卡', async () => {
+    await openSessionUI()
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '失败重试流' } })
+    pushFrame({ kind: 'approval_request', ev: { seq: 20, turn: 1, tool_use_id: 'tu-9', tool: 'Bash', input: { command: 'make test' }, timeout: 60 } })
+    vi.mocked(sendApproval).mockRejectedValueOnce(new ApiError(500, '审批投递失败'))
+    await act(async () => {
+      fireEvent.click(btn(/允许一次/))
+    })
+    expect(sendApproval).toHaveBeenCalledWith(SID, 'tu-9', 'allow')
+    // 失败不清卡：拦截条保留（服务端仍在等待），行内错误，按钮恢复可重试
+    expect(screen.queryByRole('alertdialog')).not.toBeNull()
+    expect(screen.getByRole('alertdialog').textContent).toContain('审批投递失败')
+    expect(btn(/允许一次/).disabled).toBe(false)
+    // 重试成功 → 清卡
+    vi.mocked(sendApproval).mockResolvedValueOnce({ ok: true })
+    await act(async () => {
+      fireEvent.click(btn(/允许一次/))
+    })
+    expect(sendApproval).toHaveBeenLastCalledWith(SID, 'tu-9', 'allow')
     expect(screen.queryByRole('alertdialog')).toBeNull()
   })
 

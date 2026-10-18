@@ -541,3 +541,9 @@ kbd {
   border-color: var(--err);
   color: var(--err);
 }
+
+.approval-error {
+  margin: 0;
+  color: var(--err);
+  font-size: 12px;
+}

@@ -134,14 +134,19 @@ export default function App() {
     cancelTurn(selectedId).catch((e) => setError(errMessage(e)))
   }, [selectedId])
 
-  // handleDecide 审批裁决：动作即清卡（TUI approval.go resolve 同语义——回执
-  // 事件随后到达时转录留痕，幂等）；失败显形（如 404 无此待审——竞态已被
-  // 服务端裁决）。
+  // handleDecide 审批裁决：成功才清卡（.then clearApproval）；失败由拦截条行内
+  // 呈现并保留可重试（评审修复轮 1——「动作即清卡」会让 POST 失败时服务端审批
+  // 悬等 120s 且无重试通路；TUI 的「动作即清卡」是进程内同步调用、无失败窗口，
+  // web 面以「成功清卡」对齐 fail-closed）。在途防重复提交由 ApprovalBar 的
+  // busy 状态承担（按钮与键位同门）。
   const handleDecide = useCallback(
-    (decision: ApprovalDecision) => {
-      if (!selectedId || !approvalPending) return
-      clearApproval()
-      sendApproval(selectedId, approvalPending.tool_use_id, decision).catch((e) => setError(errMessage(e)))
+    (decision: ApprovalDecision): Promise<void> => {
+      if (!selectedId || !approvalPending) return Promise.resolve()
+      return sendApproval(selectedId, approvalPending.tool_use_id, decision)
+        .then(() => {
+          clearApproval()
+        })
+        .then(() => undefined)
     },
     [selectedId, approvalPending, clearApproval],
   )
