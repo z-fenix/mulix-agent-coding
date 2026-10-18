@@ -1,0 +1,429 @@
+/*
+ * transcript.css——转录面真实渲染样式（task-11）。全部样式驻本文件（提交范围
+ * 约束：task 11 只动 web/src/transcript/** 与 TranscriptPane.tsx），令牌一律引用
+ * theme.css（--surface1-3/--code-block/--diff-*/--fg 层级/--accent/--err/--warn/
+ * --success/--info）。文档式阅读面：≤72ch 阅读列、正文字体（theme.css 的调试态
+ * mono 全列灰在此收口——代码/标识符仍在局部回 mono）。
+ */
+
+/* ---- 阅读列：文档式收口（覆盖 theme.css 调试态 mono 全列样式）---- */
+.transcript-list {
+  max-width: 72ch;
+  margin: 0 auto;
+  gap: 12px;
+  font-family:
+    'IBM Plex Sans',
+    'PingFang SC',
+    'Microsoft YaHei',
+    'Noto Sans SC',
+    system-ui,
+    sans-serif;
+  font-size: 14px;
+  color: var(--fg);
+}
+
+.transcript-entry:empty {
+  display: none;
+}
+
+/* ---- markdown 正文 ---- */
+.md-text {
+  line-height: 1.7;
+  overflow-wrap: break-word;
+}
+
+.md-text > :first-child {
+  margin-top: 0;
+}
+
+.md-text > :last-child {
+  margin-bottom: 0;
+}
+
+.md-text h1,
+.md-text h2,
+.md-text h3,
+.md-text h4 {
+  margin: 1em 0 0.4em;
+  line-height: 1.3;
+  color: var(--fg);
+}
+
+.md-text p,
+.md-text ul,
+.md-text ol,
+.md-text blockquote,
+.md-text table {
+  margin: 0.5em 0;
+}
+
+.md-text ul,
+.md-text ol {
+  padding-left: 1.5em;
+}
+
+.md-text blockquote {
+  border-left: 3px solid var(--border);
+  color: var(--fg-secondary);
+  padding-left: 10px;
+}
+
+.md-text a {
+  color: var(--accent);
+}
+
+.md-text code {
+  font-family: 'IBM Plex Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.9em;
+  background: var(--surface3);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.md-text pre {
+  background: var(--code-block);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  overflow-x: auto;
+}
+
+.md-text pre code {
+  background: transparent;
+  padding: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+/* ---- highlight.js 令牌化配色（不引 hljs 官方主题——随 light/dark 令牌走）---- */
+.hljs {
+  color: var(--fg);
+  background: transparent;
+}
+
+.hljs-comment,
+.hljs-quote {
+  color: var(--fg-tertiary);
+  font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-meta .hljs-keyword,
+.hljs-doctag {
+  color: var(--accent);
+}
+
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-attribute,
+.hljs-meta .hljs-string {
+  color: var(--success);
+}
+
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-link {
+  color: var(--warn);
+}
+
+.hljs-title,
+.hljs-title.function_,
+.hljs-name,
+.hljs-type,
+.hljs-class .hljs-title,
+.hljs-selector-id,
+.hljs-selector-class {
+  color: var(--info);
+}
+
+.hljs-variable,
+.hljs-template-variable,
+.hljs-attr,
+.hljs-property {
+  color: var(--fg);
+}
+
+.hljs-built_in,
+.hljs-builtin-name {
+  color: var(--info);
+}
+
+.hljs-deletion {
+  color: var(--err);
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: 600;
+}
+
+/* ---- 工具卡 ---- */
+.tool-card {
+  background: var(--surface3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.tool-card--failed {
+  border-color: var(--err);
+}
+
+.tool-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 7px 10px;
+  font-size: 13px;
+}
+
+.tool-card--failed .tool-glyph {
+  color: var(--err);
+}
+
+.tool-card--done .tool-glyph {
+  color: var(--success);
+}
+
+.tool-card--running .tool-glyph {
+  color: var(--accent);
+}
+
+.tool-name {
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.tool-arg {
+  font-family: 'IBM Plex Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 12px;
+  color: var(--fg-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-state {
+  margin-left: auto;
+  flex: none;
+  font-size: 12px;
+  color: var(--fg-tertiary);
+}
+
+.tool-card--failed .tool-state {
+  color: var(--err);
+}
+
+.tool-card--running .tool-state {
+  color: var(--accent);
+}
+
+.tool-card-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding: 8px 10px;
+}
+
+.tool-input,
+.tool-output {
+  margin: 0;
+  background: var(--code-block);
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-family: 'IBM Plex Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--fg-secondary);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.tool-fail-detail {
+  margin: 0;
+  color: var(--err);
+  font-size: 12.5px;
+}
+
+/* ---- 思考折叠块 ---- */
+.thinking-block {
+  color: var(--fg-tertiary);
+}
+
+.thinking-head {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 2px 4px;
+  margin-left: -4px;
+  font-size: 13px;
+  color: var(--fg-tertiary);
+}
+
+.thinking-tokens {
+  font-size: 12px;
+}
+
+.thinking-text {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  background: var(--surface2);
+  border-left: 2px solid var(--border);
+  font-family: 'IBM Plex Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--fg-tertiary);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+/* ---- 系统行（通知/回执/失败留痕）---- */
+.system-line {
+  font-size: 13px;
+}
+
+.system-line--dim {
+  color: var(--fg-tertiary);
+}
+
+.system-line--warn {
+  color: var(--warn);
+}
+
+.system-line--error {
+  color: var(--err);
+}
+
+/* ---- 委派卡 ---- */
+.delegation {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.delegation-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.delegation--running .delegation-glyph {
+  color: var(--accent);
+}
+
+.delegation--done .delegation-glyph {
+  color: var(--success);
+}
+
+.delegation--cancelled .delegation-glyph {
+  color: var(--fg-tertiary);
+}
+
+.delegation--failed .delegation-glyph,
+.delegation--failed .delegation-label {
+  color: var(--err);
+}
+
+.delegation-label {
+  color: var(--fg);
+}
+
+.delegation-id {
+  font-family: 'IBM Plex Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 12px;
+  color: var(--fg-tertiary);
+}
+
+.delegation-detail {
+  color: var(--fg-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.delegation-receipt {
+  margin-left: 22px;
+  color: var(--fg-tertiary);
+  font-family: 'IBM Plex Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 12px;
+}
+
+/* ---- diff 视图（--diff-* 令牌：底色整行 + marker 前景）---- */
+.diff-block {
+  font-family: 'IBM Plex Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow-x: auto;
+  background: var(--code-block);
+}
+
+.diff-row {
+  display: flex;
+  min-width: max-content;
+}
+
+.diff-no {
+  flex: none;
+  width: 3.5ch;
+  padding: 0 4px;
+  text-align: right;
+  color: var(--fg-tertiary);
+  user-select: none;
+}
+
+.diff-marker {
+  flex: none;
+  width: 1ch;
+  padding: 0 2px;
+  user-select: none;
+}
+
+.diff-text {
+  padding-right: 10px;
+  white-space: pre;
+}
+
+.diff-row--add {
+  background: var(--diff-added-bg);
+}
+
+.diff-row--add .diff-marker {
+  color: var(--diff-added-marker);
+}
+
+.diff-row--del {
+  background: var(--diff-deleted-bg);
+}
+
+.diff-row--del .diff-marker {
+  color: var(--diff-deleted-marker);
+}
+
+.diff-row--meta {
+  color: var(--fg-tertiary);
+}
+
+.diff-row--context .diff-text {
+  color: var(--fg-secondary);
+}
