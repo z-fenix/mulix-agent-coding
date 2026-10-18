@@ -211,6 +211,45 @@ describe('交互面（task-12）', () => {
     expect(btn('发送').disabled).toBe(false)
   })
 
+  it('submit 403 → 只读横幅（评审 C1/M2：交互权丢失可观测）', async () => {
+    await openSessionUI()
+    // 宽限竞态/被接管后 submit → 服务端 403;App 须降级只读(横幅+输入禁用),
+    // 而非静默失败(修复前 App.readonly 恒 false,无接管通路)。
+    vi.mocked(submitText).mockRejectedValueOnce(new ApiError(403, 'readonly: interactive holder required'))
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '降级前的输入' } })
+    await act(async () => {
+      fireEvent.click(btn('发送'))
+    })
+    const banner = await screen.findByRole('alert')
+    expect(banner.textContent).toContain('只读')
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(true)
+    // 403 不上错误条(与 open 403 同口径——接管按钮即恢复通路),输入保留
+    expect(document.querySelector('.app-error')).toBeNull()
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('降级前的输入')
+    // 接管 → 角色回交互 → 横幅消失
+    vi.mocked(openSession).mockResolvedValueOnce({ id: SID, role: 'interactive' })
+    await act(async () => {
+      fireEvent.click(btn('接管'))
+    })
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(false)
+  })
+
+  it('approval 403 → 只读横幅、拦截条退场（评审 C1/M2）', async () => {
+    await openSessionUI()
+    pushFrame({ kind: 'approval_request', ev: { seq: 30, turn: 1, tool_use_id: 'tu-ro', tool: 'Bash', input: { command: 'ls' }, timeout: 30 } })
+    expect(screen.getByRole('alertdialog')).toBeTruthy()
+    vi.mocked(sendApproval).mockRejectedValueOnce(new ApiError(403, 'readonly: interactive holder required'))
+    await act(async () => {
+      fireEvent.click(btn(/允许一次/))
+    })
+    // 交互权丢失:横幅呈现,拦截条随 readonly 门控退场(POST 403 意味着裁决
+    // 必然不能落盘,保留拦截条只会造成可裁决的假象)
+    const banner = await screen.findByRole('alert')
+    expect(banner.textContent).toContain('只读')
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+  })
+
   it('工作区门禁：未选工作区 → composer 提交禁用（FR-011）', async () => {
     vi.mocked(getWorkspaces).mockResolvedValue([])
     await openSessionUI()

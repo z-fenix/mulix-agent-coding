@@ -306,6 +306,76 @@ func TestE2EInteractiveGoneDenyViaHTTP(t *testing.T) {
 	})
 }
 
+// TestE2EReconnectWithinGraceReclaims 钉(评审 C1,FR-009 裁定的线级契约):
+// 审批挂起 → 交互端断开 SSE(服务端 release 进入宽限)→ 宽限内重连重申交互权
+// (POST open——前端 stream.ts 每次 EventSource open 同形态)→ claim 取消宽限
+// 离线计时 → 审批**不**被 fail-closed deny(镜像无 interactive_offline 裁决),
+// 且重连后的审批 POST 照常成功、回合收口。前端若不在重连时重 claim,本契约
+// 即被破坏(宽限到点 CancelAll 拒绝在审请求——正是评审 C1 的失败链)。
+func TestE2EReconnectWithinGraceReclaims(t *testing.T) {
+	old := gracePeriod
+	gracePeriod = 300 * time.Millisecond
+	defer func() { gracePeriod = old }()
+
+	env := newHTTPEnv(t, scriptWithApproval(t, "req-reconnect", "tu-reconnect"))
+	id := createAndOpen(t, env, "e2e-reconnect")
+
+	s := openSSE(t, env.srv.URL, id, "e2e-reconnect")
+	s.waitConnected(t, 2*time.Second)
+
+	submitText(t, env, id, "e2e-reconnect", "write it")
+	s.waitFrame(t, "approval_request", 10*time.Second) // 泵已阻塞在审批桥
+
+	// 交互端断开 = 持有者 release → 进入宽限;等服务端确实观察到断开
+	// (release 生效)再重连——否则同 client claim 先于 release 只是幂等空转,
+	// 测不到「宽限计时被取消」这一契约面。
+	s.resp.Body.Close()
+	waitForCond(t, 2*time.Second, "服务端 release 生效(持有者清空)", func() bool {
+		h, ok := env.mgr.get(id)
+		return ok && holderOf(h) == ""
+	})
+
+	// 宽限内重连:重开流 + POST open 重申交互权(前端 stream.ts onopen 同形态)
+	resp := httpDo(t, "POST", env.srv.URL+"/api/sessions/"+id+"/open", "e2e-reconnect", env.srv.URL, `{}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("re-claim open status = %d, want 200(body: %s)", resp.StatusCode, body)
+	}
+	var opened struct {
+		Role string `json:"role"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&opened); err != nil || opened.Role != "interactive" {
+		t.Fatalf("re-claim role = %+v (%v), want interactive(宽限内重连即交互端就位)", opened, err)
+	}
+
+	// 宽限已过(等待数倍宽限时长)而审批未被 interactive_offline deny
+	time.Sleep(3 * gracePeriod)
+	events, _ := mirrorEvents(t, env, id)
+	for _, e := range events {
+		if r, ok := e.(event.ApprovalResolvedEvent); ok {
+			t.Fatalf("宽限内重连仍被 fail-closed deny(重 claim 未取消离线计时): %+v", r)
+		}
+	}
+
+	// 重连后的流 + 审批 POST 照常成功,回合收口(allow 后泵续跑)
+	s2 := openSSE(t, env.srv.URL, id, "e2e-reconnect")
+	defer s2.resp.Body.Close()
+	s2.waitConnected(t, 2*time.Second)
+
+	resp2 := httpDo(t, "POST", env.srv.URL+"/api/sessions/"+id+"/approval", "e2e-reconnect", env.srv.URL, `{"tool_use_id":"tu-reconnect","decision":"allow"}`)
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp2.Body)
+		t.Fatalf("approval after reconnect status = %d, want 200(body: %s)", resp2.StatusCode, body)
+	}
+	resFrame := s2.waitFrame(t, "approval_resolved", 10*time.Second)
+	if ev := evOf(resFrame); ev == nil || ev["decision"] != "allow" || ev["resolved_by"] != "user" {
+		t.Fatalf("approval_resolved ev = %v, want allow/user", ev)
+	}
+	s2.waitFrame(t, "turn_done", 10*time.Second)
+}
+
 // TestE2ECrossProcessLockViaHTTP 钉(场景 4,红线 fail-closed):会话目录被
 // 外部进程新鲜锁(pid=99999,heartbeat=now)持有 → POST open 409 且 body 呈
 // 持有者 pid——绝不静默接管别人活着的会话。

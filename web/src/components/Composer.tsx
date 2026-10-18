@@ -44,10 +44,14 @@ export default function Composer({
       await onSubmit(t)
       setText('')
     } catch (e) {
-      // 409 = 回合在飞（FR-006 契约提示语）：行内提示 + 输入保留；其余错误
-      // 上抛 App 错误条（如 403 只读、400 空 text）。
+      // 409 = 回合在飞（FR-006 契约提示语）：行内提示 + 输入保留；403 = 只读
+      // 降级（评审 C1/M2，App 已切只读横幅 + readonly 提示生效）——输入保留
+      // 待接管后续提交，不上错误条（与 open 403 同口径）；其余错误上抛 App
+      // 错误条（如 400 空 text）。
       if (e instanceof ApiError && e.status === 409) {
         setNotice(TURN_RUNNING_HINT)
+      } else if (e instanceof ApiError && e.status === 403) {
+        /* 只读降级：横幅 + readonly 提示已呈现，此处仅保留输入 */
       } else {
         onError?.(e)
       }

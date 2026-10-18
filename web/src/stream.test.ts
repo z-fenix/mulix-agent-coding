@@ -20,6 +20,12 @@ class FakeEventSource {
     this.url = url
     FakeEventSource.instances.push(this)
   }
+  // open 模拟连接就绪(真实 EventSource 在收到 200 + text/event-stream 头后
+  // 触发 onopen——服务端此时已 Subscribe,I2 修复后握手行先于订阅就绪语义)。
+  open() {
+    this.readyState = 1
+    this.onopen?.({ type: 'open' })
+  }
   emit(frame: unknown) {
     this.onmessage?.({ data: JSON.stringify(frame) })
   }
@@ -49,17 +55,26 @@ function ndjson(lines: unknown[]): string {
   return lines.map((l) => JSON.stringify(l)).join('\n') + '\n'
 }
 
-// fetch 桩：/events → 指定 NDJSON；其余 URL 一律拒绝（意外调用显形）。
+// fetch 桩：/events → 指定 NDJSON；/open（C1 重申交互权）→ interactive 应答；
+// 其余 URL 一律拒绝（意外调用显形）。
 function stubFetch(replay: unknown[]) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input)
     if (url.endsWith(`/api/sessions/${id}/events`)) {
       return { ok: true, status: 200, text: async () => ndjson(replay) }
     }
+    if (url.endsWith(`/api/sessions/${id}/open`)) {
+      return { ok: true, status: 200, json: async () => ({ id, role: 'interactive' }) }
+    }
     throw new Error(`unexpected fetch: ${url}`)
   })
   vi.stubGlobal('fetch', fetchMock)
   return fetchMock
+}
+
+// openCalls 统计 fetch 桩收到的 POST /open 次数（C1 重申交互权的断言面）。
+function openCalls(fetchMock: ReturnType<typeof stubFetch>) {
+  return fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/open'))
 }
 
 describe('openSessionStream', () => {
@@ -192,5 +207,32 @@ describe('openSessionStream', () => {
     await flushAsync()
     expect(FakeEventSource.instances.length).toBe(1)
     expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('re-claims interactive on every stream open（评审 C1：宽限内重连重申交互权）', async () => {
+    // 失败链(修复前):审批挂起 → SSE 闪断 → 服务端 release 进入 10s 宽限 →
+    // EventSource 重连只做对账+订阅,从不重 claim → 宽限到点 CancelAll(
+    // interactive_offline)拒绝在审请求,尽管客户端已回来。修复:每次流建立
+    // (含重连)的 onopen 都重申交互权——服务端 claim 同 client 幂等,且取消
+    // 宽限离线计时(host.go claim 语义)。
+    vi.useFakeTimers()
+    const fetchMock = stubFetch([warningsFrame, frame('turn_started', 1)])
+    openSessionStream(id, {
+      onEvent: () => {},
+      onWarnings: () => {},
+    })
+    await flushAsync()
+    expect(FakeEventSource.instances.length).toBe(1)
+    FakeEventSource.instances[0].open()
+    await flushAsync()
+    expect(openCalls(fetchMock).length).toBe(1) // 首次流建立即重申
+    // 断连重连:新流 open 后再次重申(宽限计时由重 claim 取消)
+    FakeEventSource.instances[0].fail()
+    await vi.advanceTimersByTimeAsync(600)
+    await flushAsync()
+    expect(FakeEventSource.instances.length).toBe(2)
+    FakeEventSource.instances[1].open()
+    await flushAsync()
+    expect(openCalls(fetchMock).length).toBe(2)
   })
 })

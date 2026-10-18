@@ -13,7 +13,7 @@
 //
 // 去重键 = `${kind}:${ev.seq}`；ev 无数值 seq 的事件帧不做去重（直通一次）
 // ——当前 15 Kind 均带 seq，此分支是向前兼容的兜底面。
-import { fetchSessionEvents } from './api'
+import { fetchSessionEvents, openSession } from './api'
 import { isWarningsFrame, isWireFrame, type WireFrame } from './types'
 
 export interface SessionStreamHandlers {
@@ -94,6 +94,12 @@ export function openSessionStream(id: string, handlers: SessionStreamHandlers): 
         source = es
         es.onopen = () => {
           attempt = 0 // 连接成功：退避计数归零
+          // 重申交互权（评审 C1）：每次流建立（含重连）都重 claim——宽限期内
+          // 重连时服务端 claim 同 client 幂等且取消离线计时（FR-009 裁定：
+          // 重连即交互端就位；否则宽限到点 CancelAll 会拒绝在审请求）。
+          // 失败不阻断流：下一轮重连再试；交互权丢失的可观测面是 mutating
+          // 403（App 降级只读横幅）。
+          openSession(id).catch(() => {})
         }
         es.onmessage = (m) => {
           try {

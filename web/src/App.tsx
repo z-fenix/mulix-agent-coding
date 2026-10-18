@@ -120,11 +120,19 @@ export default function App() {
   }, [workspace, refreshSessions])
 
   // handleSubmit 返回 Promise<void>——Composer 据此 await 结果：成功清空、
-  // 409 行内提示（FR-006）、其余经 onError 上抛错误条。
+  // 409 行内提示（FR-006）、其余经 onError 上抛错误条。403 = 交互权已易主
+  // （宽限竞态/被接管，评审 C1/M2）：降级只读让接管横幅出现（可观测面），
+  // 再原样上抛——Composer 对 403 只保留输入不上错误条（与 open 403 同口径，
+  // 接管按钮即恢复通路）。
   const handleSubmit = useCallback(
     (text: string): Promise<void> => {
       if (!selectedId) return Promise.resolve()
-      return submitText(selectedId, text).then(() => undefined)
+      return submitText(selectedId, text)
+        .catch((e) => {
+          if (e instanceof ApiError && e.status === 403) setReadonly(true)
+          throw e
+        })
+        .then(() => undefined)
     },
     [selectedId],
   )
@@ -138,13 +146,19 @@ export default function App() {
   // 呈现并保留可重试（评审修复轮 1——「动作即清卡」会让 POST 失败时服务端审批
   // 悬等 120s 且无重试通路；TUI 的「动作即清卡」是进程内同步调用、无失败窗口，
   // web 面以「成功清卡」对齐 fail-closed）。在途防重复提交由 ApprovalBar 的
-  // busy 状态承担（按钮与键位同门）。
+  // busy 状态承担（按钮与键位同门）。403 = 交互权已易主（评审 C1/M2）：降级
+  // 只读——横幅呈现、拦截条随 readonly 门控退场（POST 403 意味着裁决必然不能
+  // 落盘，保留拦截条只会呈现可裁决的假象）。
   const handleDecide = useCallback(
     (decision: ApprovalDecision): Promise<void> => {
       if (!selectedId || !approvalPending) return Promise.resolve()
       return sendApproval(selectedId, approvalPending.tool_use_id, decision)
         .then(() => {
           clearApproval()
+        })
+        .catch((e) => {
+          if (e instanceof ApiError && e.status === 403) setReadonly(true)
+          throw e
         })
         .then(() => undefined)
     },
