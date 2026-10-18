@@ -528,6 +528,50 @@ func TestSwapResetsChangesPanel(t *testing.T) {
 	}
 }
 
+// TestChangesTabSelWindow 钉（终审 Finding 2）：变更条目取景窗——sel 居中
+// （listWindow 同公式，侧栏 Task 13 同源）：条目超窗时 sel 行恒可见（现状按
+// 预算 break 截断，sel 可落进渲染不出的条目）；页签行位置计数缀场（双案齐做
+// 之二——「变更 3/7」式，侧栏「会话 3/7」同形态）；展开预览吃预算后 sel 行仍
+// 可见（非 sel 预览截断不偷 sel 行预算）。
+func TestChangesTabSelWindow(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	// 7 条目：a.go 为 Write 大文件（预览 13 行——吃预算主力），b..g 为单行 Edit。
+	m = update(t, m, tuiEvent{ev: event.ToolUseRequestedEvent{Seq: 1, ToolUseID: "c0", Tool: "Write",
+		Input: json.RawMessage(`{"file_path":"a.go","content":"l00\nl01\nl02\nl03\nl04\nl05\nl06\nl07\nl08\nl09\nl10\nl11"}`)}})
+	m = update(t, m, tuiEvent{ev: event.ToolResultEvent{Seq: 2, ToolUseID: "c0", Content: "ok"}})
+	for i, p := range []string{"b.go", "c.go", "d.go", "e.go", "f.go", "g.go"} {
+		m = seedDoneEdit(t, m, int64(3+2*i), fmt.Sprintf("c%d", i+1), p, "x", "y")
+	}
+	// (1) 条目超窗（H=8 → 预算 6 < 7 条目）：sel 环绕到末条目——sel 行恒可见。
+	m = update(t, m, tea.WindowSizeMsg{Width: 130, Height: 8})
+	m.focus = focusPanel
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyUp}) // 0 → 6（环绕）
+	if m.panel.sel != 6 {
+		t.Fatalf("precondition: sel wrapped to the last entry, got %d", m.panel.sel)
+	}
+	if v := ansi.Strip(m.panelView(32)); !strings.Contains(v, "g.go") {
+		t.Fatalf("sel row must stay visible when entries overflow the window:\n%s", v)
+	}
+	// (2) 位置计数：溢出时 active 页签名缀「变更 3/7」式计数（sel+1/总数）。
+	m.panel.sel = 2
+	if v := m.panelView(32); !strings.Contains(v, "变更 3/7") {
+		t.Fatalf("overflowing tab row must carry the position counter:\n%q", v)
+	}
+	// (3) 展开预览吃预算后 sel 行仍可见：预览驻 a.go、sel 移至 d.go（预览随
+	// sel 移动留守原条目——togglePanelPreview 语义）；a.go 预览截断让位。
+	m.panel.sel = 0
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter}) // 展开 a.go 预览
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyDown})  // sel → 3（d.go）
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.panel.previewPath != "a.go" || m.panel.sel != 3 {
+		t.Fatalf("precondition: preview on a.go, sel on d.go: %q %d", m.panel.previewPath, m.panel.sel)
+	}
+	if v := ansi.Strip(m.panelView(32)); !strings.Contains(v, "d.go") {
+		t.Fatalf("sel row must stay visible when an expanded preview eats the budget:\n%s", v)
+	}
+}
+
 // TestPanelFocusKeys 钉（brief：↑/↓ 移 sel——聚焦面板且变更页签才路由；文本
 // 键永不劫持照常进 composer；Esc 取焦回主列且预览态保留（取焦不关面板）；
 // F2 关面板沿焦点失效重置；窄档 <130 残值焦点不路由）。

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -134,7 +135,7 @@ func (m *tuiModel) panelView(width int) string {
 			b.WriteString("  ")
 		}
 		if panelTab(i) == m.panel.tab {
-			b.WriteString(panelTabActive(label))
+			b.WriteString(panelTabActive(m.panelTabLabel(panelTab(i))))
 			continue
 		}
 		b.WriteString(activeTheme.dim(label))
@@ -173,6 +174,23 @@ func panelTabActive(s string) string {
 		return sgrWrap(fg+";4", s)
 	}
 	return sgrWrap("4", s)
+}
+
+// panelTabLabel 页签显示名（终审 Finding 2 双案齐做之二）：变更页签条目溢出
+// 内容窗（n > 行预算 m.height−panelChromeRows）时缀位置计数「变更 3/7」——取
+// 景窗只露窗内行，总量与游标位不可见，计数只报事实（侧栏「会话 3/7」同款形态
+// ，Task 17 闭环先例）；不溢出裸名（既有帧面零扰动——TestPanelViewTabRow/
+// mapping 页签字面钉点不动）。sel 越界防御钳位（min(sel+1, n)）。
+func (m *tuiModel) panelTabLabel(tab panelTab) string {
+	label := panelTabLabels[tab]
+	if tab != tabChanges {
+		return label
+	}
+	n := len(m.collectChanges())
+	if n == 0 || n <= max(m.height-panelChromeRows, 1) {
+		return label
+	}
+	return fmt.Sprintf("%s %d/%d", label, min(m.panel.sel+1, n), n)
 }
 
 // panelEmptyState 页签空态指引（spec Edge Cases：空态给文案不渲染空白框）：
@@ -285,31 +303,40 @@ func (m *tuiModel) collectChanges() []changeEntry {
 	return m.changes
 }
 
-// changesTabView 变更页签内容（Task 14）：条目行（changeEntryRow）按插入序
-// 排布，展开条目（previewPath 命中）行下内联 renderDiff 预览——preview 取窗
-// 由 panelState.scroll 起始、余高收口钳位（窗尾不出预览、预览不出面板列；
-// scroll 按键驱动归 Task 17 焦点全模型，本任务只落取窗机制）。内容区行预算 =
-// m.height−panelChromeRows，超预算截断（panelColumn 同口径的显式收口——大清
-// 单取景窗与侧栏 Task 13 同演进路径，后续任务接管）。空表回空态指引（不造数
-// ——spec Edge Cases）。
+// changesTabView 变更页签内容（Task 14）：条目行（changeEntryRow）取景窗排布
+// ——窗由 m.panel.sel 居中锚定派生（终审 Finding 2：listWindow 同公式，侧栏
+// Task 13 同源——条目超窗时 sel 行恒在窗内，环绕导航可达全部条目无静默行丢失
+// ；溢出时页签行缀位置计数 panelTabLabel「变更 3/7」式），展开条目（previewPath
+// 命中）行下内联 renderDiff 预览——preview 取窗由 panelState.scroll 起始、余高
+// 收口钳位（窗尾不出预览、预览不出面板列；按键驱动见 panelScrollKey）。内容区
+// 行预算 = m.height−panelChromeRows。空表回空态指引（不造数——spec Edge Cases）。
 func (m *tuiModel) changesTabView(width int) string {
 	entries := m.collectChanges()
 	if len(entries) == 0 {
 		return panelEmptyState(tabChanges, width)
 	}
 	budget := max(m.height-panelChromeRows, 1)
+	lo, hi := listWindow(len(entries), budget, m.panel.sel)
 	var rows []string
-	for i, e := range entries {
+	for i := lo; i < hi; i++ {
 		if budget <= 0 {
 			break
 		}
+		e := entries[i]
 		rows = append(rows, changeEntryRow(width, e, i == m.panel.sel))
 		budget--
 		if e.path != m.panel.previewPath || e.card == nil || e.card.diff == nil {
 			continue
 		}
 		preview := renderDiff(*e.card.diff, width, activeTheme)
-		if take := min(budget, len(preview)); take > 0 {
+		// 预算收口（终审 Finding 2 sel 恒可见）：sel 条目的预览吃余预算（sel
+		// 行已在场——预览渲染于 sel 行之下）；非 sel 条目的预览截断到「余预算
+		// − 窗内后续条目行」——不偷后续条目行（含 sel 行）的预算。
+		take := min(budget, len(preview))
+		if i != m.panel.sel {
+			take = min(take, max(budget-(hi-i-1), 0))
+		}
+		if take > 0 {
 			// scroll 取窗：上界钳位使窗尾不出预览（窗恒 ⊆ 面板列高内）。
 			sc := min(m.panel.scroll, len(preview)-take)
 			if sc < 0 {
