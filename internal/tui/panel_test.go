@@ -451,14 +451,22 @@ func TestPanelDoctorCacheScrollKeys(t *testing.T) {
 	if v := ansi.Strip(m.panelView(32)); !strings.Contains(v, "d00") {
 		t.Fatalf("PgUp back to top must show the content head:\n%s", v)
 	}
-	// cache 页签：路由在场（状态推进）且空态指引照常呈现（钳位吸收不丢失）。
+	// cache 页签（minors 清理 Final deferred 谓词收紧）：空态**不消费**——scroll
+	// 保持 doctor 腿残值、指引照常呈现（旧钉「钳位吸收」系收紧前行为，行为
+	// 收紧后反转为不消费；根因=消费即 no-op，scroll 推进而画面不动）。
 	m.panel.tab = tabCache
 	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyPgDown})
-	if m.panel.scroll == 0 {
-		t.Fatal("cache tab PgDn must route the scroll state")
+	if m.panel.scroll != 0 { // 前腿「回退到顶」已归零——消费则推进步长 3
+		t.Fatalf("empty cache tab must not consume PgDn, scroll = %d", m.panel.scroll)
 	}
 	if v := ansi.Strip(m.panelView(32)); !strings.Contains(v, "暂无用量数据") {
-		t.Fatalf("cache tab copy must survive the clamp:\n%s", v)
+		t.Fatalf("cache tab copy must survive:\n%s", v)
+	}
+	// 有可滚内容才消费：播种记账回合（模型同款 UsageRoot/selfID）后 PgDn 推进。
+	seedUsageTurn(t, m.opts.UsageRoot, "s-x", 0)
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyPgDown})
+	if m.panel.scroll == 0 {
+		t.Fatal("cache tab with content must route PgDn")
 	}
 }
 
