@@ -143,6 +143,52 @@ func (s *Store) ReadAllEvents() ([]any, error) {
 	return events, nil
 }
 
+// ReadEventsRelaxed 非变异回放读（web 只读回放面）：好行照读（eventFromKind
+// 还原类型化事件，顺序 = 行序），损坏段（尾部半行/超限行，jsonl.Damage）降级
+// 为 warnings（含物理行号）返回，**不改写镜像任何字节**——无隔离转储、无截断、
+// 无压实（那些是 Replay 的恢复语义，只属于恢复链；web 回放必须原封不动）。
+// 完整好行解码失败（未知 kind/记录 JSON 损坏）仍 fail-closed 报错——完整行的
+// 治理形态异常不属本函数降级范围。文件不可读 → err（对齐 ReadAllEvents）。
+func (s *Store) ReadEventsRelaxed() (events []any, warnings []string, err error) {
+	r, err := jsonl.OpenReader(filepath.Join(s.dir, "events.jsonl"))
+	if err != nil {
+		return nil, nil, fmt.Errorf("sessionx: open reader: %w", err)
+	}
+	defer r.Close()
+	lines, dmg, err := r.ReadAllWithStatus()
+	if err != nil {
+		return nil, nil, fmt.Errorf("sessionx: read: %w", err)
+	}
+	if dmg.HalfTail {
+		// 半行物理行号 = 完整行 + 超限段 + 1：ReadAllWithStatus 消费了它又从
+		// lines 摘除，其 lineNo 含超限段，故按三者之和还原。
+		halfLineNo := len(lines) + len(dmg.Oversized) + 1
+		warnings = append(warnings, fmt.Sprintf(
+			"sessionx: half-line tail at line %d not decoded (mirror untouched)", halfLineNo))
+	}
+	for _, seg := range dmg.Oversized {
+		warnings = append(warnings, fmt.Sprintf(
+			"sessionx: oversized line %d (%d bytes) not decoded (mirror untouched)",
+			seg.LineNo, seg.TotalLen))
+	}
+	events = make([]any, 0, len(lines))
+	for i, line := range lines {
+		var record struct {
+			Kind string          `json:"kind"`
+			Ev   json.RawMessage `json:"ev"`
+		}
+		if err := json.Unmarshal(line, &record); err != nil {
+			return nil, warnings, fmt.Errorf("sessionx: record %d: %w", i, err)
+		}
+		ev, err := eventFromKind(record.Kind, record.Ev)
+		if err != nil {
+			return nil, warnings, fmt.Errorf("sessionx: record %d: %w", i, err)
+		}
+		events = append(events, ev)
+	}
+	return events, warnings, nil
+}
+
 // WriteCache 覆写 cache.json（Meter 汇总投影；由 control 调用）。
 func (s *Store) WriteCache(projection map[string]any) error {
 	return writeJSONFile(filepath.Join(s.dir, "cache.json"), projection)
