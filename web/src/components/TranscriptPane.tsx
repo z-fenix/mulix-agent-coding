@@ -80,11 +80,11 @@ function ApprovalLine({ entry }: { entry: ApprovalEntry }) {
   )
 }
 
-// NoticeLine 通知分级（TUI appendNotice 同口径）：warning 级 ！ 前缀告警槽，
-// 其余 · 前缀弱化行。
+// NoticeLine 通知分级（TUI appendNotice 同口径）：warning 级 ASCII "! " 前缀
+// 告警槽（TUI warnLine("! " + content) 同款），其余 · 前缀弱化行。
 function NoticeLine({ entry }: { entry: NoticeEntry }) {
   if (entry.level === 'warning') {
-    return <SystemLine tone="warn">{`！${entry.content}`}</SystemLine>
+    return <SystemLine tone="warn">{`! ${entry.content}`}</SystemLine>
   }
   return <SystemLine tone="dim">{`· ${entry.content}`}</SystemLine>
 }

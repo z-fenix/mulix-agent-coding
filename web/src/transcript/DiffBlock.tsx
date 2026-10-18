@@ -27,7 +27,12 @@ export function parseUnifiedDiff(source: string): DiffRow[] {
   const rows: DiffRow[] = []
   let oldNo = 0
   let newNo = 0
-  let inHeader = false // ---/+++ 之间与 mode 类残余头行区
+  let inHeader = false // diff --git 之后、首个 @@ 之前的文件头区
+  // hunkActive：@@ 之后的内容区。hunk 内不做文件头判定——内容行可以 --- /+++
+  // 开头（如删除行内容「-- item」产出「--- item」），误判会把余下 hunk 吞成
+  // meta 直到下一个 @@（评审 Important）。文件头只可能出现在 diff --git 与
+  // 首个 @@ 之间；diff --git 重置为新文件段。
+  let hunkActive = false
   for (const raw of source.split('\n')) {
     const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw
     const hunk = HUNK_RE.exec(line)
@@ -35,9 +40,40 @@ export function parseUnifiedDiff(source: string): DiffRow[] {
       rows.push({ type: 'meta', oldNo: null, newNo: null, text: line })
       oldNo = Number(hunk[1])
       newNo = Number(hunk[3])
+      hunkActive = true
       inHeader = false
       continue
     }
+    if (line.startsWith('diff --git ')) {
+      rows.push({ type: 'meta', oldNo: null, newNo: null, text: line })
+      hunkActive = false
+      inHeader = true
+      continue
+    }
+    if (hunkActive) {
+      if (line.startsWith('+')) {
+        rows.push({ type: 'add', oldNo: null, newNo, text: line.slice(1) })
+        newNo++
+        continue
+      }
+      if (line.startsWith('-')) {
+        rows.push({ type: 'del', oldNo, newNo: null, text: line.slice(1) })
+        oldNo++
+        continue
+      }
+      if (line.startsWith('\\')) {
+        // "\ No newline at end of file"——标记行，不推进行号。
+        rows.push({ type: 'meta', oldNo: null, newNo: null, text: line })
+        continue
+      }
+      // 上下文行（含被裁掉前导空格的空行）——双侧行号推进。
+      const text = line.startsWith(' ') ? line.slice(1) : line
+      rows.push({ type: 'context', oldNo, newNo, text })
+      oldNo++
+      newNo++
+      continue
+    }
+    // ---- hunk 外（文件头区 / 前言）----
     if (line.startsWith('--- ') || line.startsWith('+++ ')) {
       rows.push({ type: 'meta', oldNo: null, newNo: null, text: line })
       inHeader = true
@@ -53,31 +89,8 @@ export function parseUnifiedDiff(source: string): DiffRow[] {
       rows.push({ type: 'meta', oldNo: null, newNo: null, text: line })
       continue
     }
-    if (line.startsWith('+')) {
-      rows.push({ type: 'add', oldNo: null, newNo, text: line.slice(1) })
-      newNo++
-      continue
-    }
-    if (line.startsWith('-')) {
-      rows.push({ type: 'del', oldNo, newNo: null, text: line.slice(1) })
-      oldNo++
-      continue
-    }
-    if (line.startsWith('\\')) {
-      // "\ No newline at end of file"——标记行，不推进行号。
-      rows.push({ type: 'meta', oldNo: null, newNo: null, text: line })
-      continue
-    }
-    if (oldNo === 0 && newNo === 0) {
-      // 首个 hunk 之前的未识别行：非 diff 正文（前言等）按 meta 收，不冒充上下文。
-      rows.push({ type: 'meta', oldNo: null, newNo: null, text: line })
-      continue
-    }
-    // 上下文行（含被裁掉前导空格的空行）——双侧行号推进。
-    const text = line.startsWith(' ') ? line.slice(1) : line
-    rows.push({ type: 'context', oldNo, newNo, text })
-    oldNo++
-    newNo++
+    // 首个 hunk 之前的未识别行：非 diff 正文（前言等）按 meta 收，不冒充上下文。
+    rows.push({ type: 'meta', oldNo: null, newNo: null, text: line })
   }
   return rows
 }
@@ -85,15 +98,13 @@ export function parseUnifiedDiff(source: string): DiffRow[] {
 export default function DiffBlock({ diff }: { diff: string }) {
   const rows = useMemo(() => parseUnifiedDiff(diff), [diff])
   return (
-    <div className="diff-block" role="table" aria-label="diff">
+    // figure 语义：可命名区域（table/row 复合角色缺 cell 层不完整——评审 Minor，
+    // 改用单一 figure 命名角色）。
+    <div className="diff-block" role="figure" aria-label="diff">
       {rows.map((r, i) => (
-        <div key={i} className={`diff-row diff-row--${r.type}`} role="row">
-          <span className="diff-no diff-no--old" aria-label="old line">
-            {r.oldNo ?? ''}
-          </span>
-          <span className="diff-no diff-no--new" aria-label="new line">
-            {r.newNo ?? ''}
-          </span>
+        <div key={i} className={`diff-row diff-row--${r.type}`}>
+          <span className="diff-no diff-no--old">{r.oldNo ?? ''}</span>
+          <span className="diff-no diff-no--new">{r.newNo ?? ''}</span>
           <span className="diff-marker" aria-hidden>
             {r.type === 'add' ? '+' : r.type === 'del' ? '-' : ''}
           </span>

@@ -76,6 +76,36 @@ describe('DiffBlock', () => {
     expect(metas.some((m) => m.textContent?.includes('@@ -1,3 +1,3 @@'))).toBe(true)
     expect(metas.some((m) => m.textContent?.includes('--- a/foo.txt'))).toBe(true)
   })
+
+  it('treats ---/+++ content lines inside a hunk as del/add, not file headers', () => {
+    // 回归（评审 Important）：hunk 内删除行内容「-- item」在 diff 原文里呈
+    // 「--- item」，与文件头同前缀——不得误判吞掉余下 hunk。
+    const tricky = [
+      '@@ -1,4 +1,4 @@',
+      ' before',
+      '--- item',
+      '+++ item',
+      ' after',
+      '@@ -10,2 +10,2 @@',
+      '-gone',
+      '+here',
+    ].join('\n')
+    const { container } = render(<DiffBlock diff={tricky} />)
+    const dels = container.querySelectorAll('.diff-row--del')
+    const adds = container.querySelectorAll('.diff-row--add')
+    // hunk1：context(1,1) → ---item 删行 old 2 → +++item 加行 new 2 → context(3,3)。
+    expect(dels).toHaveLength(2)
+    expect(dels[0].querySelector('.diff-text')?.textContent).toBe('-- item')
+    expect(dels[0].querySelector('.diff-no--old')?.textContent).toBe('2')
+    expect(adds).toHaveLength(2)
+    expect(adds[0].querySelector('.diff-text')?.textContent).toBe('++ item')
+    expect(adds[0].querySelector('.diff-no--new')?.textContent).toBe('2')
+    // 后续 hunk 不受污染：第二 hunk 行号接 @@ 起点，类正常。
+    expect(dels[1].querySelector('.diff-no--old')?.textContent).toBe('10')
+    expect(dels[1].querySelector('.diff-text')?.textContent).toBe('gone')
+    expect(adds[1].querySelector('.diff-no--new')?.textContent).toBe('10')
+    expect(adds[1].querySelector('.diff-text')?.textContent).toBe('here')
+  })
 })
 
 describe('ToolCard', () => {
@@ -152,7 +182,8 @@ describe('TranscriptPane — 真实渲染集成', () => {
     ]
     const { container } = render(<TranscriptPane frames={frames} />)
     expect(container.querySelector('.md-text strong')?.textContent).toBe('markdown')
-    expect(container.textContent).toContain('careful')
+    // 警告前缀与 TUI 同款 ASCII "! "（评审 Minor）。
+    expect(container.textContent).toContain('! careful')
     expect(container.textContent).not.toContain('assistant_text')
   })
 })
