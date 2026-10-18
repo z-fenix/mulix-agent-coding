@@ -59,6 +59,7 @@ type sessionHost struct {
 	gone         chan struct{} // 宽限到点关闭(一次性);watchInteractiveGone 消费
 	graceTimer   *time.Timer   // 宽限计时器(nil=未挂)
 	graceGen     uint64        // 宽限代次:claim/close 取消即递增,回调比对防误关
+	goneFired    bool          // gone 已因宽限到期关闭(一次性闸;host 未终态,防二次 close panic)
 	lastActivity time.Time     // claim/release 刷新(idle-close 与列表消费)
 	stopWatcher  func()        // watchInteractiveGone stop(幂等)
 	unlock       func()        // 跨进程锁 release(Task 7 注入;nil=未持锁)
@@ -96,6 +97,11 @@ func newSessionHost(ctx context.Context, id, workspace string, resume bool, asse
 // 被他人持有 → readonly(nil——降级旁观非错误)。宽限期内任何 claim(含
 // 不同 client 接管)取消 pending 离线计时——重连即交互端就位,离线取消器
 // 不得误伤其待审请求(fail-closed 语义只对「无人」生效)。
+//
+// gone 已触发后再 claim 的语义(终审 Critical 裁定):照常授予交互权——
+// gone 是一次性离线信号,触发即已消费(CancelAll 已跑过),宿主并未终态,
+// 交互权与 claim 状态机无关;后续再次 release 到期由 goneFired 幂等兜住,
+// 不再二次 close(TestGoneFiredThenReclaimNoDoubleClose 钉死)。
 func (h *sessionHost) claim(clientID string) (sessionRole, error) {
 	if clientID == "" {
 		return roleReadonly, errors.New("serve: empty client id")
@@ -145,6 +151,10 @@ func (h *sessionHost) release(clientID string) {
 			return
 		}
 		h.graceTimer = nil
+		if h.goneFired {
+			return // 一次性:gone 已因更早的宽限到期关闭,宿主未终态——再 close 即 panic(终审 Critical)
+		}
+		h.goneFired = true
 		close(h.gone)
 	})
 }

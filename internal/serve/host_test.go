@@ -205,6 +205,44 @@ func TestNewSessionHostResumeStub(t *testing.T) {
 	}
 }
 
+// TestGoneFiredThenReclaimNoDoubleClose 钉(终审 Critical):宽限过期 gone
+// 触发后宿主并未终态——再 claim 照常获交互权(gone 是一次性离线信号,已
+// 消费);再次 release 到期不得二次 close(二次 close = AfterFunc goroutine
+// 内 panic,崩整个进程)。断言面:无 panic、gone 仍 closed、c3 claim 可用。
+func TestGoneFiredThenReclaimNoDoubleClose(t *testing.T) {
+	old := gracePeriod
+	gracePeriod = 10 * time.Millisecond
+	defer func() { gracePeriod = old }()
+	h := newTestHost(t, "s-gone-fired")
+	if _, err := h.claim("c1"); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	h.release("c1")
+	select {
+	case <-h.interactiveGone():
+	case <-time.After(2 * time.Second):
+		t.Fatal("宽限到点 gone 未触发")
+	}
+	// gone 已消费:claim 语义照旧(交互权恢复,宿主仍活着)
+	role, err := h.claim("c2")
+	if err != nil || role != roleInteractive {
+		t.Fatalf("gone 触发后 c2 claim = (%v, %v), want (interactive, nil)", role, err)
+	}
+	h.release("c2")
+	// 2×宽限:二次触发路径若存在,close of closed channel 在 AfterFunc
+	// goroutine 内 panic——测试进程直接崩,即 RED。
+	time.Sleep(100 * time.Millisecond)
+	select {
+	case <-h.interactiveGone(): // closed 通道 receive 立即返回:仍一次性
+	default:
+		t.Fatal("gone 通道状态异常(不再 closed)")
+	}
+	role, err = h.claim("c3")
+	if err != nil || role != roleInteractive {
+		t.Fatalf("c3 claim = (%v, %v), want (interactive, nil)", role, err)
+	}
+}
+
 // ---- hostManager ----
 
 // TestIdleCloseClosesHost 钉:空闲(无持有者、回合未在飞)超 idle 的 host
