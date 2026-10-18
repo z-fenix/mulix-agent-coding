@@ -53,6 +53,17 @@ func (e EventbusConfig) Enabled() (bool, error) {
 	}
 }
 
+// WebConfig 是 [web] 节(2026-10-18-web-ui-mvp Task 1):本地 web UI 服务参数。
+// 默认仅监听本机回环(spec FR-001);WorkspaceRoots 空 = serve 时取 cwd;
+// 非法值在 Load 末尾 fail-closed(port 界外/bind 显式空串/idle_close_minutes
+// 非正),与 [eventbus] 门同款,拒绝的配置不得成为 last good。
+type WebConfig struct {
+	Port             int      `toml:"port"`
+	Bind             string   `toml:"bind"`
+	WorkspaceRoots   []string `toml:"workspace_roots"`
+	IdleCloseMinutes int      `toml:"idle_close_minutes"`
+}
+
 // Config 是 mulix 的最终生效配置（design §12 骨架字段）。
 type Config struct {
 	DefaultModel string            `toml:"default_model"`
@@ -65,6 +76,7 @@ type Config struct {
 	MCP          MCPConfig         `toml:"mcp"`
 	Profile      ProfileConfig     `toml:"profile"`
 	Eventbus     EventbusConfig    `toml:"eventbus"`
+	Web          WebConfig         `toml:"web"`
 	Hooks        HooksConfig       `toml:"hooks"`
 }
 
@@ -155,6 +167,7 @@ func defaultConfig() Config {
 		Tools:        ToolsConfig{MemorySearch: false},
 		Memory:       MemoryConfig{RecallTopK: 3, RecallBudgetChars: 2000},
 		Subagent:     SubagentConfig{MaxDepth: 3, MaxConcurrent: 4},
+		Web:          WebConfig{Port: 3180, Bind: "127.0.0.1", IdleCloseMinutes: 10},
 	}
 }
 
@@ -242,6 +255,17 @@ func (l *Loader) Load(flags Flags, paths Paths) (*Config, []string, error) {
 	// 在 lastGood 赋值之前(拒绝的配置不得成为 last good)。
 	if _, eberr := cfg.Eventbus.Enabled(); eberr != nil {
 		return nil, warnings, eberr
+	}
+	// [web] 校验(2026-10-18-web-ui-mvp Task 1:非法值 fail-closed,错误含 "web")
+	// ——同在 lastGood 赋值之前;bind 空串只可能是显式配置(缺省 127.0.0.1)。
+	if cfg.Web.Port <= 0 || cfg.Web.Port > 65535 {
+		return nil, warnings, fmt.Errorf("config: web.port %d must be in [1, 65535]", cfg.Web.Port)
+	}
+	if cfg.Web.Bind == "" {
+		return nil, warnings, fmt.Errorf("config: web.bind %q must not be empty (显式空串拒绝;缺省 127.0.0.1)", cfg.Web.Bind)
+	}
+	if cfg.Web.IdleCloseMinutes <= 0 {
+		return nil, warnings, fmt.Errorf("config: web.idle_close_minutes %d must be positive", cfg.Web.IdleCloseMinutes)
 	}
 	l.lastGood = &cfg
 	return &cfg, warnings, nil
