@@ -277,7 +277,9 @@ func TestDeepseekDefault(t *testing.T) {
 		assertSlot(t, got.accentColor, want.accent)
 	}
 	fields := strings.Fields(themeCatalogList())
-	if len(fields) < 4 || fields[0] != "deepseek" || fields[1] != "deepseek-light" {
+	// minors 清理（T8 deferred）：目录恰 10 项（5 预设 × dark/light）——精确
+	// 下界语义（防预设增删漂移；首两项仍钉 deepseek 置首）。
+	if len(fields) != 10 || fields[0] != "deepseek" || fields[1] != "deepseek-light" {
 		t.Fatalf("catalog must lead with the deepseek pair, got %q", themeCatalogList())
 	}
 }
