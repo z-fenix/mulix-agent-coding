@@ -12,6 +12,7 @@ package serve
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -342,6 +343,32 @@ func (m *hostManager) list() []sessionSummary {
 func (m *hostManager) Close() {
 	m.stopOnce.Do(func() { close(m.stop) })
 	<-m.done
+}
+
+// closeAll 收口全部在册 host(进程关停路径——Run ctx 取消分支在 Shutdown 后
+// 调用):先对持桥 host CancelAll(deny 全部待审——pending 期间 ctrl.Close 等
+// 泵退出会拖满上界,与 http_test closeAllHosts 测试收口缝同纪律),再逐 host
+// close;单个失败不阻断其余(与 sweep 同容忍度),错误逐条回传供调用方留痕。
+// 清空注册表——收口后不再暴露死 host。幂等:已 closed 的 host.close 返 nil,
+// 二次调用安全。
+func (m *hostManager) closeAll(ctx context.Context) []error {
+	m.mu.Lock()
+	hosts := make([]*sessionHost, 0, len(m.hosts))
+	for _, h := range m.hosts {
+		hosts = append(hosts, h)
+	}
+	m.hosts = map[string]*sessionHost{}
+	m.mu.Unlock()
+	var errs []error
+	for _, h := range hosts {
+		if h.bridge != nil {
+			h.bridge.CancelAll("server-shutdown")
+		}
+		if err := h.close(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("serve: close session %s: %w", h.ID, err))
+		}
+	}
+	return errs
 }
 
 // sweep 是 idle-close 扫描核:每节拍扫一轮,可收口的 host close 并摘除

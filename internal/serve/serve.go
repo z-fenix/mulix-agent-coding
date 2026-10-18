@@ -44,6 +44,18 @@ type Options struct {
 // shutdownTimeout 优雅关停窗口:ctx 取消后给在途请求的收尾上限。
 const shutdownTimeout = 5 * time.Second
 
+// hostCloseTimeout 是逐 host 收尾上界:CancelAll 先 deny 全部待审(泵不被
+// 审批窗口卡住),健康路径毫秒级;上界只兜异常泵(子代理在飞等)。
+const hostCloseTimeout = 10 * time.Second
+
+// stderr 缺省 io.Discard(逐 host 收尾失败留痕面)。
+func (o Options) stderr() io.Writer {
+	if o.Stderr == nil {
+		return io.Discard
+	}
+	return o.Stderr
+}
+
 // Run 监听 bind:port 并服务,直至 ctx 取消(优雅 Shutdown)或监听出错。
 // hostManager 在此构造(idle 取 Config.Web.IdleCloseMinutes;≤0/Config nil →
 // newHostManager 兜底),进程生命周期与 server 同轨(Shutdown 后 Close)。
@@ -75,7 +87,17 @@ func Run(ctx context.Context, opts Options) error {
 	case <-ctx.Done():
 		shutCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
-		return srv.Shutdown(shutCtx)
+		sherr := srv.Shutdown(shutCtx)
+		// 逐 host 收尾(修复轮 1 裁定):mgr.Close 只停 idle 扫描——在册 host
+		// 的 ctrl/meter/store/web.lock 必须显式收口,否则引擎子进程孤儿化。
+		// 在 Shutdown 之后跑(在途 handler 已收完,无并发触 host);单个失败
+		// 不阻断其余,错误 stderr 留痕(不吞——审计面不静默)。
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), hostCloseTimeout)
+		defer closeCancel()
+		for _, err := range mgr.closeAll(closeCtx) {
+			_, _ = fmt.Fprintln(runOpts.stderr(), err)
+		}
+		return sherr
 	case err := <-serveErr:
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
