@@ -26,7 +26,10 @@ type sidebarState struct {
 }
 
 // sidebarSelMark sel 行指示（「› 」——设计 §7 符号表外新增，与 symFold ▸
-// 折叠标记不冲突；Task 11 deferred minor「sel 无可见游标」闭环）。
+// 折叠标记不冲突；Task 11 deferred minor「sel 无可见游标」闭环）。minors
+// 清理（T13 deferred）补记：与 symUserMsg「›」（用户消息前缀）同字形异义
+// ——不同列（侧栏 vs 气泡）、不同着色语境，撞面低；pickerView 的 sel 标记
+// 借用符号表字形（▸）已有先例。
 const (
 	// sidebarChromeRows 侧栏固定 chrome 行数（品牌行 + 「会话」目 + 聚焦边框
 	// 线 + 底部 /new 提示——取景窗之外的行预算；边框线随 Task 17 聚焦可见性
