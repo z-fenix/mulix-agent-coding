@@ -81,8 +81,14 @@ func (m *tuiModel) refreshSidebarSessions() {
 }
 
 // moveSidebar 环绕移动侧栏选中游标（movePicker 同公式——补全菜单/选择器同
-// 环绕口径）。
+// 环绕口径）。minors 清理（T13 deferred）：swapping-first 留痕拒绝——与
+// cycleFocus/handleSidebarEnter 同口径（在途换绑窗口内冻结侧栏交互；仅游标
+// 移动不触单飞，守卫为 UX 一致性收紧）。
 func (m *tuiModel) moveSidebar(delta int) {
+	if m.swapping {
+		m.appendLine("[换绑] 换绑进行中，稍候再试")
+		return
+	}
 	n := len(m.sidebar.sessions)
 	if n == 0 {
 		return

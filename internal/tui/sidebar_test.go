@@ -644,3 +644,27 @@ func TestSidebarWindowPositionHint(t *testing.T) {
 		t.Fatalf("non-overflowing window must keep the bare label:\n%s", got)
 	}
 }
+
+// TestMoveSidebarSwapGuard 钉（minors 清理 T13 deferred）：moveSidebar 与
+// cycleFocus/handleSidebarEnter 同 swapping-first 口径——在途换绑窗口内
+// ↑/↓ 留痕拒绝、sel 不动（仅游标移动不触单飞，守卫为 UX 一致性收紧）。
+func TestMoveSidebarSwapGuard(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m = update(t, m, tea.WindowSizeMsg{Width: 130, Height: 24})
+	m.opts.ListSessions = func() []SessionSummary {
+		return []SessionSummary{{ID: "s1", EngineID: "e1"}, {ID: "s2", EngineID: "e2"}}
+	}
+	m.refreshSidebarSessions()
+	if len(m.sidebar.sessions) < 2 {
+		t.Fatalf("precondition: need >=2 sessions, got %d", len(m.sidebar.sessions))
+	}
+	m.swapping = true
+	before := m.sidebar.sel
+	m.moveSidebar(1)
+	if m.sidebar.sel != before {
+		t.Fatalf("swap-window moveSidebar must not move sel: %d -> %d", before, m.sidebar.sel)
+	}
+	if !transcriptHas(t, m, "换绑进行中") {
+		t.Fatal("swap-window moveSidebar must leave a trace line")
+	}
+}
