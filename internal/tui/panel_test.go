@@ -876,6 +876,7 @@ func TestPanelScrollKeyTightened(t *testing.T) {
 // panel.scroll——跨页签渍留（doctor 滚到 N 切回变更从预览中部取窗）即红。
 func TestCyclePanelTabResetsScroll(t *testing.T) {
 	m, _, _ := newTestModel(t)
+	m = update(t, m, tea.WindowSizeMsg{Width: 130, Height: 24}) // 宽档——绕开窄档守卫
 	m.panel.scroll = 4
 	m.cyclePanelTab()
 	if m.panel.scroll != 0 {
