@@ -350,10 +350,11 @@ func (a *webAPI) hostAssembly() (assembleFn, hostOption) {
 	return fn, withAssembly(p)
 }
 
-// handleCreate POST /api/sessions {workspace}:清单校验 → cli 恢复门(409)
-// → 构造 host(assembleReal 建镜像+引导引擎)→ 跨进程锁(镜像目录已由装配
-// 落盘,锁随建随挂;失败即收口 host)→ 入册。新建随机 id 无并列可能,锁在
-// 构造后获取(claim 前——host.go 锁位约定)。
+// handleCreate POST /api/sessions {workspace}:清单校验 → cli 恢复门(409)→
+// 建镜像(sessionx.Create)→ 跨进程 web.lock(评审 M1:锁在装配前——锁失败/
+// 装配失败不留孤儿镜像;engine 引导耗时数秒,锁先就位防他人打开半装配会话)
+// → 装配 host(preparedStore 所有权移交 assembleReal)→ 入册。新建随机 id 无
+// 并列可能,目录只可能由本次创建落盘——任何失败路径 best-effort 移除。
 func (a *webAPI) handleCreate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Workspace string `json:"workspace"`
@@ -371,16 +372,33 @@ func (a *webAPI) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := randomToken()
-	fn, opt := a.hostAssembly()
-	h, err := newSessionHost(r.Context(), id, req.Workspace, false, fn, opt)
+	dir := sessionx.SessionDir(a.opts.SessionsRoot, id)
+	st, err := sessionx.Create(a.opts.SessionsRoot, sessionx.Options{
+		ID: id, Workspace: req.Workspace,
+		Unattended: false, // web 会话恒 attended(评审 C1,assembleReal 同口径)
+	})
 	if err != nil {
+		// Create 失败:目录可能是本次半建残骸(meta/events 写入中断)——
+		// best-effort 清除(随机 id 无并列,不存在他人目录可误删)。
+		_ = os.RemoveAll(dir)
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("create session: %v", err))
 		return
 	}
-	release, lerr := acquireSessionLock(sessionx.SessionDir(a.opts.SessionsRoot, id))
+	release, lerr := acquireLock(dir)
 	if lerr != nil {
-		_ = h.close(context.Background())
+		_ = st.Close()
+		_ = os.RemoveAll(dir) // M1:锁失败不留孤儿镜像
 		writeError(w, http.StatusConflict, fmt.Sprintf("session lock: %v", lerr))
+		return
+	}
+	fn, opt := a.hostAssembly()
+	h, err := newSessionHost(r.Context(), id, req.Workspace, false, fn, opt, withPreparedStore(st))
+	if err != nil {
+		// 装配失败:store 已由 assembleReal fail 闭包收口——释放锁并移除
+		// 本次创建的镜像目录(评审 M1 later-failure 分支)。
+		release()
+		_ = os.RemoveAll(dir)
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("create session: %v", err))
 		return
 	}
 	h.attachLock(release)
@@ -478,7 +496,7 @@ func (a *webAPI) handleOpen(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, fmt.Sprintf("会话 %s 回合 t%d 未收口（上次运行中断），拒绝续链", id, openTurn))
 		return
 	}
-	release, lerr := acquireSessionLock(dir)
+	release, lerr := acquireLock(dir)
 	if lerr != nil {
 		pid := 0
 		if l, rerr := readLock(filepath.Join(dir, lockFileName)); rerr == nil {

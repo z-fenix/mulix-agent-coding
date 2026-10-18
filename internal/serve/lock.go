@@ -39,6 +39,10 @@ type webLock struct {
 	HeartbeatUnix int64 `json:"heartbeat_unix"`
 }
 
+// acquireLock 是 HTTP 层取锁的接缝(M1:create 路径锁在装配前——注入失败可
+// 钉「锁失败不留孤儿镜像」清理面;生产直连 acquireSessionLock)。
+var acquireLock = acquireSessionLock
+
 // acquireSessionLock 获取会话的跨进程锁:新鲜锁拒绝(错误命名 pid);
 // 过期/损坏/缺失 → 原子写锁文件(tmp+rename)并启动心跳 goroutine 刷新。
 // release 幂等:停心跳(等待退出)后删锁文件。

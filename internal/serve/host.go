@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"mulix/internal/control"
+	"mulix/internal/sessionx"
 )
 
 // sessionRole 是 claim 的角色结果。
@@ -57,6 +58,11 @@ type sessionHost struct {
 	// params 是真实装配参数(Task 6 withAssembly 经变参注入;零值 = 桩装配
 	// 不读)。定义在 assemble.go——装配关注点与状态机分离。
 	params assembleParams
+	// preparedStore 是 create 路径 HTTP 层预建的镜像 store(评审 M1:web.lock
+	// 在装配前就位;所有权随调用移交 assembleReal——失败归 fail 闭包、成功归
+	// assembleRelease,与会话内 Create 路径同纪律)。nil = 装配自建镜像(resume
+	// 或非 HTTP 调用方)。装配关注点,消费面在 assemble.go withPreparedStore。
+	preparedStore *sessionx.Store
 	// assembleRelease 是装配资源收口(Task 6 装配成功后注入:meter/store——
 	// close 在 ctrl.Close 之后级联调用,恰一次)。nil = 桩装配(自管清理)。
 	assembleRelease func()

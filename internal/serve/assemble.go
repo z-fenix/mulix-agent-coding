@@ -85,6 +85,13 @@ func withAssembly(p assembleParams) hostOption {
 	return func(h *sessionHost) { h.params = p }
 }
 
+// withPreparedStore 注入 HTTP 层预建的镜像 store(评审 M1:create 路径
+// handleCreate 先建镜像并取 web.lock,再装配——所有权随调用移交 assembleReal:
+// 失败归其 fail 闭包收口,成功归 h.assembleRelease)。
+func withPreparedStore(st *sessionx.Store) hostOption {
+	return func(h *sessionHost) { h.preparedStore = st }
+}
+
 // assembleReal 是 web 会话的真实装配(buildComponents 对齐;Task 5 assembleFn
 // 槽的实现):镜像 store(resume = 恢复门+OpenStore / 新建 = Create)→ meter
 // (resume 续号)→ 规则集/policy/桥/Gate → memory/hooks 条件装配 → kernel
@@ -93,32 +100,13 @@ func withAssembly(p assembleParams) hostOption {
 // ctrl——cli openSession fail 闭包同纪律),无句柄泄漏。
 func assembleReal(ctx context.Context, h *sessionHost) (*control.Controller, *control.UserApprovalBridge, error) {
 	p := h.params
-	if p.Cfg == nil {
-		return nil, nil, errors.New("serve: assemble: config required (fail-closed)")
-	}
-	if p.SessionsRoot == "" || h.ID == "" {
-		return nil, nil, errors.New("serve: assemble: sessions root and session id required")
-	}
-	cfg := *p.Cfg
-	usageRoot := p.UsageRoot
-	if usageRoot == "" {
-		usageRoot = filepath.Dir(p.SessionsRoot)
-	}
-
+	// M1:HTTP 层预建的镜像 store 所有权先行移交——此后任何失败路径(含下方
+	// config/root 守卫)都归 fail 闭包收口,不得滞留 handleCreate 侧句柄
+	// (Windows 上句柄占用会卡 RemoveAll 清理)。
 	var store *sessionx.Store
-	var engineID string
-	var err error
-	if h.resume {
-		if store, engineID, err = openForResume(h, p.SessionsRoot); err != nil {
-			return nil, nil, err
-		}
-	} else {
-		if store, err = sessionx.Create(p.SessionsRoot, sessionx.Options{
-			ID: h.ID, Workspace: h.Workspace,
-			Unattended: false, // web 会话恒 attended(评审 C1)
-		}); err != nil {
-			return nil, nil, fmt.Errorf("serve: create mirror: %w", err)
-		}
+	if h.preparedStore != nil {
+		store = h.preparedStore
+		h.preparedStore = nil
 	}
 	var meter *cache.Meter
 	var ctrl *control.Controller
@@ -132,8 +120,39 @@ func assembleReal(ctx context.Context, h *sessionHost) (*control.Controller, *co
 		if meter != nil {
 			_ = meter.Close()
 		}
-		_ = store.Close()
+		if store != nil {
+			_ = store.Close()
+		}
 		return nil, nil, err
+	}
+	if p.Cfg == nil {
+		return fail(errors.New("serve: assemble: config required (fail-closed)"))
+	}
+	if p.SessionsRoot == "" || h.ID == "" {
+		return fail(errors.New("serve: assemble: sessions root and session id required"))
+	}
+	cfg := *p.Cfg
+	usageRoot := p.UsageRoot
+	if usageRoot == "" {
+		usageRoot = filepath.Dir(p.SessionsRoot)
+	}
+
+	var engineID string
+	var err error
+	switch {
+	case h.resume:
+		if store, engineID, err = openForResume(h, p.SessionsRoot); err != nil {
+			return nil, nil, err
+		}
+	case store != nil:
+		// M1:store 已由上方 preparedStore 移交(注释见函数头)。
+	default:
+		if store, err = sessionx.Create(p.SessionsRoot, sessionx.Options{
+			ID: h.ID, Workspace: h.Workspace,
+			Unattended: false, // web 会话恒 attended(评审 C1)
+		}); err != nil {
+			return fail(fmt.Errorf("serve: create mirror: %w", err))
+		}
 	}
 	// 记账:resume 续号(cli openSession 同序——同会话记账文件不撞回合号)。
 	offset := int64(0)

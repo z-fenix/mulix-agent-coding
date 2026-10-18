@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -39,6 +40,15 @@ type httpEnv struct {
 // 收口在册 host(泄漏的泵/镜像句柄会在 Windows 上卡 TempDir 清理)。
 func newHTTPEnv(t *testing.T, script engine.FakeScript) *httpEnv {
 	t.Helper()
+	return newHTTPEnvWith(t, func(o *Options) {
+		o.assemble = stubAssemble(t, o.SessionsRoot, script)
+	})
+}
+
+// newHTTPEnvWith 构造自定义 Options 的 HTTP 测试环境(注入失败装配/自定义
+// 缝——M1 清理路径等场景编排;SessionsRoot 先就位再调 mutate)。
+func newHTTPEnvWith(t *testing.T, mutate func(o *Options)) *httpEnv {
+	t.Helper()
 	root := t.TempDir()
 	cfg, _, err := config.NewLoader().Load(config.Flags{}, config.Paths{})
 	if err != nil {
@@ -53,7 +63,10 @@ func newHTTPEnv(t *testing.T, script engine.FakeScript) *httpEnv {
 		Workspace:    testWorkspace,
 		SessionsRoot: root,
 		Stderr:       os.Stderr,
-		assemble:     stubAssemble(t, root, script),
+		assemble:     stubAssemble(t, root, engine.FakeScript{}),
+	}
+	if mutate != nil {
+		mutate(&opts)
 	}
 	srv := httptest.NewServer(newMux(mgr, opts))
 	t.Cleanup(srv.Close)
@@ -90,12 +103,20 @@ func closeAllHosts(t *testing.T, mgr *hostManager) {
 func stubAssemble(t *testing.T, root string, script engine.FakeScript) assembleFn {
 	t.Helper()
 	return func(ctx context.Context, h *sessionHost) (*control.Controller, *control.UserApprovalBridge, error) {
-		store, err := sessionx.Create(root, sessionx.Options{ID: h.ID, Workspace: h.Workspace})
-		if err != nil {
-			return nil, nil, err
+		// M1:create 路径镜像由 HTTP 层预建(preparedStore 所有权移交;assembleReal
+		// 同款消费序)。否则(非 create 路径/旧调用面)自建。
+		store := h.preparedStore
+		h.preparedStore = nil
+		if store == nil {
+			var cerr error
+			store, cerr = sessionx.Create(root, sessionx.Options{ID: h.ID, Workspace: h.Workspace})
+			if cerr != nil {
+				return nil, nil, cerr
+			}
 		}
 		var meter *cache.Meter
 		var ctrl *control.Controller
+		var err error
 		fail := func(err error) (*control.Controller, *control.UserApprovalBridge, error) {
 			if ctrl != nil {
 				_ = ctrl.Close(ctx)
@@ -775,6 +796,62 @@ func TestEventsReplayWithWarnings(t *testing.T) {
 	defer resp2.Body.Close()
 	if resp2.StatusCode != http.StatusNotFound {
 		t.Fatalf("unknown events status = %d, want 404", resp2.StatusCode)
+	}
+}
+
+// TestCreateAssemblyFailureCleansMirror 钉(评审 M1):create 装配失败 → 500
+// 且不留孤儿镜像(镜像目录必为本次创建——随机 id 无并列;失败一律 best-effort
+// 清理,sessions root 回到空)。
+func TestCreateAssemblyFailureCleansMirror(t *testing.T) {
+	env := newHTTPEnvWith(t, func(o *Options) {
+		o.assemble = func(ctx context.Context, h *sessionHost) (*control.Controller, *control.UserApprovalBridge, error) {
+			// 模拟装配中途失败:镜像已由 HTTP 层预建(preparedStore 所有权
+			// 移交;失败收口归本闭包——assembleReal fail 闭包同纪律)。
+			if h.preparedStore != nil {
+				_ = h.preparedStore.Close()
+				h.preparedStore = nil
+			}
+			return nil, nil, errors.New("serve: assemble boom")
+		}
+	})
+
+	resp := httpDo(t, "POST", env.srv.URL+"/api/sessions", "c-boom", env.srv.URL, `{"workspace":"`+testWorkspace+`"}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("create status = %d, want 500(body: %s)", resp.StatusCode, body)
+	}
+	entries, err := os.ReadDir(env.root)
+	if err != nil {
+		t.Fatalf("read root: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("装配失败遗留孤儿镜像: %v", entries)
+	}
+}
+
+// TestCreateLockFailureCleansMirror 钉(评审 M1):web.lock 获取失败(装配前置)
+// → 409 且不留孤儿镜像(修复前:先装配后取锁,失败遗留已落盘的镜像目录)。
+func TestCreateLockFailureCleansMirror(t *testing.T) {
+	env := newHTTPEnvWith(t, nil)
+	oldAcquire := acquireLock
+	acquireLock = func(string) (func(), error) {
+		return nil, errors.New("serve: session locked by another process (injected)")
+	}
+	t.Cleanup(func() { acquireLock = oldAcquire })
+
+	resp := httpDo(t, "POST", env.srv.URL+"/api/sessions", "c-lock", env.srv.URL, `{"workspace":"`+testWorkspace+`"}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("create status = %d, want 409(body: %s)", resp.StatusCode, body)
+	}
+	entries, err := os.ReadDir(env.root)
+	if err != nil {
+		t.Fatalf("read root: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("锁失败遗留孤儿镜像: %v", entries)
 	}
 }
 
