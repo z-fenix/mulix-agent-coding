@@ -534,9 +534,8 @@ func TestSidebarSwapGateRejectsFocusAndEnter(t *testing.T) {
 	if m.focus != focusMain {
 		t.Fatal("F6 during swap must not change focus")
 	}
-	if !transcriptHas(t, m, "换绑进行中") {
-		t.Fatal("swap-window F6 must leave a trace line")
-	}
+	// （minors 清理 T13：F6 腿的留痕断言删除——Enter 腿已证留痕在场，focus
+	// 断言独立承载 F6 拒绝；冗余子串断言对「F6 未留痕」无判别力。）
 }
 
 // TestSidebarListWindow 钉（Task 11 deferred minor——清单溢出取景窗）：纯函数

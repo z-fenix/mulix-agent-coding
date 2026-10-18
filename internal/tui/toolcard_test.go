@@ -34,6 +34,19 @@ func TestToolCardSymbols(t *testing.T) {
 	if len(pairs) != 14 {
 		t.Fatalf("symbol table must pin exactly 14 glyphs, got %d", len(pairs))
 	}
+	// minors 清理（T4 deferred）：逐名恰现一次——重复行/缺名写法不再能穿过计数 tripwire。
+	seen := make(map[string]int, len(pairs))
+	for _, p := range pairs {
+		seen[p.name]++
+	}
+	if len(seen) != len(pairs) {
+		for name, n := range seen {
+			if n > 1 {
+				t.Fatalf("symbol %s pinned %d times", name, n)
+			}
+		}
+		t.Fatalf("duplicate symbol names detected")
+	}
 	for _, p := range pairs {
 		if p.got != p.want {
 			t.Fatalf("%s = %q, want %q", p.name, p.got, p.want)

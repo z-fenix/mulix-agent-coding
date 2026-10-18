@@ -114,6 +114,14 @@ func TestUserBubbleSurface2(t *testing.T) {
 	if !strings.Contains(ansi.Strip(got[0]), "› 你好") {
 		t.Fatalf("› prefix must survive the bubble restyle:\n%q", got[0])
 	}
+	// minors 清理（T5 deferred）：气泡几何溢出钉——width−6 内衬算术在 CJK 混排下
+	// 显示宽不超给定宽（算术回退 width−4 即溢出红；wrapcache 计量同口径）。
+	cjk := userBlock{text: "这是一段较长的中文气泡内容用于验证宽度计量不溢出"}.render(40)
+	for i, l := range cjk {
+		if w := ansi.StringWidth(l); w > 40 {
+			t.Fatalf("bubble line %d display width %d exceeds 40:\n%q", i, w, l)
+		}
+	}
 	// 多行输入：每个气泡行（含内衬空行）都带 surface2 bg
 	multi := userBlock{text: "第一行\n\n第二行"}.render(80)
 	for i, l := range multi {

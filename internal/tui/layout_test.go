@@ -60,13 +60,13 @@ func buildTestFrame(t *testing.T) string {
 }
 
 // sgrThemeRe 主题层 SGR（256 手选/真彩直排形态：38;5;N / 48;5;N / 38;2;r;g;b /
-// 48;2;r;g;b）。
-var sgrThemeRe = regexp.MustCompile(`\x1b\[(?:38|48);(?:5;\d+|2;\d+;\d+;\d+)m`)
+// 48;2;r;g;b）。minors 清理（T3 deferred）：基础 16 色形态（30-37/90-97 fg、
+// 40-47/100-107 bg）入禁列——编辑器换装（Task 7）已清 textarea 默认样式，
+// 主题槽不再产出基础色；无色层泄漏面由此全覆盖。
+var sgrThemeRe = regexp.MustCompile(`\x1b\[(?:(?:38|48);(?:5;\d+|2;\d+;\d+;\d+)|(?:3[0-7]|9[0-7]|4[0-7]|10[0-7]))m`)
 
 // sgrCount 主题层 SGR 计数——无色层「SGR 空集」断言面（与 theme_test.go
-// TestNoColorFallback 只查 38;2;/38;5; 同口径）。基础 16 色形态不在禁列：
-// bubbles textarea 组件默认样式（CursorLine bg-0 / Prompt fg-7）主题无关、
-// 先于本任务在场，编辑器换装归 Task 7。
+// TestNoColorFallback 同口径并扩展基础 16 色形态）。
 func sgrCount(s string) int { return len(sgrThemeRe.FindAllString(s, -1)) }
 
 // frameHasBGEveryLine 有色层满帧铺底钉点：frame 逐行含 bg 槽 SGR（预期形态由
@@ -84,6 +84,19 @@ func frameHasBGEveryLine(t *testing.T) bool {
 		if !strings.Contains(line, bgSeq) {
 			t.Logf("第 %d 行未铺底：%q", i, line)
 			return false
+		}
+		// minors 清理（T3 deferred）：reset-repaint 幸存钉——paintBG 的精确不变量：
+		// 非行尾的整段重置其紧邻后续必须是帧底 seq（逐点插入；行尾 lipgloss 收尾
+		// reset 后无可见内容、豁免）。移除 ReplaceAll 重铺则含内部重置+正文的行
+		// 即红（邻接断裂）；逐行仅 Contains 查不出该回归。
+		for _, loc := range sgrResetRe.FindAllStringIndex(line, -1) {
+			if loc[1] == len(line) {
+				continue // 行尾 reset——其后无可见内容
+			}
+			if line[loc[1]:min(loc[1]+len(bgSeq), len(line))] != bgSeq {
+				t.Logf("第 %d 行重置点 @%d 后未重铺帧底：%q", i, loc[1], line)
+				return false
+			}
 		}
 	}
 	return true
@@ -277,6 +290,7 @@ func TestColumnWidthsThresholds(t *testing.T) {
 		{"中档100只开侧栏", 100, true, false, 16, 84, 0},
 		{"中档100全开——面板恒0", 100, true, true, 16, 84, 0},
 		{"中档129全开——面板恒0", 129, true, true, 16, 113, 0},
+		{"中档129只关侧栏——关沿分支覆盖", 129, false, false, 0, 129, 0},
 		{"宽档130全开", 130, true, true, 16, 82, 32},
 		{"宽档130只开面板", 130, false, true, 0, 98, 32},
 		{"宽档130只开侧栏", 130, true, false, 16, 114, 0},

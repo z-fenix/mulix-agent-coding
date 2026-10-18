@@ -746,3 +746,83 @@ func TestPanelFocusEdge(t *testing.T) {
 		t.Fatalf("unfocused separator must not linger while focused:\n%q", v)
 	}
 }
+
+// TestChangeEntryRowZeroSideOmission 钉（minors 清理 T14 deferred）：计数零侧
+// 省略——added>0 仅发 green 段、deleted>0 仅发 red 段，零侧不发 `+0`/`−0`
+// （diffHead 同口径）；双侧齐发且槽色正确（green 114 / red 203，确定性 256 层）。
+func TestChangeEntryRowZeroSideOmission(t *testing.T) {
+	resetTheme(t)
+	applyTheme(defaultActiveTheme())
+	addOnly := changeEntryRow(40, changeEntry{path: "a.go", added: 2}, false)
+	if !strings.Contains(addOnly, "\x1b[38;5;114m+2") {
+		t.Fatalf("added side must carry the green slot:\n%q", addOnly)
+	}
+	if strings.Contains(addOnly, "-0") || strings.Contains(addOnly, "\x1b[38;5;203m-0") {
+		t.Fatalf("zero deleted side must be omitted:\n%q", addOnly)
+	}
+	delOnly := changeEntryRow(40, changeEntry{path: "b.go", deleted: 3}, false)
+	if !strings.Contains(delOnly, "\x1b[38;5;203m-3") {
+		t.Fatalf("deleted side must carry the red slot:\n%q", delOnly)
+	}
+	if strings.Contains(delOnly, "+0") || strings.Contains(delOnly, "\x1b[38;5;114m+0") {
+		t.Fatalf("zero added side must be omitted:\n%q", delOnly)
+	}
+	both := changeEntryRow(40, changeEntry{path: "c.go", added: 1, deleted: 2}, false)
+	if !strings.Contains(both, "+1") || !strings.Contains(both, "-2") {
+		t.Fatalf("both sides must render when nonzero:\n%q", both)
+	}
+}
+
+// TestPanelScrollFocusedNoPreviewFallsThrough 钉（minors 清理 Final deferred）：
+// 聚焦 + 变更页签 + 未展开预览 → PgUp/PgDn 不被面板消费——panel.scroll 不动、
+// 落回转写滚动（Task 2 谓词收紧的判别面：现实现消费即红）。
+func TestPanelScrollFocusedNoPreviewFallsThrough(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m = update(t, m, tea.WindowSizeMsg{Width: 130, Height: 24})
+	m = update(t, m, tuiEvent{ev: event.ToolUseRequestedEvent{Seq: 1, ToolUseID: "c1", Tool: "Edit",
+		Input: json.RawMessage(`{"file_path":"a.go","old_string":"x","new_string":"y"}`)}})
+	m = update(t, m, tuiEvent{ev: event.ToolResultEvent{Seq: 2, ToolUseID: "c1", Content: "ok"}})
+	// 转写溢出。
+	for i := range 40 {
+		m.appendLine(fmt.Sprintf("BLOCK%02d %s", i, strings.Repeat("x", 101)))
+	}
+	m.focus = focusPanel
+	m.panel.tab = tabChanges
+	m.panel.previewPath = "" // 未展开预览
+	m.View()                 // frame：换行缓存 sync + viewport 喂给
+	m.transcriptState.vp.SetYOffset(20)
+	m.markFollowTail()
+	before := m.transcriptState.vp.YOffset()
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyPgDown})
+	if m.panel.scroll != 0 {
+		t.Fatalf("no-preview PgDn must not touch panel.scroll, got %d", m.panel.scroll)
+	}
+	if m.transcriptState.vp.YOffset() == before {
+		t.Fatalf("no-preview PgDn must fall through to transcript scroll (before %d)", before)
+	}
+}
+
+// TestAgentsTabWidthTermUnfreezesAtNarrow 钉（minors 清理 T17 deferred）：
+// agentsTabInteractive 的宽度项直接钉——W<130 残焦（聚焦 agents 页签后窗口
+// 窄化）解冻：statusMode 不再呈现「agents 页签」、粘贴门禁解冻（handlePaste
+// 与 modalOpen 同谓词单源——行为跟随）。谓词回退（删宽度项）即红。
+func TestAgentsTabWidthTermUnfreezesAtNarrow(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m = update(t, m, tea.WindowSizeMsg{Width: 130, Height: 24})
+	m.panel.open = true
+	m.panel.tab = tabAgents
+	m.focus = focusPanel
+	if !m.agentsTabInteractive() {
+		t.Fatal("precondition: agents tab interactive at W=130")
+	}
+	if got := m.statusMode(); got != "agents 页签" {
+		t.Fatalf("precondition: statusMode = %q, want agents 页签", got)
+	}
+	m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 24})
+	if m.agentsTabInteractive() {
+		t.Fatal("narrowed residual focus must unfreeze the agents tab gate")
+	}
+	if got := m.statusMode(); got == "agents 页签" {
+		t.Fatalf("narrowed statusMode must not claim agents tab, got %q", got)
+	}
+}

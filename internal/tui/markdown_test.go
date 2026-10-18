@@ -176,7 +176,7 @@ func TestStreamingParagraphCommit(t *testing.T) {
 // TestFenceChromaHighlight pins（Task 19：FR-014/Story4）：
 //
 //	(a) go 围栏经 chroma 高亮——terminal256 SGR 直出，关键字 func 以独立
-//	    token 着色（SGR+reset 包裹），内容混 ≥3 种色（轨 245 + ≥2 token
+//	    token 着色（SGR+reset 包裹），内容混 ≥3 种色（轨 244 + ≥2 token
 //	    类），SGR 剥离后源码逐字无损；暗/亮主题输出不同（暗族 github-dark /
 //	    亮族 github——映射裁定见 markdown.go fenceChromaStyle 注记）；
 //	(b) 未知语言降级 accent 铺色——内容色只允许 accent(111)/轨(244)；

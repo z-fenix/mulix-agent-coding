@@ -278,4 +278,14 @@ func TestComposerDress(t *testing.T) {
 	if row = composerRow(); !strings.Contains(row, "\x1b[38;5;209m"+symPrompt) {
 		t.Fatalf("editor prompt must re-dress on theme switch:\n%q", row)
 	}
+	// minors 清理（T7 deferred）：主题切换支补钉——surface1 底仍铺 + textarea
+	// 组件默认样式（40/37 基础色）仍清零（Dress 机制对任意预设同构）。
+	if !strings.Contains(row, "\x1b[48;5;235m") {
+		t.Fatalf("editor row must keep the surface1 bg after theme switch:\n%q", row)
+	}
+	for _, bad := range []string{"\x1b[40m", "\x1b[37m"} {
+		if strings.Contains(row, bad) {
+			t.Fatalf("textarea default style must stay cleared after theme switch (%s):\n%q", bad, row)
+		}
+	}
 }

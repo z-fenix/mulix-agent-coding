@@ -566,6 +566,10 @@ func TestEventRenderMatrix(t *testing.T) {
 						t.Fatalf("doctor tab missing %q:\n%q", want, v)
 					}
 				}
+				// minors 清理（T18 deferred）：内容行槽色钉——doctorLines 逐行 dim。
+				if !strings.Contains(v, "\x1b[38;5;244m引擎锁：已锁定") {
+					t.Fatalf("doctor content line must carry dim slot:\n%q", v)
+				}
 			},
 		},
 		// 29. 面板页签行（cache·指引）：无数据（tempdir 零报告）→ 空态指引字面
@@ -581,6 +585,10 @@ func TestEventRenderMatrix(t *testing.T) {
 					if !strings.Contains(v, want) {
 						t.Fatalf("cache tab missing %q:\n%q", want, v)
 					}
+				}
+				// minors 清理（T18 deferred）：空态指引行槽色钉——panelEmptyState 逐行 dim。
+				if !strings.Contains(v, "\x1b[38;5;244m暂无用量数据") {
+					t.Fatalf("cache guidance line must carry dim slot:\n%q", v)
 				}
 			},
 		},

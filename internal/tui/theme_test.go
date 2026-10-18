@@ -321,6 +321,23 @@ func TestSgrBg(t *testing.T) {
 	if got := sgrBg(""); got != "" {
 		t.Fatalf("空槽: %q", got)
 	}
+	// minors 清理（T1 deferred）：基础 16 色映射与防御分支——此前仅测 256/hex/空三例。
+	// sgrBg 是背景映射：0-7 → 40+n、8-15 → 92+n（100-107）。
+	if got := sgrBg("3"); got != "43" {
+		t.Fatalf("基础色 bg: %q", got)
+	}
+	if got := sgrBg("11"); got != "103" {
+		t.Fatalf("基础亮色 bg: %q", got)
+	}
+	if got := sgrBg("999"); got != "" {
+		t.Fatalf("越界索引须不着色: %q", got)
+	}
+	if got := sgrBg("#XYZ"); got != "" {
+		t.Fatalf("非法 hex 须不着色: %q", got)
+	}
+	if got := sgrBg("-1"); got != "" {
+		t.Fatalf("负数索引须不着色: %q", got)
+	}
 }
 
 // ---- 渲染点暗/亮双主题矩阵（终审 Finding 3——SC-003 light 渲染点钉点补全）----

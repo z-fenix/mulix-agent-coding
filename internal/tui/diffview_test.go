@@ -228,9 +228,11 @@ func TestDiffRowBGSlots(t *testing.T) {
 		t.Fatalf("hunk separator must be exactly one dim ⋮ row, got %d:\n%s", n, joined)
 	}
 	// 上下文行不沾 diff 槽色（dim 行号 + chroma/平文——行 "c" 为 hunk1 上下文）。
+	// minors 清理（T6 deferred）：定位器 ansi.Strip 一致化（与 TestDiffHeaderCounts
+	// 同法）——SGR 参数纯数字不会含 'c'，但 Strip 后定位对夹具演化稳健。
 	var ctxRow string
 	for _, l := range lines[1:] {
-		if strings.Contains(l, "c") && ctxRow == "" {
+		if strings.Contains(ansi.Strip(l), "c") && ctxRow == "" {
 			ctxRow = l
 		}
 	}
@@ -260,5 +262,21 @@ func TestDiffRowBGSlots(t *testing.T) {
 	}
 	if !strings.Contains(plain, "+ X") || !strings.Contains(plain, "- b") {
 		t.Fatalf("content must survive the degrade:\n%q", plain)
+	}
+}
+
+// TestDiffRowBGSurvivesFramePaint 钉点（minors 清理 T6 deferred）：diff 行 bg
+// 在帧出口 paintBG 合成下的三元序——marker 段 reset → 帧底 234 插序 → diff 底
+// 22 重铺在后（后写生效）。TestDiffRowBGSlots 钉 renderDiff 原输出；本钉补
+// 「经 paintBG 后仍存活且次序 234 在前 22 在后」——仿 TestFenceBGSurvivesFramePaint。
+func TestDiffRowBGSurvivesFramePaint(t *testing.T) {
+	resetTheme(t)
+	applyTheme(defaultActiveTheme())
+	d := diffInput{path: "a.go", verb: "改", before: "a\nb\n", after: "a\nX\n"}
+	joined := strings.Join(renderDiff(d, 60, activeTheme), "\n")
+	painted := paintBG(joined, 60)
+	triple := "\x1b[0m\x1b[48;5;234m\x1b[48;5;22m"
+	if !strings.Contains(painted, triple) {
+		t.Fatalf("diff added-bg must survive the frame paint as reset→frame→diff:\nwant %q\ngot:\n%q", triple, painted)
 	}
 }

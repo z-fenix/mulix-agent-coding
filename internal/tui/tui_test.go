@@ -205,19 +205,9 @@ func typeStr(_ *tuiModel, s string) tea.Msg { return typedInput(s) }
 func TestSlashCache(t *testing.T) {
 	root := t.TempDir()
 	id := "tui-cache-01"
-	meter, err := cache.NewMeter(cache.MeterOptions{
-		Root: root, SessionID: id,
-		Pricing: cache.Pricing{InputPerMTok: 3, OutputPerMTok: 15},
-	})
-	if err != nil {
-		t.Fatalf("meter: %v", err)
-	}
-	if _, err := meter.Observe(cache.TurnUsage{InputTokens: 100, CacheReadTokens: 300, OutputTokens: 20}); err != nil {
-		t.Fatalf("observe: %v", err)
-	}
-	if err := meter.Close(); err != nil { // 落盘并释放 usage 文件（Windows 句柄）
-		t.Fatalf("meter close: %v", err)
-	}
+	// minors 清理（T16 deferred）：播种形状与 panel_test 的 seedUsageTurn 合一
+	// （同包复用；TurnOffset=0 等价旧内联形态）。
+	seedUsageTurn(t, root, id, 0)
 	sink := NewSink()
 	stub := &stubController{}
 	m := newTuiModel(Options{UsageRoot: root, Sink: sink}, stub, sink.Events(), id)
