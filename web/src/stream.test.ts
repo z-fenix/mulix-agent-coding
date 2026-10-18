@@ -130,12 +130,12 @@ describe('openSessionStream', () => {
     await flushAsync()
     expect(FakeEventSource.instances.length).toBe(1)
     expect(events.length).toBe(3)
-    // 断连：退避窗内不立即重连
+    // 断连：退避窗内不立即重连（首次退避 = 500ms，与实现注释「500ms 起」一致）
     FakeEventSource.instances[0].fail()
-    await vi.advanceTimersByTimeAsync(100)
+    await vi.advanceTimersByTimeAsync(400)
     expect(FakeEventSource.instances.length).toBe(1)
     // 退避到期：重新对账 + 新订阅；重放帧全部被去重
-    await vi.advanceTimersByTimeAsync(2000)
+    await vi.advanceTimersByTimeAsync(200)
     await flushAsync()
     expect(FakeEventSource.instances.length).toBe(2)
     expect(fetchMock).toHaveBeenCalledTimes(2)
@@ -154,6 +154,27 @@ describe('openSessionStream', () => {
     })
     await vi.waitFor(() => expect(warnings.length).toBe(1))
     expect(warnings[0]).toEqual(['损坏段隔离: 1 行'])
+  })
+
+  it('unknown-shape frame fail-closed：合法 JSON 但形态未知 → 断流重连而非静默丢弃', async () => {
+    vi.useFakeTimers()
+    stubFetch([warningsFrame, frame('turn_started', 1)])
+    const events: string[] = []
+    openSessionStream(id, {
+      onEvent: (f) => events.push(f.kind),
+      onWarnings: () => {},
+    })
+    await flushAsync()
+    expect(FakeEventSource.instances.length).toBe(1)
+    expect(events).toEqual(['turn_started'])
+    // 合法 JSON 但既非 wire frame 也非 warnings 帧：与对账路径同形态 fail-closed
+    FakeEventSource.instances[0].emit({ foo: 1 })
+    await vi.advanceTimersByTimeAsync(400)
+    expect(FakeEventSource.instances.length).toBe(1) // 退避窗内
+    await vi.advanceTimersByTimeAsync(200)
+    await flushAsync()
+    expect(FakeEventSource.instances.length).toBe(2) // 已断流重连
+    expect(events).toEqual(['turn_started']) // 未知帧未入转录
   })
 
   it('close() 停止一切：断连后关闭 → 不再重连不再对账', async () => {

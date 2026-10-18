@@ -25,6 +25,9 @@ export default function Composer({ onSubmit, onCancel, disabled = false }: Compo
         placeholder="输入任务…（Enter 发送，Shift+Enter 换行）"
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
+          // IME 组合态（候选词未确认）的 Enter 不发送——中文输入法确认候选词
+          // 同样触发 keydown Enter，缺守卫会把半成品文本提前发送并清空输入框。
+          if (e.nativeEvent.isComposing) return
           if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault()
             submit()

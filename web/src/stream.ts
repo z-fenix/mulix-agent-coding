@@ -62,7 +62,11 @@ export function openSessionStream(id: string, handlers: SessionStreamHandlers): 
     }
     if (isWireFrame(parsed)) {
       deliver(parsed)
+      return
     }
+    // 合法 JSON 但形态未知：与对账路径（fetchSessionEvents 抛 ApiError）同形态
+    // ——断流重连优于静默丢帧（fail-closed，不静默）。
+    throw new Error('stream frame shape unknown')
   }
 
   const backoffMs = () => Math.min(BACKOFF_BASE_MS * 2 ** attempt, BACKOFF_MAX_MS)
@@ -75,8 +79,9 @@ export function openSessionStream(id: string, handlers: SessionStreamHandlers): 
       source = null
     }
     if (timer !== null) clearTimeout(timer)
+    const delay = backoffMs() // 先算后增：首次重连即 500ms（与「500ms 起」口径一致）
     attempt += 1
-    timer = setTimeout(connect, backoffMs())
+    timer = setTimeout(connect, delay)
   }
 
   const connect = () => {
