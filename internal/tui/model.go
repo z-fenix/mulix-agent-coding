@@ -823,22 +823,30 @@ func (m *tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	// 面板聚焦键路由（Task 14 最小焦点形）：focus==focusPanel 且面板可见
-	//（开 + 宽档——侧栏同款双保险：关沿重置为主，几何退化/残值兜底）且页签
-	// 为变更时 ↑/↓/Enter 交面板（条目游标/预览开合），其余键照常落 composer
-	// ——数字与文本键永不劫持（与侧栏同口径）；其余页签不走本路由（agents
-	// 交互态由上方独占分支接管——Task 15 收编口径；doctor/cache 归 Task 16）。
-	// 补全菜单在场时其导航优先（上方分支）。
-	if m.focus == focusPanel && m.panel.open && m.width >= 130 && m.panel.tab == tabChanges {
-		switch msg.Code {
-		case tea.KeyUp:
-			m.movePanelSel(-1)
+	//（开 + 宽档——侧栏同款双保险：关沿重置为主，几何退化/残值兜底）时 ↑/↓/
+	// Enter 交变更页签（条目游标/预览开合），PgUp/PgDn 交面板滚动路由（终审
+	// Finding 1：变更预览展开滚预览窗、doctor/cache 页签滚内容窗——
+	// panelScrollKey 不可路由状态返回 false 落回转写滚动，现状只增不改），
+	// 其余键照常落 composer——数字与文本键永不劫持（与侧栏同口径）；其余页签
+	// 不走 ↑/↓/Enter 路由（agents 交互态由上方独占分支接管——Task 15 收编口径
+	// ；doctor/cache 的 ↑/↓ 无消费方）。补全菜单在场时其导航优先（上方分支）。
+	if m.focus == focusPanel && m.panel.open && m.width >= 130 {
+		if (msg.Code == tea.KeyPgUp || msg.Code == tea.KeyPgDown) &&
+			m.panelScrollKey(msg.Code == tea.KeyPgDown) {
 			return m, nil
-		case tea.KeyDown:
-			m.movePanelSel(+1)
-			return m, nil
-		case tea.KeyEnter:
-			m.togglePanelPreview()
-			return m, nil
+		}
+		if m.panel.tab == tabChanges {
+			switch msg.Code {
+			case tea.KeyUp:
+				m.movePanelSel(-1)
+				return m, nil
+			case tea.KeyDown:
+				m.movePanelSel(+1)
+				return m, nil
+			case tea.KeyEnter:
+				m.togglePanelPreview()
+				return m, nil
+			}
 		}
 	}
 	// 转写滚动手势（023 D5）：审批/agents 独占态在上方分支拦截——治理独占期

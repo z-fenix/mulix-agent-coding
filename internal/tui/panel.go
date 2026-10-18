@@ -369,6 +369,34 @@ func (m *tuiModel) movePanelSel(delta int) {
 	m.panel.sel = ((m.panel.sel+delta)%n + n) % n
 }
 
+// panelScrollStep 面板 PgUp/PgDn 滚动步长（终审 Finding 1 裁定：内容区行预算
+// 的一半——翻页保留上下文；下限 1 行）。
+func (m *tuiModel) panelScrollStep() int {
+	return max((m.height-panelChromeRows)/2, 1)
+}
+
+// panelScrollKey 面板聚焦态 PgUp/PgDn 路由（终审 Finding 1——panel.scroll 的
+// 按键驱动落位）：变更页签预览展开（previewPath 非空）滚预览窗（上界钳位复用
+// changesTabView 既有取窗钳位、下界 0 在此收口）、doctor/cache 页签滚内容窗
+// （panelLinesWindow 取窗钳位）。其余状态（agents 独占态已由 handleAgentsKey
+// 消费、变更页签未展开预览）返回 false——PgUp/PgDn 落回转写滚动（现状只增不改
+// ，TestPanelScrollUnfocusedNoop 钉）。
+func (m *tuiModel) panelScrollKey(down bool) bool {
+	switch {
+	case m.panel.tab == tabChanges && m.panel.previewPath != "",
+		m.panel.tab == tabDoctor,
+		m.panel.tab == tabCache:
+	default:
+		return false
+	}
+	delta := -m.panelScrollStep()
+	if down {
+		delta = m.panelScrollStep()
+	}
+	m.panel.scroll = max(m.panel.scroll+delta, 0)
+	return true
+}
+
 // togglePanelPreview Enter 预览开合（Task 14）：选中条目展开 → previewPath =
 // 条目 path、scroll 归零（新预览从头读）；展开态同条目再按收起；切换他条目
 // 直接换预览。无条目/游标越界 no-op（brief：目标外不动作）。
@@ -468,18 +496,16 @@ func (m *tuiModel) agentsTabRow(width int, in subagent.Info, selected bool) stri
 // 不变（矩阵面 TestSlashCache 持有）。
 
 // doctorTabView doctor 页签内容（Task 16）：doctorLines 逐行 dim 平文（面板
-// 约定——行宽 clampWidth 收口列宽，超宽行尾省略不撑破面板列）。空表回空态指
-// 引（panelEmptyState——「/doctor 命令运行」字面，不造数）。无显式行预算：
-// doctor 输出为短清单（检查逐行），超帧高由 panelColumn 行数收口兜底。
+// 约定——行宽 clampWidth 收口列宽，超宽行尾省略不撑破面板列），panelLinesWindow
+// 取窗（终审 Finding 1：聚焦态 PgUp/PgDn 滚内容窗——scroll 起始、预算收口、上
+// 界钳位到内容行数；scroll=0 全量首窗与 Task 16 现状等价——panelColumn 行数收
+// 口兜底不变）。空表回空态指引（panelEmptyState——「/doctor 命令运行」字面，
+// 不造数）。
 func (m *tuiModel) doctorTabView(width int) string {
 	if len(m.doctorLines) == 0 {
 		return panelEmptyState(tabDoctor, width)
 	}
-	out := make([]string, 0, len(m.doctorLines))
-	for _, l := range m.doctorLines {
-		out = append(out, activeTheme.dim(clampWidth(l, width)))
-	}
-	return strings.Join(out, "\n")
+	return m.panelLinesWindow(m.doctorLines, width)
 }
 
 // cacheTabView 缓存页签内容（Task 16）：cacheSummaryLines 同源读口（/cache
@@ -493,8 +519,23 @@ func (m *tuiModel) cacheTabView(width int) string {
 	if !ok {
 		return panelEmptyState(tabCache, width)
 	}
-	out := make([]string, 0, len(lines))
-	for _, l := range lines {
+	return m.panelLinesWindow(lines, width)
+}
+
+// panelLinesWindow 面板 dim 平文行窗（终审 Finding 1——doctor/cache 页签内容
+// 的滚动取窗单源）：panel.scroll 起始、行预算 m.height−panelChromeRows 收口、
+// 上界钳位到内容行数（窗尾对齐内容尾——连按滚动不出内容）、下界 0（键路
+// panelScrollKey 已收口，此处防御残值）。scroll=0 即全量首窗（Task 16 现状
+// ——panelColumn 行数收口兜底不变）。
+func (m *tuiModel) panelLinesWindow(lines []string, width int) string {
+	budget := max(m.height-panelChromeRows, 1)
+	lo := min(m.panel.scroll, max(len(lines)-budget, 0))
+	if lo < 0 {
+		lo = 0
+	}
+	hi := min(lo+budget, len(lines))
+	out := make([]string, 0, hi-lo)
+	for _, l := range lines[lo:hi] {
 		out = append(out, activeTheme.dim(clampWidth(l, width)))
 	}
 	return strings.Join(out, "\n")

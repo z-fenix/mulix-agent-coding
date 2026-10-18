@@ -366,6 +366,134 @@ func TestPanelPreviewScrollClamped(t *testing.T) {
 	}
 }
 
+// TestPanelPreviewScrollKeys 钉（终审 Finding 1）：面板聚焦 + 变更预览展开态
+// PgDn/PgUp 推进/回退 panel.scroll——渲染窗口随键位移（步长 = 内容区行预算的
+// 一半，panelScrollStep 裁定见 panel.go）；连按钳位上界（窗尾不出预览——
+// changesTabView 既有取窗钳位复用）、下界 0（回退到窗首）。
+func TestPanelPreviewScrollKeys(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m = update(t, m, tuiEvent{ev: event.ToolUseRequestedEvent{Seq: 1, ToolUseID: "c1", Tool: "Write",
+		Input: json.RawMessage(`{"file_path":"big.txt","content":"l00\nl01\nl02\nl03\nl04\nl05\nl06\nl07\nl08\nl09\nl10\nl11"}`)}})
+	m = update(t, m, tuiEvent{ev: event.ToolResultEvent{Seq: 2, ToolUseID: "c1", Content: "ok"}})
+	m = update(t, m, tea.WindowSizeMsg{Width: 130, Height: 8}) // 内容预算 6 行（8−2 chrome）
+	m.focus = focusPanel
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter}) // 展开预览
+	if m.panel.previewPath != "big.txt" {
+		t.Fatalf("precondition: preview expanded, got %q", m.panel.previewPath)
+	}
+	// PgDn 推进：步长 = (8−2)/2 = 3 → 窗首 l00/l01 离场（窗含预览头行 3 行
+	// 位移——preview[0]=头行、preview[1..12]=l00..l11）、l03 进窗。
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyPgDown})
+	if m.panel.scroll != 3 {
+		t.Fatalf("preview PgDn must advance panel.scroll by the half-budget step (3), got %d", m.panel.scroll)
+	}
+	v := ansi.Strip(m.panelView(32))
+	if strings.Contains(v, "l00") || strings.Contains(v, "l01") {
+		t.Fatalf("advanced window must drop the head rows:\n%s", v)
+	}
+	if !strings.Contains(v, "l03") {
+		t.Fatalf("advanced window must start at the scroll offset:\n%s", v)
+	}
+	// 钳位上界：连按 PgDn——窗尾对齐预览尾（l11 恒在场、l00 不回流）。
+	for range 10 {
+		m = update(t, m, tea.KeyPressMsg{Code: tea.KeyPgDown})
+	}
+	v = ansi.Strip(m.panelView(32))
+	if !strings.Contains(v, "l11") || strings.Contains(v, "l00") {
+		t.Fatalf("over-range PgDn must clamp to the preview tail:\n%s", v)
+	}
+	// 回退：连按 PgUp——下界 0，窗首行回场。
+	for range 20 {
+		m = update(t, m, tea.KeyPressMsg{Code: tea.KeyPgUp})
+	}
+	if m.panel.scroll != 0 {
+		t.Fatalf("PgUp must floor panel.scroll at 0, got %d", m.panel.scroll)
+	}
+	if v := ansi.Strip(m.panelView(32)); !strings.Contains(v, "l00") {
+		t.Fatalf("PgUp back to top must show the preview head:\n%s", v)
+	}
+}
+
+// TestPanelDoctorCacheScrollKeys 钉（终审 Finding 1）：doctor/cache 页签聚焦态
+// PgUp/PgDn 滚内容窗（panelLinesWindow 取窗——上界钳位到内容行数、下界 0）；
+// 短内容（cache 汇总）钳位吸收不丢失。
+func TestPanelDoctorCacheScrollKeys(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	lines := make([]string, 10)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("d%02d", i)
+	}
+	m = update(t, m, doctorDoneMsg{lines: lines})
+	m = update(t, m, tea.WindowSizeMsg{Width: 130, Height: 8}) // 内容预算 6 行
+	m.panel.tab = tabDoctor
+	m.focus = focusPanel
+	// PgDn：步长 3 = (8−2)/2 → 窗首 d00..d02 离场、d03 进窗。
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyPgDown})
+	if m.panel.scroll != 3 {
+		t.Fatalf("doctor tab PgDn must advance panel.scroll, got %d", m.panel.scroll)
+	}
+	v := ansi.Strip(m.panelView(32))
+	if strings.Contains(v, "d00") || strings.Contains(v, "d02") || !strings.Contains(v, "d03") {
+		t.Fatalf("doctor window must shift with the scroll:\n%s", v)
+	}
+	// 钳位上界：连按到底（窗尾对齐内容尾 d09）。
+	for range 10 {
+		m = update(t, m, tea.KeyPressMsg{Code: tea.KeyPgDown})
+	}
+	v = ansi.Strip(m.panelView(32))
+	if !strings.Contains(v, "d09") || strings.Contains(v, "d00") {
+		t.Fatalf("over-range PgDn must clamp to the content tail:\n%s", v)
+	}
+	// 回退到顶。
+	for range 20 {
+		m = update(t, m, tea.KeyPressMsg{Code: tea.KeyPgUp})
+	}
+	if v := ansi.Strip(m.panelView(32)); !strings.Contains(v, "d00") {
+		t.Fatalf("PgUp back to top must show the content head:\n%s", v)
+	}
+	// cache 页签：路由在场（状态推进）且空态指引照常呈现（钳位吸收不丢失）。
+	m.panel.tab = tabCache
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyPgDown})
+	if m.panel.scroll == 0 {
+		t.Fatal("cache tab PgDn must route the scroll state")
+	}
+	if v := ansi.Strip(m.panelView(32)); !strings.Contains(v, "暂无用量数据") {
+		t.Fatalf("cache tab copy must survive the clamp:\n%s", v)
+	}
+}
+
+// TestPanelScrollUnfocusedNoop 钉（终审 Finding 1——现状只增不改）：非聚焦
+// PgUp/PgDn 不触 panel.scroll（含预览展开残态），转写滚动照常（现状行为）。
+func TestPanelScrollUnfocusedNoop(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m = update(t, m, tea.WindowSizeMsg{Width: 130, Height: 24})
+	m = update(t, m, tuiEvent{ev: event.ToolUseRequestedEvent{Seq: 1, ToolUseID: "c1", Tool: "Edit",
+		Input: json.RawMessage(`{"file_path":"a.go","old_string":"x","new_string":"y"}`)}})
+	m = update(t, m, tuiEvent{ev: event.ToolResultEvent{Seq: 2, ToolUseID: "c1", Content: "ok"}})
+	m.focus = focusPanel
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter}) // 预览展开 + scroll 残态
+	m.panel.scroll = 4
+	m.focus = focusMain // 失焦（预览残态保留——Esc 取焦不关预览口径）
+	// 转写溢出 → 非聚焦 PgUp 走转写滚动（现状）。
+	for i := range 40 {
+		m.appendLine(fmt.Sprintf("BLOCK%02d %s", i, strings.Repeat("x", 101)))
+	}
+	m.View() // frame：换行缓存 sync + viewport 喂给
+	m.transcriptState.vp.SetYOffset(20)
+	m.markFollowTail()
+	before := m.transcriptState.vp.YOffset()
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyPgUp})
+	if m.panel.scroll != 4 {
+		t.Fatalf("unfocused PgUp must not touch panel.scroll, got %d", m.panel.scroll)
+	}
+	if got := m.transcriptState.vp.YOffset(); got >= before {
+		t.Fatalf("unfocused PgUp must keep scrolling the transcript: %d → %d", before, got)
+	}
+	if m.scrollState.mode != scrollUserScrolled {
+		t.Fatal("unfocused PgUp must keep the transcript gesture semantics (userScrolled)")
+	}
+}
+
 // TestSwapResetsChangesPanel 钉（Review Focus 5——brief Produces 指定测试名）：
 // 换绑回执清空聚合缓存与面板游标/预览；转写块流不动（023 钉定语义——聚合是
 // 面板态非转写，仅追加切换留痕行）。
