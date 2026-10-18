@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"mulix/internal/control"
 	"mulix/internal/event"
@@ -241,5 +242,25 @@ func TestStatusBarFocusName(t *testing.T) {
 	m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 24})
 	if got := m.statusView(); strings.Contains(got, "焦点") {
 		t.Fatalf("invisible panel focus must omit the name:\n%s", got)
+	}
+}
+
+// TestJoinStatusSidesDefensiveTruncation 钉（minors 清理 T10 deferred）：
+// gap<2 回退路径防御截断——左右组超宽时右组截到剩余余宽（行显示宽不超 width）；
+// gap≥2 正常路径逐字节不变（既有合成契约不受扰）。
+func TestJoinStatusSidesDefensiveTruncation(t *testing.T) {
+	left := "运行中"
+	right := "模型 claude-opus-5-5-20260101 很长很长的模型名超出了可用宽度"
+	got := joinStatusSides(left, right, 20)
+	if w := ansi.StringWidth(got); w > 20 {
+		t.Fatalf("defensive truncation must keep the row within width: %d > 20\n%q", w, got)
+	}
+	if !strings.HasPrefix(ansi.Strip(got), left) {
+		t.Fatalf("left group must survive intact:\n%q", got)
+	}
+	// 正常路径（gap≥2）逐字节不变：左 + 补位空格 + 右。
+	normal := joinStatusSides("abc", "def", 20)
+	if normal != "abc"+strings.Repeat(" ", 20-3-3)+"def" {
+		t.Fatalf("normal path must stay byte-identical:\n%q", normal)
 	}
 }

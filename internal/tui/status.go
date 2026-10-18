@@ -149,7 +149,11 @@ func joinStatusSides(left, right string, width int) string {
 	}
 	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 2 {
-		return left + "  " + right
+		// minors 清理（T10 deferred）：防御截断——窄端左右组超宽时右组截到剩余
+		// 余宽（行显示宽不超 width；行数由 frame 计量的契约不受折行威胁）。
+		// gap≥2 正常路径逐字节不变。
+		avail := max(width-lipgloss.Width(left)-2, 0)
+		return left + "  " + clampWidth(right, avail)
 	}
 	return left + strings.Repeat(" ", gap) + right
 }
