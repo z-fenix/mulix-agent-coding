@@ -403,16 +403,18 @@ func (m *tuiModel) panelScrollStep() int {
 }
 
 // panelScrollKey 面板聚焦态 PgUp/PgDn 路由（终审 Finding 1——panel.scroll 的
-// 按键驱动落位）：变更页签预览展开（previewPath 非空）滚预览窗（上界钳位复用
-// changesTabView 既有取窗钳位、下界 0 在此收口）、doctor/cache 页签滚内容窗
-// （panelLinesWindow 取窗钳位）。其余状态（agents 独占态已由 handleAgentsKey
+// 按键驱动落位）：变更页签预览展开且**预览条目在取景窗内**滚预览窗（上界钳位
+// 复用 changesTabView 既有取窗钳位、下界 0 在此收口）、doctor/cache 页签有
+// **可滚内容**滚内容窗（panelLinesWindow 取窗钳位）。minors 清理（Final
+// deferred）谓词收紧：窗外预览/空态不消费——消费即 no-op（scroll 照推进、
+// 画面不动），收紧后落回转写滚动。其余状态（agents 独占态已由 handleAgentsKey
 // 消费、变更页签未展开预览）返回 false——PgUp/PgDn 落回转写滚动（现状只增不改
 // ，TestPanelScrollUnfocusedNoop 钉）。
 func (m *tuiModel) panelScrollKey(down bool) bool {
 	switch {
-	case m.panel.tab == tabChanges && m.panel.previewPath != "",
-		m.panel.tab == tabDoctor,
-		m.panel.tab == tabCache:
+	case m.panel.tab == tabChanges && m.previewVisible(),
+		m.panel.tab == tabDoctor && len(m.doctorLines) > 0,
+		m.panel.tab == tabCache && m.cacheContentVisible():
 	default:
 		return false
 	}
@@ -422,6 +424,33 @@ func (m *tuiModel) panelScrollKey(down bool) bool {
 	}
 	m.panel.scroll = max(m.panel.scroll+delta, 0)
 	return true
+}
+
+// previewVisible 变更页签展开预览的可见性——预览条目在取景窗内才可滚（窗外
+// 条目的预览不被 changesTabView 渲染，消费即 no-op）。取景窗公式与
+// changesTabView 同源（listWindow + m.height−panelChromeRows 预算）。
+func (m *tuiModel) previewVisible() bool {
+	entries := m.collectChanges()
+	idx := -1
+	for i, e := range entries {
+		if e.path == m.panel.previewPath {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return false
+	}
+	budget := max(m.height-panelChromeRows, 1)
+	lo, hi := listWindow(len(entries), budget, m.panel.sel)
+	return idx >= lo && idx < hi
+}
+
+// cacheContentVisible cache 页签有可滚内容——空态指引不消费 PgUp/PgDn
+// （minors 清理 Final deferred；无数据=零值 Report 或读取失败，指引非数据）。
+func (m *tuiModel) cacheContentVisible() bool {
+	lines, ok := m.cacheSummaryLines()
+	return ok && len(lines) > 0
 }
 
 // togglePanelPreview Enter 预览开合（Task 14）：选中条目展开 → previewPath =

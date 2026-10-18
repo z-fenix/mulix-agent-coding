@@ -826,3 +826,59 @@ func TestAgentsTabWidthTermUnfreezesAtNarrow(t *testing.T) {
 		t.Fatalf("narrowed statusMode must not claim agents tab, got %q", got)
 	}
 }
+
+// TestPanelScrollKeyTightened 钉（minors 清理 Final deferred）：panelScrollKey
+// 谓词收紧——可滚内容可见才消费：
+//   - 窗外预览（previewPath 非空但其条目出取景窗）不消费——消费即 no-op；
+//   - doctor 空态（无 doctorLines）不消费；
+//   - cache 空态（无记账）不消费。
+//     三态收紧前实现均消费（scroll 照推进、画面不动）——谓词回退即红。
+func TestPanelScrollKeyTightened(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m = update(t, m, tea.WindowSizeMsg{Width: 130, Height: 24})
+	m.height = 8 // 变更页签取景窗预算 = 8−chrome，窗窄易造窗外预览
+	for i := range 7 {
+		m = update(t, m, tuiEvent{ev: event.ToolUseRequestedEvent{Seq: int64(i + 1), ToolUseID: fmt.Sprintf("c%d", i+1), Tool: "Edit",
+			Input: json.RawMessage(fmt.Sprintf(`{"file_path":"f%d.go","old_string":"x","new_string":"y"}`, i))}})
+		m = update(t, m, tuiEvent{ev: event.ToolResultEvent{Seq: int64(i + 20), ToolUseID: fmt.Sprintf("c%d", i+1), Content: "ok"}})
+	}
+	m.focus = focusPanel
+	m.panel.tab = tabChanges
+	m.panel.sel = 3
+	m.togglePanelPreview() // 展开选中 d.go——预览在窗内
+	if m.panel.previewPath == "" {
+		t.Fatal("precondition: preview expanded")
+	}
+	// 窗外预览：预览驻 f0.go（index 0），sel=3 → listWindow lo>0 → 出窗。
+	m.panel.previewPath = "f0.go"
+	m.panel.scroll = 0
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyPgDown})
+	if m.panel.scroll != 0 {
+		t.Fatalf("out-of-window preview must not consume PgDn, scroll = %d", m.panel.scroll)
+	}
+	// doctor 空态不消费。
+	m.panel.tab = tabDoctor
+	m.doctorLines = nil
+	m.panel.scroll = 2
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyPgDown})
+	if m.panel.scroll != 2 {
+		t.Fatalf("empty doctor tab must not consume PgDn, scroll = %d", m.panel.scroll)
+	}
+	// cache 空态不消费（无 UsageRoot 接线 → 无数据）。
+	m.panel.tab = tabCache
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyPgDown})
+	if m.panel.scroll != 2 {
+		t.Fatalf("empty cache tab must not consume PgDn, scroll = %d", m.panel.scroll)
+	}
+}
+
+// TestCyclePanelTabResetsScroll 钉（minors 清理 Final deferred）：切页签归零
+// panel.scroll——跨页签渍留（doctor 滚到 N 切回变更从预览中部取窗）即红。
+func TestCyclePanelTabResetsScroll(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.panel.scroll = 4
+	m.cyclePanelTab()
+	if m.panel.scroll != 0 {
+		t.Fatalf("tab switch must reset panel.scroll, got %d", m.panel.scroll)
+	}
+}
