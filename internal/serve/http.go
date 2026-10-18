@@ -60,9 +60,30 @@ func writeError(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]string{"error": msg})
 }
 
-// clientIDOf 取会话 Cookie 值作为客户端身份(空 = 未携带——GET 面允许;
-// mutating 中间件保证 POST 面非空)。
+// clientIDHeader / clientIDQuery 是每标签页客户端身份的两个载体(评审 I1):
+// mutating fetch 以 X-Mulix-Client 头携带;SSE 订阅(EventSource 无法设自定义
+// 头)以 ?client= 查询参数携带。
+const (
+	clientIDHeader = "X-Mulix-Client"
+	clientIDQuery  = "client"
+)
+
+// clientIDOf 解析客户端身份(claim/release/readonly 校验与 SSE 断开释放消费
+// 的身份串),优先级:每标签页令牌(头 → 查询参数)> 会话 Cookie 值。
+//
+// 为什么不止认 Cookie(评审 I1):同浏览器的多个标签页共享 Cookie,Cookie 值
+// 做身份会让后开标签页复用交互权(spec 具名裁定是「后开者只读跟随」)——前端
+// 以 sessionStorage 随机令牌区分标签页。Cookie 回退保留简单客户端与既有测试
+// (curl/httplib 不带头)的通路。同源防护层与本解析无关:mutating 中间件仍先
+// 校验 Cookie + Origin——跨站页面既不能带我们的 Cookie(SameSite=Strict)也
+// 无法设置自定义头(CORS 预检必败),身份串可从外部提供不放大 CSRF 面。
 func clientIDOf(r *http.Request) string {
+	if v := r.Header.Get(clientIDHeader); v != "" {
+		return v
+	}
+	if v := r.URL.Query().Get(clientIDQuery); v != "" {
+		return v
+	}
 	ck, err := r.Cookie(sessionCookieName)
 	if err != nil || ck.Value == "" {
 		return ""
@@ -90,10 +111,12 @@ func logf(w io.Writer, format string, args ...any) {
 }
 
 // mutating 是同源防护中间件:会话 Cookie 在册 + Origin 同源或缺失,否则 403
-// (校验先于任何 body 解析——403 不泄露路由细节)。
+// (校验先于任何 body 解析——403 不泄露路由细节)。Cookie 在册直接查 Cookie
+// 而非 clientIDOf(评审 I1 后身份可来自头/查询参数,但 Cookie 仍是浏览器
+// 同源性的凭据——本层语义零改动)。
 func (a *webAPI) mutating(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if clientIDOf(r) == "" {
+		if ck, err := r.Cookie(sessionCookieName); err != nil || ck.Value == "" {
 			writeError(w, http.StatusForbidden, "missing session cookie")
 			return
 		}
@@ -109,7 +132,8 @@ func (a *webAPI) mutating(next http.HandlerFunc) http.HandlerFunc {
 }
 
 // spa 静态面(GET /):首次到访下发会话 Cookie(随机令牌,SameSite=Strict,
-// Path=/)——Cookie 值即 clientID(浏览器同源自动回传)。
+// Path=/)——Cookie 是同源防护凭据与 clientID 的回退载体(评审 I1 后优先
+// 身份是每标签页令牌:头/查询参数,见 clientIDOf)。
 func (a *webAPI) spa() http.Handler {
 	static := http.FileServerFS(distFS)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

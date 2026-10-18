@@ -13,7 +13,7 @@
 //
 // 去重键 = `${kind}:${ev.seq}`；ev 无数值 seq 的事件帧不做去重（直通一次）
 // ——当前 15 Kind 均带 seq，此分支是向前兼容的兜底面。
-import { fetchSessionEvents, openSession } from './api'
+import { fetchSessionEvents, openSession, streamURL } from './api'
 import { isWarningsFrame, isWireFrame, type WireFrame } from './types'
 
 export interface SessionStreamHandlers {
@@ -90,7 +90,8 @@ export function openSessionStream(id: string, handlers: SessionStreamHandlers): 
     reconcile()
       .then(() => {
         if (closed) return
-        const es = new EventSource(`/api/sessions/${id}/stream`)
+        // ?client= 承载每标签页身份（I1：EventSource 无法设自定义头）。
+        const es = new EventSource(streamURL(id))
         source = es
         es.onopen = () => {
           attempt = 0 // 连接成功：退避计数归零

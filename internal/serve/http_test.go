@@ -198,8 +198,9 @@ func canUseToolReq(requestID, toolUseID, tool, input string) *engine.Event {
 	}}
 }
 
-// httpDo 发一个带可选 Cookie/Origin/JSON 体的请求。
-func httpDo(t *testing.T, method, url, cookieVal, origin, body string) *http.Response {
+// httpDo 发一个带可选 Cookie/Origin/JSON 体/每标签页身份头的请求。
+// clientID 变参非空时另设 X-Mulix-Client 头(I1:生产前端 mutating fetch 同形态)。
+func httpDo(t *testing.T, method, url, cookieVal, origin, body string, clientID ...string) *http.Response {
 	t.Helper()
 	var rd io.Reader
 	if body != "" {
@@ -214,6 +215,9 @@ func httpDo(t *testing.T, method, url, cookieVal, origin, body string) *http.Res
 	}
 	if origin != "" {
 		req.Header.Set("Origin", origin)
+	}
+	if len(clientID) > 0 && clientID[0] != "" {
+		req.Header.Set(clientIDHeader, clientID[0])
 	}
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
@@ -501,6 +505,96 @@ func TestReadonlyForbidden(t *testing.T) {
 	resp3.Body.Close()
 	if resp3.StatusCode != http.StatusForbidden {
 		t.Fatalf("被接管后 c1 submit status = %d, want 403", resp3.StatusCode)
+	}
+}
+
+// TestPerTabClientIDIdentity 钉(评审 I1,spec 具名裁定「后开者只读跟随」):
+// 同浏览器的两个标签页共享同一会话 Cookie、各持独立每标签页令牌
+// (X-Mulix-Client 头 mutating 面 / ?client= 查询参数 SSE 面)——后开者
+// 只读跟随,不再因 Cookie 同值而复用交互权;同源防护层不变(无 Cookie 的
+// mutating 仍 403);takeover 与 SSE 断开释放仍按每标签页身份生效。
+func TestPerTabClientIDIdentity(t *testing.T) {
+	env := newHTTPEnv(t, engine.FakeScript{})
+
+	// tab1 create+open(共享 Cookie ck + 令牌 tab1)→ interactive
+	resp := httpDo(t, "POST", env.srv.URL+"/api/sessions", "ck", env.srv.URL, `{"workspace":"`+testWorkspace+`"}`, "tab1")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("create status = %d, want 201(body: %s)", resp.StatusCode, body)
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil || created.ID == "" {
+		t.Fatalf("create 响应缺 id: %v", err)
+	}
+	id := created.ID
+
+	roleOf := func(t *testing.T, url, clientID string) string {
+		t.Helper()
+		r := httpDo(t, "POST", url, "ck", env.srv.URL, `{}`, clientID)
+		defer r.Body.Close()
+		if r.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(r.Body)
+			t.Fatalf("open status = %d, want 200(body: %s)", r.StatusCode, body)
+		}
+		var out struct {
+			Role string `json:"role"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&out); err != nil {
+			t.Fatalf("open 解码: %v", err)
+		}
+		return out.Role
+	}
+	openURL := env.srv.URL + "/api/sessions/" + id + "/open"
+	if got := roleOf(t, openURL, "tab1"); got != "interactive" {
+		t.Fatalf("tab1 open role = %s, want interactive", got)
+	}
+
+	// 后开者只读跟随(修复前:clientID 取自 Cookie,tab2 与 tab1 同值 →
+	// 误授予 interactive——spec 具名裁定的缺口)
+	if got := roleOf(t, openURL, "tab2"); got != "readonly" {
+		t.Fatalf("tab2(后开标签页) open role = %s, want readonly", got)
+	}
+	resp3 := httpDo(t, "POST", env.srv.URL+"/api/sessions/"+id+"/submit", "ck", env.srv.URL, `{"text":"hi"}`, "tab2")
+	resp3.Body.Close()
+	if resp3.StatusCode != http.StatusForbidden {
+		t.Fatalf("tab2 submit status = %d, want 403(后开者只读)", resp3.StatusCode)
+	}
+	if got := roleOf(t, openURL, "tab1"); got != "interactive" {
+		t.Fatalf("tab1 仍应持有交互权, got %s", got)
+	}
+
+	// SSE ?client= 承载同一身份:tab1 无 Cookie 纯查询参数订阅,断开后释放
+	// 的是 tab1 令牌(修复前 clientIDOf 认 Cookie,无 Cookie → 释放 no-op,
+	// 持有者滞留 → 下方 tab2 无接管不得 interactive)
+	s := openSSEWithClient(t, env.srv.URL, id, "", "tab1")
+	s.waitConnected(t, 2*time.Second)
+	s.resp.Body.Close()
+	waitForCond(t, 2*time.Second, "tab1 断开释放生效(持有者清空)", func() bool {
+		h, ok := env.mgr.get(id)
+		return ok && holderOf(h) == ""
+	})
+	if got := roleOf(t, openURL, "tab2"); got != "interactive" {
+		t.Fatalf("tab1 断开宽限释放后 tab2 open role = %s, want interactive", got)
+	}
+
+	// takeover 语义仍按每标签页身份工作:tab1 接管 → interactive;tab2 降级
+	respT := httpDo(t, "POST", openURL, "ck", env.srv.URL, `{"takeover":true}`, "tab1")
+	var takeover struct {
+		Role string `json:"role"`
+	}
+	if err := json.NewDecoder(respT.Body).Decode(&takeover); err != nil || takeover.Role != "interactive" {
+		body, _ := io.ReadAll(respT.Body)
+		respT.Body.Close()
+		t.Fatalf("tab1 takeover role = %+v (%v), want interactive(body: %s)", takeover, err, body)
+	}
+	respT.Body.Close()
+	resp4 := httpDo(t, "POST", env.srv.URL+"/api/sessions/"+id+"/submit", "ck", env.srv.URL, `{"text":"hi"}`, "tab2")
+	resp4.Body.Close()
+	if resp4.StatusCode != http.StatusForbidden {
+		t.Fatalf("被接管后 tab2 submit status = %d, want 403", resp4.StatusCode)
 	}
 }
 

@@ -80,6 +80,7 @@ function openCalls(fetchMock: ReturnType<typeof stubFetch>) {
 describe('openSessionStream', () => {
   beforeEach(() => {
     FakeEventSource.instances = []
+    sessionStorage.clear() // 每标签页身份令牌测试面隔离（I1）
     vi.stubGlobal('EventSource', FakeEventSource)
   })
   afterEach(() => {
@@ -121,11 +122,31 @@ describe('openSessionStream', () => {
       onWarnings: () => {},
     })
     await vi.waitFor(() => expect(FakeEventSource.instances.length).toBe(1))
-    // 对账完成后才建立订阅，且订阅地址正确
-    expect(FakeEventSource.instances[0].url).toBe(`/api/sessions/${id}/stream`)
+    // 订阅地址携带每标签页身份 ?client=（I1：EventSource 无法设头，后开者
+    // 只读跟随的裁定通道）
+    expect(FakeEventSource.instances[0].url).toBe(`/api/sessions/${id}/stream?client=${sessionStorage.getItem('mulix_client')}`)
     expect(events).toEqual(['turn_started:1', 'assistant_text:2', 'tool_result:3'])
     FakeEventSource.instances[0].emit(frame('assistant_text', 4, { turn: 1, text: 'b' }))
     expect(events).toEqual(['turn_started:1', 'assistant_text:2', 'tool_result:3', 'assistant_text:4'])
+  })
+
+  it('per-tab identity token：SSE 订阅跨重连复用同一令牌（I1）', async () => {
+    vi.useFakeTimers()
+    stubFetch([warningsFrame, frame('turn_started', 1)])
+    openSessionStream(id, {
+      onEvent: () => {},
+      onWarnings: () => {},
+    })
+    await flushAsync()
+    const token = sessionStorage.getItem('mulix_client')
+    expect(token).toBeTruthy()
+    expect(FakeEventSource.instances[0].url).toBe(`/api/sessions/${id}/stream?client=${token}`)
+    // 重连（同标签页）复用同一令牌——服务端身份稳定，claim/release 对位
+    FakeEventSource.instances[0].fail()
+    await vi.advanceTimersByTimeAsync(600)
+    await flushAsync()
+    expect(FakeEventSource.instances.length).toBe(2)
+    expect(FakeEventSource.instances[1].url).toBe(`/api/sessions/${id}/stream?client=${token}`)
   })
 
   it('reconnects with backoff and re-reconciles：error 后退避重连，去重避免重复渲染', async () => {

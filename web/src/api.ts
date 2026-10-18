@@ -32,6 +32,50 @@ export function errMessage(e: unknown): string {
   return String(e)
 }
 
+// ---- 每标签页客户端身份（评审 I1：后开者只读跟随）----
+//
+// 同浏览器的多个标签页共享会话 Cookie，Cookie 值做身份会让后开标签页复用
+// 交互权——身份改用 sessionStorage 持久的随机令牌（标签页存续期内稳定）。
+// 载体：mutating fetch 一律带 X-Mulix-Client 头；SSE 订阅（EventSource 无法
+// 设自定义头）以 ?client= 查询参数携带。同源防护层不变：Cookie + Origin 仍是
+// 变更请求的前置门（服务端 mutating 中间件），令牌只决定 claim/release 消费
+// 的身份串。
+
+const CLIENT_TOKEN_KEY = 'mulix_client'
+
+function randomTabToken(): string {
+  const c = globalThis.crypto
+  if (c && typeof c.randomUUID === 'function') return c.randomUUID()
+  // 兜底（非安全上下文/老环境）：可预测令牌只影响并列概率，不影响正确性
+  // （服务端 randomToken 同款折中）。
+  return `t${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+}
+
+// sessionClientToken 返回本标签页的身份令牌（首次生成后写 sessionStorage 复用）。
+export function sessionClientToken(): string {
+  try {
+    const cur = sessionStorage.getItem(CLIENT_TOKEN_KEY)
+    if (cur) return cur
+    const t = randomTabToken()
+    sessionStorage.setItem(CLIENT_TOKEN_KEY, t)
+    return t
+  } catch {
+    // sessionStorage 不可用（隐私模式等）：退化为页内随机令牌——身份稳定性
+    // 降级（重连可能换身份），不阻塞（服务端按 Cookie 回退仍可用）。
+    return randomTabToken()
+  }
+}
+
+// clientHeaders 变更请求统一携带的身份头。
+export function clientHeaders(): Record<string, string> {
+  return { 'X-Mulix-Client': sessionClientToken() }
+}
+
+// streamURL 是 SSE 订阅地址（?client= 承载每标签页身份）。
+export function streamURL(id: string): string {
+  return `/api/sessions/${encodeURIComponent(id)}/stream?client=${encodeURIComponent(sessionClientToken())}`
+}
+
 async function fetchOrThrow(url: string, init?: RequestInit): Promise<Response> {
   let res: Response
   try {
@@ -61,7 +105,11 @@ async function apiErrorOf(res: Response): Promise<ApiError> {
 }
 
 function postJson(body: unknown): RequestInit {
-  return { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body ?? {}) }
+  return {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...clientHeaders() },
+    body: JSON.stringify(body ?? {}),
+  }
 }
 
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {

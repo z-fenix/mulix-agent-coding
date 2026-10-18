@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -27,12 +28,26 @@ type sseStream struct {
 // openSSE 发起 GET /api/sessions/{id}/stream(带 clientID Cookie)。
 func openSSE(t *testing.T, baseURL, id, clientID string) *sseStream {
 	t.Helper()
-	req, err := http.NewRequest("GET", baseURL+"/api/sessions/"+id+"/stream", nil)
+	return startSSE(t, baseURL+"/api/sessions/"+id+"/stream", clientID)
+}
+
+// openSSEWithClient 发起带 ?client= 身份的 SSE 订阅(I1:EventSource 无法设
+// 自定义头,每标签页身份经查询参数承载;cookieVal 可空——身份只认 ?client=)。
+func openSSEWithClient(t *testing.T, baseURL, id, cookieVal, clientID string) *sseStream {
+	t.Helper()
+	return startSSE(t, baseURL+"/api/sessions/"+id+"/stream?client="+url.QueryEscape(clientID), cookieVal)
+}
+
+// startSSE 发起 SSE GET(rawURL 原样;cookieVal 非空则携带会话 Cookie)并启动
+// 后台读泵(`: connected` → connected;`data: ` 帧 → frames)。
+func startSSE(t *testing.T, rawURL, cookieVal string) *sseStream {
+	t.Helper()
+	req, err := http.NewRequest("GET", rawURL, nil)
 	if err != nil {
 		t.Fatalf("new stream req: %v", err)
 	}
-	if clientID != "" {
-		req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: clientID})
+	if cookieVal != "" {
+		req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: cookieVal})
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
