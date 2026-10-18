@@ -53,6 +53,12 @@ type sessionHost struct {
 	ctrl      *control.Controller
 	sink      *webSink
 	bridge    *control.UserApprovalBridge
+	// params 是真实装配参数(Task 6 withAssembly 经变参注入;零值 = 桩装配
+	// 不读)。定义在 assemble.go——装配关注点与状态机分离。
+	params assembleParams
+	// assembleRelease 是装配资源收口(Task 6 装配成功后注入:meter/store——
+	// close 在 ctrl.Close 之后级联调用,恰一次)。nil = 桩装配(自管清理)。
+	assembleRelease func()
 
 	mu           sync.Mutex
 	holder       string        // 交互端 client id(""=无)
@@ -71,13 +77,18 @@ type sessionHost struct {
 // goroutine 泄漏)→ 启动交互端离线 watcher(Task 4 产物;close 时 stop)。
 // 跨进程锁刻意不在本函数获取——HTTP 层(Task 7)在构造/claim 前调
 // acquireSessionLock,成功后经 attachLock 注入 release,close 时级联释放。
-func newSessionHost(ctx context.Context, id, workspace string, resume bool, assemble assembleFn) (*sessionHost, error) {
+// 变参 options 是装配参数注入缝(Task 6 withAssembly;变参形态保持 Task 5
+// 五参调用面逐字节兼容——host_test.go 既有调用零改动)。
+func newSessionHost(ctx context.Context, id, workspace string, resume bool, assemble assembleFn, options ...hostOption) (*sessionHost, error) {
 	h := &sessionHost{
 		ID: id, Workspace: workspace, resume: resume,
 		sink:         newWebSink(),
 		gone:         make(chan struct{}),
 		closedCh:     make(chan struct{}),
 		lastActivity: time.Now(),
+	}
+	for _, opt := range options {
+		opt(h)
 	}
 	ctrl, bridge, err := assemble(ctx, h)
 	if err != nil {
@@ -173,8 +184,9 @@ func (h *sessionHost) attachLock(release func()) {
 }
 
 // close 收口(幂等):宽限计时器取消 → 离线 watcher stop → ctrl.Close
-// (等泵退出)→ 锁释放(仅当持锁)。先停 watcher 再关控制器:close 后
-// gone 无论是否被宽限到点关闭,都不再触发 CancelAll。
+// (等泵退出)→ 装配资源级联收口(meter/store——cli sessionHandle.close 同序)
+// → 锁释放(仅当持锁)。先停 watcher 再关控制器:close 后 gone 无论是否被
+// 宽限到点关闭,都不再触发 CancelAll。
 func (h *sessionHost) close(ctx context.Context) error {
 	h.mu.Lock()
 	if h.closed {
@@ -189,6 +201,7 @@ func (h *sessionHost) close(ctx context.Context) error {
 	h.graceGen++ // 使已 fired 阻塞在锁上的宽限回调失效(与 claim 同纪律)
 	unlock := h.unlock
 	h.unlock = nil
+	release := h.assembleRelease
 	close(h.closedCh)
 	h.mu.Unlock()
 	if timer != nil {
@@ -198,6 +211,9 @@ func (h *sessionHost) close(ctx context.Context) error {
 		stopWatcher()
 	}
 	err := h.ctrl.Close(ctx)
+	if release != nil {
+		release()
+	}
 	if unlock != nil {
 		unlock()
 	}
