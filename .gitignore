@@ -1,6 +1,12 @@
 # Build output
 bin/
 dist/
+# internal/serve/dist 三规则(git 不能在「被忽略目录」内再包含,顺序敏感):
+# 1) 目录本身解除全局 dist/ 忽略;2) 目录内容整体忽略(web 构建产物不入仓);
+# 3) 占位 index.html 白名单——go:embed 任何分支可编译。
+!internal/serve/dist/
+internal/serve/dist/*
+!internal/serve/dist/index.html
 *.exe
 *.test
 *.out
@@ -13,6 +19,9 @@ coverage.html
 # Editors
 .idea/
 .vscode/
+
+# web 前端(后续任务创建 web/:依赖目录不入仓)
+web/node_modules/
 
 # mulix runtime state (never commit)
 .mulix/.runtime/
